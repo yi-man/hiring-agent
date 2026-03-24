@@ -1,0 +1,15 @@
+echo "🔍 Running pre-commit checks..."
+
+# 运行 lint-staged
+echo "📝 Running lint-staged..."
+pnpx lint-staged
+
+# 运行 TypeScript 类型检查
+echo "🔍 Running TypeScript type check..."
+pnpm type-check
+
+# 运行单元测试
+echo "🧪 Running unit tests..."
+pnpm test:ci
+
+echo "✅ Pre-commit checks passed!"

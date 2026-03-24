@@ -1,0 +1,3 @@
+echo "🔍 Checking commit message format..."
+
+pnpx commitlint --edit "$1"

@@ -1,0 +1,13 @@
+diff --git a/dist/index.js b/dist/index.js
+index 2a51c288b93f078d04a3dd6b7da289d0dd1d719c..fbb2fe273a0b4b194c3b6c8cd334270a21734cf6 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -36,7 +36,7 @@ __export(index_exports, {
+ module.exports = __toCommonJS(index_exports);
+ var import_react = __toESM(require("react"));
+ var visualViewport = typeof document !== "undefined" && window.visualViewport;
+-var IsSSRContext = import_react.default.createContext(false);
++var IsSSRContext = import_react.createContext(false);
+ function getSnapshot() {
+   return false;
+ }

@@ -1,0 +1,3 @@
+patchedDependencies:
+  '@heroui/react-utils': patches/@heroui__react-utils.patch
+  '@heroui/use-viewport-size': patches/@heroui__use-viewport-size.patch

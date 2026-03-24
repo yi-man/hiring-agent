@@ -1,0 +1,40 @@
+diff --git a/node_modules/@heroui/use-viewport-size/dist/index.js b/node_modules/@heroui/use-viewport-size/dist/index.js
+index 1234567..abcdefg 100644
+--- a/node_modules/@heroui/use-viewport-size/dist/index.js
++++ b/node_modules/@heroui/use-viewport-size/dist/index.js
+@@ -37,7 +37,7 @@ var import_react = __toESM(require("react"));
+ var visualViewport = typeof document !== "undefined" && window.visualViewport;
+-var IsSSRContext = import_react.default.createContext(false);
++var IsSSRContext = import_react.createContext(false);
+ function getSnapshot() {
+   return false;
+ }
+@@ -51,7 +51,7 @@ function useIsSSR() {
+   if (typeof import_react.default["useSyncExternalStore"] === "function") {
+     return import_react.default["useSyncExternalStore"](subscribe, getSnapshot, getServerSnapshot);
+   }
+-  return (0, import_react.useContext)(IsSSRContext);
++  return import_react.useContext(IsSSRContext);
+ }
+ function useViewportSize() {
+   let isSSR = useIsSSR();
+@@ -58,10 +58,10 @@ function useViewportSize() {
+   let [size, setSize] = (0, import_react.useState)(() => isSSR ? { width: 0, height: 0 } : getViewportSize());
+-  (0, import_react.useEffect)(() => {
++  import_react.useEffect(() => {
+     let onResize = () => {
+       setSize((size2) => {
+         let newSize = getViewportSize();
+@@ -80,7 +80,7 @@ function useViewportSize() {
+     };
+     if (!visualViewport) {
+       window.addEventListener("resize", onResize);
+-    } else {
++    } else {
+       visualViewport.addEventListener("resize", onResize);
+     }
+-    return () => {
++    return () => {
+       if (!visualViewport) {
+         window.removeEventListener("resize", onResize);
+       } else {
