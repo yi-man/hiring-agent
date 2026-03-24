@@ -45,6 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     <ul className="space-y-4">
                       {[
                         { name: '首页', href: '/' },
+                        { name: 'Chat', href: '/chat' },
                         { name: '关于', href: '/about' },
                         { name: '服务', href: '/services' },
                         { name: '博客', href: '/blog' },
