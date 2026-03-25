@@ -13,6 +13,8 @@ describe('runJDAgent', () => {
     expect(result.meta.timing?.stages.length).toBeGreaterThan(0);
     expect(result.meta.timing?.totalMs).toBeGreaterThanOrEqual(0);
     expect(Array.isArray(result.meta.timing?.suggestions)).toBe(true);
+    expect(result.meta.tokens?.total.totalTokens).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(result.meta.tokens?.stages)).toBe(true);
   });
 
   it('runs continue_generate flow', async () => {

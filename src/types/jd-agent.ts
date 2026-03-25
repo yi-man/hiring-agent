@@ -61,6 +61,23 @@ export type JDAgentTimingMeta = {
   suggestions: string[];
 };
 
+export type JDAgentTokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
+export type JDAgentStageTokenUsage = {
+  id: string;
+  label: string;
+  usage: JDAgentTokenUsage;
+};
+
+export type JDAgentTokenMeta = {
+  total: JDAgentTokenUsage;
+  stages: JDAgentStageTokenUsage[];
+};
+
 export type JDAgentResponse = {
   jd: JD;
   evaluation: EvaluationResult;
@@ -70,6 +87,7 @@ export type JDAgentResponse = {
     promptVersion: string;
     action: JDAgentAction;
     timing?: JDAgentTimingMeta;
+    tokens?: JDAgentTokenMeta;
   };
   warnings?: string[];
 };

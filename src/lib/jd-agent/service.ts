@@ -3,6 +3,8 @@ import type {
   JDAgentRequest,
   JDAgentResponse,
   JDAgentStageTiming,
+  JDAgentStageTokenUsage,
+  JDAgentTokenUsage,
   JD,
 } from '@/types';
 import { needImprove, pickBetter } from './decision';
@@ -27,9 +29,18 @@ function buildMeta(
   model: string,
   action: JDAgentRequest['action'],
   stages: JDAgentStageTiming[],
+  tokenStages: JDAgentStageTokenUsage[],
   didImprovePath: boolean,
 ): JDAgentResponse['meta'] {
   const totalMs = stages.reduce((acc, s) => acc + s.ms, 0);
+  const totalTokens = tokenStages.reduce(
+    (acc, s) => ({
+      promptTokens: acc.promptTokens + s.usage.promptTokens,
+      completionTokens: acc.completionTokens + s.usage.completionTokens,
+      totalTokens: acc.totalTokens + s.usage.totalTokens,
+    }),
+    { promptTokens: 0, completionTokens: 0, totalTokens: 0 } satisfies JDAgentTokenUsage,
+  );
   return {
     model,
     promptVersion: PROMPT_VERSION,
@@ -38,6 +49,10 @@ function buildMeta(
       totalMs,
       stages,
       suggestions: buildTimingSuggestions(stages, totalMs, { didImprovePath, action }),
+    },
+    tokens: {
+      total: totalTokens,
+      stages: tokenStages,
     },
   };
 }
@@ -49,6 +64,7 @@ export async function runJDAgent(input: JDAgentRequest): Promise<JDAgentResponse
     }
 
     const stages: JDAgentStageTiming[] = [];
+    const tokenStages: JDAgentStageTokenUsage[] = [];
 
     let mark = performance.now();
     const schema = parseJobInput(input.jobInput, input.tone ?? 'tech');
@@ -57,11 +73,13 @@ export async function runJDAgent(input: JDAgentRequest): Promise<JDAgentResponse
     mark = performance.now();
     const generated = await runLLM({ stage: 'generate', schema });
     stages.push({ id: 'generate', label: '生成 JD', ms: elapsedMs(mark) });
+    tokenStages.push({ id: 'generate', label: '生成 JD', usage: generated.usage });
     const jd = generated.output as JD;
 
     mark = performance.now();
     const evaluated = await runLLM({ stage: 'evaluate', jd });
     stages.push({ id: 'evaluate', label: '评估 JD', ms: elapsedMs(mark) });
+    tokenStages.push({ id: 'evaluate', label: '评估 JD', usage: evaluated.usage });
     const evaluation = evaluated.output as EvaluationResult;
 
     let finalJd = jd;
@@ -79,10 +97,12 @@ export async function runJDAgent(input: JDAgentRequest): Promise<JDAgentResponse
         extraInstruction: '',
       });
       stages.push({ id: 'improve', label: '改写 JD', ms: elapsedMs(mark) });
+      tokenStages.push({ id: 'improve', label: '改写 JD', usage: improvedOut.usage });
       const improvedJd = improvedOut.output as JD;
       mark = performance.now();
       const reEval = await runLLM({ stage: 'evaluate', jd: improvedJd });
       stages.push({ id: 'reevaluate', label: '改写后再评估', ms: elapsedMs(mark) });
+      tokenStages.push({ id: 'reevaluate', label: '改写后再评估', usage: reEval.usage });
       const improvedEval = reEval.output as EvaluationResult;
       finalEvaluation = improvedEval;
       const pickedResult = pickBetter(jd, improvedJd, evaluation, improvedEval);
@@ -94,11 +114,12 @@ export async function runJDAgent(input: JDAgentRequest): Promise<JDAgentResponse
       jd: finalJd,
       evaluation: finalEvaluation,
       decision: { improved, picked },
-      meta: buildMeta(generated.model, input.action, stages, improved),
+      meta: buildMeta(generated.model, input.action, stages, tokenStages, improved),
     };
   }
 
   const stages: JDAgentStageTiming[] = [];
+  const tokenStages: JDAgentStageTokenUsage[] = [];
   const currentJd = ensureCurrentJd(input.currentJd);
 
   let mark = performance.now();
@@ -108,6 +129,7 @@ export async function runJDAgent(input: JDAgentRequest): Promise<JDAgentResponse
   mark = performance.now();
   const evaluated = await runLLM({ stage: 'evaluate', jd: currentJd });
   stages.push({ id: 'evaluate', label: '评估当前 JD', ms: elapsedMs(mark) });
+  tokenStages.push({ id: 'evaluate', label: '评估当前 JD', usage: evaluated.usage });
   const evaluation = evaluated.output as EvaluationResult;
 
   let finalJd = currentJd;
@@ -125,10 +147,12 @@ export async function runJDAgent(input: JDAgentRequest): Promise<JDAgentResponse
       extraInstruction: instruction,
     });
     stages.push({ id: 'improve', label: '改写 JD', ms: elapsedMs(mark) });
+    tokenStages.push({ id: 'improve', label: '改写 JD', usage: improvedOut.usage });
     const improvedJd = improvedOut.output as JD;
     mark = performance.now();
     const reEval = await runLLM({ stage: 'evaluate', jd: improvedJd });
     stages.push({ id: 'reevaluate', label: '改写后再评估', ms: elapsedMs(mark) });
+    tokenStages.push({ id: 'reevaluate', label: '改写后再评估', usage: reEval.usage });
     const improvedEval = reEval.output as EvaluationResult;
     finalEvaluation = improvedEval;
     const pickedResult = pickBetter(currentJd, improvedJd, evaluation, improvedEval);
@@ -140,6 +164,6 @@ export async function runJDAgent(input: JDAgentRequest): Promise<JDAgentResponse
     jd: finalJd,
     evaluation: finalEvaluation,
     decision: { improved, picked },
-    meta: buildMeta(evaluated.model, input.action, stages, improved),
+    meta: buildMeta(evaluated.model, input.action, stages, tokenStages, improved),
   };
 }

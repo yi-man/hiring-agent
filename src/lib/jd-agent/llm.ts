@@ -24,6 +24,11 @@ export type LLMCallInput =
 export type LLMCallResult = {
   model: string;
   output: JD | EvaluationResult;
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 };
 
 export function shouldUseMockLlm(): boolean {
@@ -46,19 +51,19 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
 
   if (input.stage === 'generate') {
     const user = buildGenerateUserPrompt(input.schema);
-    const jd = await openaiGenerateJD(GENERATE_SYSTEM_PROMPT, user);
-    return { model: env.OPENAI_MODEL, output: jd };
+    const result = await openaiGenerateJD(GENERATE_SYSTEM_PROMPT, user);
+    return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
   }
 
   if (input.stage === 'evaluate') {
     const user = buildEvaluateUserPrompt(input.jd);
-    const evaluation = await openaiEvaluateJD(EVALUATE_SYSTEM_PROMPT, user);
-    return { model: env.OPENAI_MODEL, output: evaluation };
+    const result = await openaiEvaluateJD(EVALUATE_SYSTEM_PROMPT, user);
+    return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
   }
 
   const user = buildImproveUserPrompt(input.jd, input.evaluation, input.extraInstruction);
-  const jd = await openaiImproveJD(IMPROVE_SYSTEM_PROMPT, user);
-  return { model: env.OPENAI_MODEL, output: jd };
+  const result = await openaiImproveJD(IMPROVE_SYSTEM_PROMPT, user);
+  return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
 }
 
 async function runMockLlm(input: LLMCallInput): Promise<LLMCallResult> {
@@ -66,6 +71,7 @@ async function runMockLlm(input: LLMCallInput): Promise<LLMCallResult> {
     return {
       model: 'mock-jd-agent',
       output: mockGenerateJD(input.schema.title),
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     };
   }
 
@@ -73,11 +79,13 @@ async function runMockLlm(input: LLMCallInput): Promise<LLMCallResult> {
     return {
       model: 'mock-jd-agent',
       output: mockEvaluateJD(input.jd),
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     };
   }
 
   return {
     model: 'mock-jd-agent',
     output: mockImproveJD(input.jd, input.extraInstruction),
+    usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   };
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { JDAgentResponse, JDAgentTimingMeta, JD, JDTone } from '@/types';
+import type { JDAgentResponse, JDAgentTimingMeta, JDAgentTokenMeta, JD, JDTone } from '@/types';
 
 type ApiPayload = {
   success: boolean;
@@ -25,6 +25,7 @@ export function JDGeneratorWorkbench() {
   const [jd, setJd] = useState<JD>(emptyJd);
   const [error, setError] = useState('');
   const [timing, setTiming] = useState<JDAgentTimingMeta | null>(null);
+  const [tokens, setTokens] = useState<JDAgentTokenMeta | null>(null);
   const [loading, setLoading] = useState<'idle' | 'generating' | 'continuing'>('idle');
 
   const hasJd = useMemo(() => Boolean(jd.title || jd.summary), [jd]);
@@ -38,9 +39,11 @@ export function JDGeneratorWorkbench() {
     const result = (await response.json()) as ApiPayload;
     if (!response.ok || !result.success || !result.data) {
       setTiming(null);
+      setTokens(null);
       throw new Error(result.message || '请求失败');
     }
     setTiming(result.data.meta.timing ?? null);
+    setTokens(result.data.meta.tokens ?? null);
     return result.data.jd;
   }
 
@@ -177,6 +180,26 @@ export function JDGeneratorWorkbench() {
               </ul>
             </div>
           ) : null}
+        </section>
+      ) : null}
+
+      {tokens ? (
+        <section className="space-y-2 rounded-lg border border-dashed p-4 text-sm">
+          <h2 className="font-medium">Token 用量</h2>
+          <p className="text-muted-foreground">
+            合计 prompt {tokens.total.promptTokens} / completion {tokens.total.completionTokens} /
+            total {tokens.total.totalTokens}
+          </p>
+          <ul className="space-y-1 font-mono text-xs">
+            {tokens.stages.map((s, idx) => (
+              <li key={`${s.id}-${idx}`} className="flex justify-between gap-4">
+                <span>{s.label}</span>
+                <span>
+                  p {s.usage.promptTokens} / c {s.usage.completionTokens} / t {s.usage.totalTokens}
+                </span>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
 

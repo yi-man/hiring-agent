@@ -3,10 +3,12 @@ import type { EvaluationResult, JD } from '@/types';
 import { evaluationJsonSchema, extractJsonObject, jdJsonSchema } from './json-schemas';
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
+type TokenUsage = { promptTokens: number; completionTokens: number; totalTokens: number };
 
 type OpenAIChatResponse = {
   choices?: Array<{ message?: { content?: string } }>;
   error?: { message?: string };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 };
 
 const MAX_ATTEMPTS = 2;
@@ -51,7 +53,23 @@ async function postChatOnce(
   }
 }
 
-async function postChat(messages: ChatMessage[]): Promise<string> {
+function toUsage(usage?: OpenAIChatResponse['usage']): TokenUsage {
+  return {
+    promptTokens: usage?.prompt_tokens ?? 0,
+    completionTokens: usage?.completion_tokens ?? 0,
+    totalTokens: usage?.total_tokens ?? 0,
+  };
+}
+
+function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+  };
+}
+
+async function postChat(messages: ChatMessage[]): Promise<{ content: string; usage: TokenUsage }> {
   const includeJson = env.OPENAI_JSON_MODE;
   let { ok, data } = await postChatOnce(messages, includeJson);
 
@@ -67,17 +85,22 @@ async function postChat(messages: ChatMessage[]): Promise<string> {
   if (!content?.trim()) {
     throw new Error('Empty LLM response');
   }
-  return content;
+  return { content, usage: toUsage(data.usage) };
 }
 
-async function completeJson<T>(messages: ChatMessage[], parse: (json: unknown) => T): Promise<T> {
+async function completeJson<T>(
+  messages: ChatMessage[],
+  parse: (json: unknown) => T,
+): Promise<{ output: T; usage: TokenUsage }> {
   let lastError: Error | null = null;
+  let accumulated: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      const raw = await postChat(messages);
-      const jsonText = extractJsonObject(raw);
+      const { content, usage } = await postChat(messages);
+      accumulated = addUsage(accumulated, usage);
+      const jsonText = extractJsonObject(content);
       const parsed = JSON.parse(jsonText) as unknown;
-      return parse(parsed);
+      return { output: parse(parsed), usage: accumulated };
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
     }
@@ -85,7 +108,10 @@ async function completeJson<T>(messages: ChatMessage[], parse: (json: unknown) =
   throw lastError ?? new Error('LLM JSON parse failed');
 }
 
-export async function openaiGenerateJD(system: string, user: string): Promise<JD> {
+export async function openaiGenerateJD(
+  system: string,
+  user: string,
+): Promise<{ output: JD; usage: TokenUsage }> {
   return completeJson(
     [
       { role: 'system', content: system },
@@ -95,7 +121,10 @@ export async function openaiGenerateJD(system: string, user: string): Promise<JD
   );
 }
 
-export async function openaiEvaluateJD(system: string, user: string): Promise<EvaluationResult> {
+export async function openaiEvaluateJD(
+  system: string,
+  user: string,
+): Promise<{ output: EvaluationResult; usage: TokenUsage }> {
   return completeJson(
     [
       { role: 'system', content: system },
@@ -105,6 +134,9 @@ export async function openaiEvaluateJD(system: string, user: string): Promise<Ev
   );
 }
 
-export async function openaiImproveJD(system: string, user: string): Promise<JD> {
+export async function openaiImproveJD(
+  system: string,
+  user: string,
+): Promise<{ output: JD; usage: TokenUsage }> {
   return openaiGenerateJD(system, user);
 }
