@@ -26,6 +26,17 @@ const envSchema = z.object({
 
   // 开发配置
   NEXT_PUBLIC_ENABLE_DEBUG: z.coerce.boolean().default(false),
+
+  // JD Agent LLM（OpenAI 兼容接口，仅服务端使用）
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  /** 为 true 时强制走本地 mock，不调用外部模型 */
+  JD_LLM_MOCK: z.coerce.boolean().default(false),
+  /** 部分兼容接口不支持 json_object，可设为 false */
+  OPENAI_JSON_MODE: z.coerce.boolean().default(true),
+  /** JD Agent 调用上游 LLM 的超时（毫秒），与通用 API_TIMEOUT 分离，避免慢模型被 10s 截断 */
+  JD_LLM_TIMEOUT_MS: z.coerce.number().default(120000),
 });
 
 type Env = z.infer<typeof envSchema>;
