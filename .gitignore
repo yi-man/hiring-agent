@@ -11,6 +11,9 @@ coverage
 .next
 out
 
+# Worktrees
+.worktrees/
+
 # Production
 build
 dist

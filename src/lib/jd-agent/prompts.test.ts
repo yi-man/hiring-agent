@@ -37,9 +37,11 @@ describe('jd-agent prompts', () => {
     expect(PROMPT_VERSION).toBe('jd_v3.2');
   });
 
-  it('builds prompts with strict json constraints', () => {
-    expect(buildGenerateUserPrompt(schema)).toContain('必须严格JSON');
-    expect(buildEvaluateUserPrompt(jd)).toContain('"rewrite_required"');
-    expect(buildImproveUserPrompt(jd, evalResult, '更专业')).toContain('返回完整优化后的JSON JD');
+  it('builds prompts with strict json constraints', async () => {
+    expect(await buildGenerateUserPrompt(schema)).toContain('必须严格JSON');
+    expect(await buildEvaluateUserPrompt(jd)).toContain('"rewrite_required"');
+    expect(await buildImproveUserPrompt(jd, evalResult, '更专业')).toContain(
+      '返回完整优化后的JSON JD',
+    );
   });
 });

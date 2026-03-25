@@ -1,4 +1,24 @@
 import '@testing-library/jest-dom';
+import { TextDecoder as NodeTextDecoder, TextEncoder as NodeTextEncoder } from 'util';
+import { ReadableStream as NodeReadableStream } from 'node:stream/web';
+
+// Some LangChain dependencies (via LangSmith) expect TextEncoder/TextDecoder
+// to exist in the global scope. JSDOM test environments may not provide it.
+const g = globalThis as unknown as {
+  TextEncoder?: typeof globalThis.TextEncoder;
+  TextDecoder?: typeof globalThis.TextDecoder;
+  ReadableStream?: typeof globalThis.ReadableStream;
+};
+
+if (typeof g.TextEncoder === 'undefined') {
+  g.TextEncoder = NodeTextEncoder as unknown as typeof globalThis.TextEncoder;
+}
+if (typeof g.TextDecoder === 'undefined') {
+  g.TextDecoder = NodeTextDecoder as unknown as typeof globalThis.TextDecoder;
+}
+if (typeof g.ReadableStream === 'undefined') {
+  g.ReadableStream = NodeReadableStream as unknown as typeof globalThis.ReadableStream;
+}
 
 jest.mock('next/navigation', () => ({
   useRouter() {
