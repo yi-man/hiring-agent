@@ -11,7 +11,14 @@ type OpenAIChatResponse = {
 
 const MAX_ATTEMPTS = 2;
 
-async function postChat(messages: ChatMessage[]): Promise<string> {
+function isUnsupportedJsonObjectError(message: string): boolean {
+  return /json_object|response_format|response format/i.test(message);
+}
+
+async function postChatOnce(
+  messages: ChatMessage[],
+  includeJsonObjectFormat: boolean,
+): Promise<{ ok: boolean; status: number; data: OpenAIChatResponse }> {
   const key = env.OPENAI_API_KEY;
   if (!key) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -19,7 +26,7 @@ async function postChat(messages: ChatMessage[]): Promise<string> {
 
   const url = `${env.OPENAI_BASE_URL.replace(/\/$/, '')}/chat/completions`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), env.API_TIMEOUT);
+  const timeout = setTimeout(() => controller.abort(), env.JD_LLM_TIMEOUT_MS);
 
   try {
     const res = await fetch(url, {
@@ -32,24 +39,35 @@ async function postChat(messages: ChatMessage[]): Promise<string> {
         model: env.OPENAI_MODEL,
         messages,
         temperature: 0.4,
-        ...(env.OPENAI_JSON_MODE ? { response_format: { type: 'json_object' } } : {}),
+        ...(includeJsonObjectFormat ? { response_format: { type: 'json_object' } } : {}),
       }),
       signal: controller.signal,
     });
 
     const data = (await res.json()) as OpenAIChatResponse;
-    if (!res.ok) {
-      throw new Error(data.error?.message || `LLM HTTP ${res.status}`);
-    }
-
-    const content = data.choices?.[0]?.message?.content;
-    if (!content?.trim()) {
-      throw new Error('Empty LLM response');
-    }
-    return content;
+    return { ok: res.ok, status: res.status, data };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function postChat(messages: ChatMessage[]): Promise<string> {
+  const includeJson = env.OPENAI_JSON_MODE;
+  let { ok, data } = await postChatOnce(messages, includeJson);
+
+  if (!ok && includeJson && isUnsupportedJsonObjectError(data.error?.message ?? '')) {
+    ({ ok, data } = await postChatOnce(messages, false));
+  }
+
+  if (!ok) {
+    throw new Error(data.error?.message || `LLM HTTP error`);
+  }
+
+  const content = data.choices?.[0]?.message?.content;
+  if (!content?.trim()) {
+    throw new Error('Empty LLM response');
+  }
+  return content;
 }
 
 async function completeJson<T>(messages: ChatMessage[], parse: (json: unknown) => T): Promise<T> {

@@ -151,6 +151,8 @@ export type {
   JDAgentDecision,
   JDAgentRequest,
   JDAgentResponse,
+  JDAgentStageTiming,
+  JDAgentTimingMeta,
   JDScore,
   JobSchema,
   JDTone,

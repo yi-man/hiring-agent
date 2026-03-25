@@ -35,6 +35,8 @@ const envSchema = z.object({
   JD_LLM_MOCK: z.coerce.boolean().default(false),
   /** 部分兼容接口不支持 json_object，可设为 false */
   OPENAI_JSON_MODE: z.coerce.boolean().default(true),
+  /** JD Agent 调用上游 LLM 的超时（毫秒），与通用 API_TIMEOUT 分离，避免慢模型被 10s 截断 */
+  JD_LLM_TIMEOUT_MS: z.coerce.number().default(120000),
 });
 
 type Env = z.infer<typeof envSchema>;

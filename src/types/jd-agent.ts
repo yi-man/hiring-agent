@@ -48,6 +48,19 @@ export type JDAgentDecision = {
   picked: 'original' | 'improved';
 };
 
+/** 单次请求内各阶段耗时（服务端 performance.now） */
+export type JDAgentStageTiming = {
+  id: string;
+  label: string;
+  ms: number;
+};
+
+export type JDAgentTimingMeta = {
+  totalMs: number;
+  stages: JDAgentStageTiming[];
+  suggestions: string[];
+};
+
 export type JDAgentResponse = {
   jd: JD;
   evaluation: EvaluationResult;
@@ -56,6 +69,7 @@ export type JDAgentResponse = {
     model: string;
     promptVersion: string;
     action: JDAgentAction;
+    timing?: JDAgentTimingMeta;
   };
   warnings?: string[];
 };

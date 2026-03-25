@@ -1,14 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { JD, JDTone } from '@/types';
+import type { JDAgentResponse, JDAgentTimingMeta, JD, JDTone } from '@/types';
 
 type ApiPayload = {
   success: boolean;
   message?: string;
-  data?: {
-    jd: JD;
-  };
+  data?: JDAgentResponse;
 };
 
 const emptyJd: JD = {
@@ -26,6 +24,7 @@ export function JDGeneratorWorkbench() {
   const [extraInstruction, setExtraInstruction] = useState('');
   const [jd, setJd] = useState<JD>(emptyJd);
   const [error, setError] = useState('');
+  const [timing, setTiming] = useState<JDAgentTimingMeta | null>(null);
   const [loading, setLoading] = useState<'idle' | 'generating' | 'continuing'>('idle');
 
   const hasJd = useMemo(() => Boolean(jd.title || jd.summary), [jd]);
@@ -38,8 +37,10 @@ export function JDGeneratorWorkbench() {
     });
     const result = (await response.json()) as ApiPayload;
     if (!response.ok || !result.success || !result.data) {
+      setTiming(null);
       throw new Error(result.message || '请求失败');
     }
+    setTiming(result.data.meta.timing ?? null);
     return result.data.jd;
   }
 
@@ -151,6 +152,33 @@ export function JDGeneratorWorkbench() {
           {loading === 'continuing' ? '继续生成中...' : '继续生成'}
         </button>
       </section>
+
+      {timing ? (
+        <section className="space-y-2 rounded-lg border border-dashed p-4 text-sm">
+          <h2 className="font-medium">阶段耗时</h2>
+          <p className="text-muted-foreground">
+            合计 {(timing.totalMs / 1000).toFixed(2)}s（服务端统计）
+          </p>
+          <ul className="space-y-1 font-mono text-xs">
+            {timing.stages.map((s, idx) => (
+              <li key={`${s.id}-${idx}`} className="flex justify-between gap-4">
+                <span>{s.label}</span>
+                <span>{s.ms}ms</span>
+              </li>
+            ))}
+          </ul>
+          {timing.suggestions.length > 0 ? (
+            <div className="space-y-1 pt-2">
+              <p className="font-medium">建议</p>
+              <ul className="text-muted-foreground list-inside list-disc space-y-1">
+                {timing.suggestions.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
     </div>

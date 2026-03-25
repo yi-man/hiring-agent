@@ -10,6 +10,9 @@ describe('runJDAgent', () => {
 
     expect(result.jd.title).toBeTruthy();
     expect(result.meta.promptVersion).toBe('jd_v3.2');
+    expect(result.meta.timing?.stages.length).toBeGreaterThan(0);
+    expect(result.meta.timing?.totalMs).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(result.meta.timing?.suggestions)).toBe(true);
   });
 
   it('runs continue_generate flow', async () => {
