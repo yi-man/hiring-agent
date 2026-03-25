@@ -31,6 +31,7 @@ describe('Navbar', () => {
 
     // 检查主要导航链接
     expect(screen.getByText('首页')).toBeInTheDocument();
+    expect(screen.getByText('Chat')).toBeInTheDocument();
     expect(screen.getByText('JD生成')).toBeInTheDocument();
     expect(screen.getByText('服务')).toBeInTheDocument();
     expect(screen.getByText('博客')).toBeInTheDocument();

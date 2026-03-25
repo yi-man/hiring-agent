@@ -21,6 +21,7 @@ export function Navbar() {
 
   const navigation = [
     { name: '首页', href: '/' },
+    { name: 'Chat', href: '/chat' },
     { name: 'JD生成', href: '/jd-generator' },
     { name: '关于', href: '/about' },
     { name: '服务', href: '/services' },
