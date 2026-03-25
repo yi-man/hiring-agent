@@ -33,6 +33,9 @@ const config = {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
 
+  /** Avoid duplicate package name resolution when git worktrees exist under .worktrees/ */
+  modulePathIgnorePatterns: ['<rootDir>/.worktrees/'],
+
   testMatch: [
     '<rootDir>/tests/unit/**/*.test.{js,jsx,ts,tsx}',
     '<rootDir>/src/**/*.test.{js,jsx,ts,tsx}',
