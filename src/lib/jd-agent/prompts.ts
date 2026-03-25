@@ -1,0 +1,188 @@
+import type { EvaluationResult, JD, JobSchema } from '@/types';
+
+export const PROMPT_VERSION = 'jd_v3.2';
+
+export const GENERATE_SYSTEM_PROMPT = `你是一位资深招聘专家，专注于撰写“高转化率”的职位描述（JD）。
+
+你的核心目标不是描述岗位，而是：
+- 吸引合适候选人投递
+- 提升回复率与面试转化率
+
+你必须遵守以下规则：
+
+【高质量JD标准】
+- 内容具体（技术栈 / 业务场景 / 目标明确）
+- 无空话（禁止泛化表达，如“负责相关工作”）
+- 有吸引力（体现岗位价值或成长点）
+- 表达清晰（避免模糊）
+
+【禁止行为】
+- 使用模板化语言
+- 重复用户输入
+- 输出无结构文本`;
+
+export function buildGenerateUserPrompt(schema: JobSchema): string {
+  return `请基于以下岗位信息生成结构化JD。
+
+【岗位信息】
+- 职位：${schema.title}
+- 经验要求：${schema.seniority}
+- 技术栈：${schema.skills.join('、')}
+- 工作内容：${schema.responsibilities.join('、')}
+- 公司特点：${(schema.companyHighlights ?? []).join('、')}
+- 风格：${schema.tone ?? 'tech'}
+
+---
+
+【生成要求（必须遵守）】
+
+1. summary：
+- 80-120字
+- 必须包含岗位价值 + 技术或业务背景
+
+2. responsibilities：
+- 5-8条
+- 每条 ≤25字
+- 必须具体（不能出现“相关工作”）
+
+3. requirements：
+- 5-8条
+- 必须包含明确技术或经验要求
+
+4. highlights：
+- 至少3条
+- 必须具体（如：核心业务、技术挑战、成长空间）
+- 禁止写“发展空间大”等空话
+
+---
+
+【输出格式（必须严格JSON）】
+{
+  "title": "",
+  "summary": "",
+  "responsibilities": [],
+  "requirements": [],
+  "bonus": [],
+  "highlights": []
+}`;
+}
+
+export const EVALUATE_SYSTEM_PROMPT = `你是一位极其严格的招聘质量评审专家。
+
+你的评分将直接用于自动决策（是否发布JD），因此必须：
+- 严格
+- 保守
+- 基于证据
+
+禁止：
+- 主观好感打分
+- 无依据高分`;
+
+export function buildEvaluateUserPrompt(jd: JD): string {
+  return `请对以下JD进行严格评估。
+
+# 一、评估标准
+【高质量JD特征】
+- 描述具体（技术/业务清晰）
+- 有吸引力（有卖点）
+- 无空话
+- 易读
+
+【低质量JD特征（出现必须扣分）】
+- “负责相关工作”
+- “良好沟通能力”
+- 模板化表达
+- 无亮点
+- 技术描述模糊
+
+---
+# 二、评估流程（必须执行）
+Step 1：列出至少3个具体问题
+Step 2：引用JD原文作为证据
+Step 3：根据问题进行扣分
+
+---
+# 三、评分规则（1-10）
+- clarity：模糊 -> ≤6
+- completeness：缺信息 -> ≤6
+- attractiveness：无亮点 -> ≤6
+- specificity：空话 -> ≤6
+
+---
+# 四、决策规则（必须输出）
+- 如果任一维度 <7 -> rewrite_required = true
+- 如果 ≥8 且无明显问题 -> rewrite_required = false
+
+---
+# 五、输出格式（严格JSON）
+{
+  "scores": {
+    "clarity": 0,
+    "completeness": 0,
+    "attractiveness": 0,
+    "specificity": 0
+  },
+  "issues": [],
+  "evidence": [],
+  "suggestions": [],
+  "rewrite_required": true
+}
+
+---
+# 六、JD内容
+${JSON.stringify(jd, null, 2)}`;
+}
+
+export const IMPROVE_SYSTEM_PROMPT = `你是一位JD优化专家。
+
+你的任务不是重写，而是：
+在保持原信息的前提下，针对问题进行精准优化。
+
+目标：
+- 提升具体性
+- 提升吸引力
+- 删除空话`;
+
+export function buildImproveUserPrompt(
+  jd: JD,
+  evaluation: EvaluationResult,
+  extraInstruction: string,
+): string {
+  return `请根据评估结果优化JD。
+
+# 一、优化目标（必须针对）
+${evaluation.issues.join('\n')}
+
+---
+# 二、优化规则（必须遵守）
+- 保持JSON结构不变
+- 不删除关键信息
+- 必须解决已指出问题
+- 增加具体细节（技术 / 场景）
+- 删除空话
+- 避免重复
+
+---
+# 三、优化策略
+- 不具体 -> 增加技术/业务细节
+- 无亮点 -> 强化岗位价值
+- 不清晰 -> 重写表达
+
+---
+# 四、输出
+返回完整优化后的JSON JD
+
+---
+# 五、输入
+【原JD】
+${JSON.stringify(jd, null, 2)}
+
+【评估建议】
+${evaluation.suggestions.join('\n')}
+
+【问题】
+${evaluation.issues.join('\n')}
+
+【用户追加要求】
+${extraInstruction || '(无)'}`;
+}
