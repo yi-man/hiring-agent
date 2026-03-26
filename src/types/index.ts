@@ -160,3 +160,14 @@ export type {
   JobSchema,
   JDTone,
 } from './jd-agent';
+
+export type {
+  ChatRole,
+  Conversation,
+  ConversationStatus,
+  CreateConversationResponse,
+  ListConversationsResponse,
+  ListMessagesResponse,
+  Message,
+  StreamMessageRequest,
+} from './chat';

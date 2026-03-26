@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import path from 'path';
+import { config } from 'dotenv';
+
+config({ path: path.resolve(process.cwd(), '.env.development') });
+config({ path: path.resolve(process.cwd(), '.env.local') });
 
 const envSchema = z.object({
   // 应用配置
@@ -37,6 +42,18 @@ const envSchema = z.object({
   OPENAI_JSON_MODE: z.coerce.boolean().default(true),
   /** JD Agent 调用上游 LLM 的超时（毫秒），与通用 API_TIMEOUT 分离，避免慢模型被 10s 截断 */
   JD_LLM_TIMEOUT_MS: z.coerce.number().default(120000),
+
+  // Chat persistence
+  MYSQL_URL: z.string().optional(),
+  MYSQL_HOST: z.string().default('127.0.0.1'),
+  MYSQL_PORT: z.coerce.number().int().positive().default(3306),
+  MYSQL_USER: z.string().default('root'),
+  MYSQL_PASS: z.string().default('mysql1234'),
+  MYSQL_DATABASE: z.string().default('bia'),
+  REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
+  CHAT_REDIS_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
+  CHAT_HISTORY_REHYDRATE_LIMIT: z.coerce.number().int().positive().default(50),
+  CHAT_TEST_REDIS_PREFIX: z.string().default('chat:test'),
 });
 
 type Env = z.infer<typeof envSchema>;
