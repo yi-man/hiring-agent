@@ -32,6 +32,11 @@ export function ChatUI() {
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const conversationListRef = useRef<HTMLDivElement | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConversationId),
@@ -46,7 +51,16 @@ export function ChatUI() {
       limit: CONVERSATION_PAGE_SIZE,
     });
 
-    setConversations((prev) => (reset ? result.conversations : [...prev, ...result.conversations]));
+    setConversations((prev) => {
+      if (!reset) return [...prev, ...result.conversations];
+      const activeId = activeConversationIdRef.current;
+      if (!activeId) return result.conversations;
+      const hasActiveInResult = result.conversations.some((c) => c.id === activeId);
+      if (hasActiveInResult) return result.conversations;
+      const activeInPrev = prev.find((c) => c.id === activeId);
+      if (!activeInPrev) return result.conversations;
+      return [activeInPrev, ...result.conversations];
+    });
     setConversationPage(nextPage);
     setConversationHasMore(result.hasMore);
 

@@ -91,13 +91,21 @@ describe('ChatUI', () => {
   });
 
   it('streams assistant message incrementally after send', async () => {
-    fetchConversationsMock.mockResolvedValue({
-      conversations: [{ id: 'c1', title: 'one' }],
-      total: 1,
-      page: 1,
-      limit: 20,
-      hasMore: false,
-    });
+    fetchConversationsMock
+      .mockResolvedValueOnce({
+        conversations: [{ id: 'c1', title: 'one' }],
+        total: 1,
+        page: 1,
+        limit: 20,
+        hasMore: false,
+      })
+      .mockResolvedValueOnce({
+        conversations: [{ id: 'c2', title: 'other' }],
+        total: 2,
+        page: 1,
+        limit: 20,
+        hasMore: false,
+      });
     fetchConversationMessagesMock.mockResolvedValue([]);
     streamConversationMessageMock.mockResolvedValue(makeStream(['你', '好']));
     render(<ChatUI />);
@@ -107,6 +115,36 @@ describe('ChatUI', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     expect(await screen.findByText('hello')).toBeInTheDocument();
     expect(await screen.findByText('你好')).toBeInTheDocument();
+    expect(screen.queryByText('先创建一个会话，然后开始聊天。')).not.toBeInTheDocument();
+    expect(await screen.findByText('one')).toBeInTheDocument();
+  });
+
+  it('keeps active conversation visible after refresh pagination misses it', async () => {
+    fetchConversationsMock
+      .mockResolvedValueOnce({
+        conversations: [{ id: 'c1', title: 'one' }],
+        total: 1,
+        page: 1,
+        limit: 20,
+        hasMore: false,
+      })
+      .mockResolvedValueOnce({
+        conversations: [{ id: 'c2', title: 'other' }],
+        total: 2,
+        page: 1,
+        limit: 20,
+        hasMore: false,
+      });
+    fetchConversationMessagesMock.mockResolvedValue([]);
+    streamConversationMessageMock.mockResolvedValue(makeStream(['a']));
+    render(<ChatUI />);
+    await screen.findByText('one');
+    const input = screen.getByPlaceholderText('输入你的问题');
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('hello');
+    expect(screen.queryByText('先创建一个会话，然后开始聊天。')).not.toBeInTheDocument();
+    expect(await screen.findByText('one')).toBeInTheDocument();
   });
 
   it('can create new conversation from button', async () => {

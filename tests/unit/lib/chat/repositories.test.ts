@@ -1,111 +1,158 @@
 import {
+  countConversations,
   createConversation,
-  listConversations,
+  listConversationsPaginated,
   touchConversation,
 } from '@/lib/chat/repositories/conversation-repo';
 import { createMessage, listMessages } from '@/lib/chat/repositories/message-repo';
 
-const execute = jest.fn();
-const query = jest.fn();
-
-jest.mock('@/lib/chat/mysql', () => ({
-  getMySqlPool: () => ({
-    execute,
-    query,
-  }),
+jest.mock('@/lib/prisma', () => ({
+  prisma: {
+    conversation: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
+      update: jest.fn(),
+    },
+    message: {
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+    },
+    $transaction: jest.fn(),
+  },
 }));
+
+const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
+  prisma: {
+    conversation: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+      update: jest.Mock;
+    };
+    message: {
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+    };
+    $transaction: jest.Mock;
+  };
+};
 
 describe('chat repositories', () => {
   beforeEach(() => {
-    execute.mockReset();
-    query.mockReset();
+    prismaMock.conversation.create.mockReset();
+    prismaMock.conversation.findMany.mockReset();
+    prismaMock.conversation.count.mockReset();
+    prismaMock.conversation.update.mockReset();
+    prismaMock.message.findFirst.mockReset();
+    prismaMock.message.findMany.mockReset();
+    prismaMock.$transaction.mockReset();
   });
 
   it('creates conversation and maps fields', async () => {
-    query.mockResolvedValueOnce([
-      [
-        {
-          id: 'c1',
-          user_id: 'u1',
-          title: null,
-          status: 'active',
-          last_active_at: '2026-03-26T00:00:00.000Z',
-          created_at: '2026-03-26T00:00:00.000Z',
-          updated_at: '2026-03-26T00:00:00.000Z',
-        },
-      ],
-    ]);
+    prismaMock.conversation.create.mockResolvedValueOnce({
+      id: 'c1',
+      userId: 'u1',
+      title: null,
+      status: 'active',
+      lastActiveAt: new Date('2026-03-26T00:00:00.000Z'),
+      createdAt: new Date('2026-03-26T00:00:00.000Z'),
+      updatedAt: new Date('2026-03-26T00:00:00.000Z'),
+    });
 
     const result = await createConversation('u1');
-    expect(execute).toHaveBeenCalled();
+    expect(prismaMock.conversation.create).toHaveBeenCalled();
     expect(result.id).toBe('c1');
     expect(result.userId).toBe('u1');
     expect(result.status).toBe('active');
   });
 
   it('lists conversations ordered by lastActiveAt from DB', async () => {
-    query.mockResolvedValueOnce([
-      [
-        {
-          id: 'c2',
-          user_id: null,
-          title: 'latest',
-          status: 'active',
-          last_active_at: '2026-03-26T01:00:00.000Z',
-          created_at: '2026-03-26T01:00:00.000Z',
-          updated_at: '2026-03-26T01:00:00.000Z',
-        },
-      ],
+    prismaMock.conversation.findMany.mockResolvedValueOnce([
+      {
+        id: 'c2',
+        userId: null,
+        title: 'latest',
+        status: 'active',
+        lastActiveAt: new Date('2026-03-26T01:00:00.000Z'),
+        createdAt: new Date('2026-03-26T01:00:00.000Z'),
+        updatedAt: new Date('2026-03-26T01:00:00.000Z'),
+      },
     ]);
-    const rows = await listConversations();
+    const rows = await listConversationsPaginated({ limit: 20, offset: 0 });
     expect(rows[0].id).toBe('c2');
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('ORDER BY last_active_at DESC'),
-      expect.any(Array),
-    );
+    expect(prismaMock.conversation.findMany).toHaveBeenCalledWith({
+      orderBy: { lastActiveAt: 'desc' },
+      skip: 0,
+      take: 20,
+    });
   });
 
   it('increments message sequence before insert', async () => {
-    query.mockResolvedValueOnce([[{ maxSeq: 2 }]]);
+    const conversationUpdateMock = jest.fn();
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        conversation: {
+          update: conversationUpdateMock,
+        },
+        message: {
+          findFirst: async () => ({ seq: 2 }),
+          create: async () => ({
+            id: 'm1',
+            conversationId: 'c1',
+            role: 'user',
+            content: 'hello',
+            seq: 3,
+            tokenCount: null,
+            createdAt: new Date('2026-03-26T01:00:00.000Z'),
+          }),
+        },
+      }),
+    );
     const message = await createMessage({
       conversationId: 'c1',
       role: 'user',
       content: 'hello',
     });
     expect(message.seq).toBe(3);
-    expect(execute).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT INTO messages'),
-      expect.arrayContaining([expect.any(String), 'c1', 'user', 'hello', 3]),
-    );
+    expect(prismaMock.$transaction).toHaveBeenCalled();
+    expect(conversationUpdateMock).toHaveBeenCalledWith({
+      data: { lastActiveAt: expect.any(Date), updatedAt: expect.any(Date) },
+      where: { id: 'c1' },
+    });
   });
 
   it('lists messages ordered by seq asc', async () => {
-    query.mockResolvedValueOnce([
-      [
-        {
-          id: 'm1',
-          conversation_id: 'c1',
-          role: 'user',
-          content: 'a',
-          seq: 1,
-          token_count: null,
-          created_at: '2026-03-26T01:00:00.000Z',
-        },
-      ],
+    prismaMock.message.findMany.mockResolvedValueOnce([
+      {
+        id: 'm1',
+        conversationId: 'c1',
+        role: 'user',
+        content: 'a',
+        seq: 1,
+        tokenCount: null,
+        createdAt: new Date('2026-03-26T01:00:00.000Z'),
+      },
     ]);
     const rows = await listMessages('c1');
     expect(rows[0].seq).toBe(1);
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('ORDER BY seq ASC'),
-      expect.any(Array),
-    );
+    expect(prismaMock.message.findMany).toHaveBeenCalledWith({
+      orderBy: { seq: 'asc' },
+      take: 100,
+      where: { conversationId: 'c1' },
+    });
   });
 
   it('touches conversation last_active_at', async () => {
     await touchConversation('c1');
-    expect(execute).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE conversations SET last_active_at'),
-      expect.arrayContaining([expect.any(Date), expect.any(Date), 'c1']),
-    );
+    expect(prismaMock.conversation.update).toHaveBeenCalledWith({
+      data: { lastActiveAt: expect.any(Date), updatedAt: expect.any(Date) },
+      where: { id: 'c1' },
+    });
+  });
+
+  it('counts conversations', async () => {
+    prismaMock.conversation.count.mockResolvedValueOnce(8);
+    await expect(countConversations()).resolves.toBe(8);
   });
 });

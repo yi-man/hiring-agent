@@ -1,42 +1,26 @@
-import { randomUUID } from 'crypto';
-import type { RowDataPacket } from 'mysql2/promise';
 import type { ChatRole, Message } from '@/types/chat';
-import { getMySqlPool } from '@/lib/chat/mysql';
+import { prisma } from '@/lib/prisma';
 
-type MessageRow = RowDataPacket & {
+type MessageRow = {
   id: string;
-  conversation_id: string;
-  role: ChatRole;
+  conversationId: string;
+  role: string;
   content: string;
   seq: number;
-  token_count: number | null;
-  created_at: Date | string;
+  tokenCount: number | null;
+  createdAt: Date;
 };
-
-function toIso(v: Date | string): string {
-  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
-}
 
 function mapRow(row: MessageRow): Message {
   return {
     id: row.id,
-    conversationId: row.conversation_id,
-    role: row.role,
+    conversationId: row.conversationId,
+    role: row.role as ChatRole,
     content: row.content,
     seq: row.seq,
-    tokenCount: row.token_count,
-    createdAt: toIso(row.created_at),
+    tokenCount: row.tokenCount,
+    createdAt: row.createdAt.toISOString(),
   };
-}
-
-async function nextSequence(conversationId: string): Promise<number> {
-  const pool = getMySqlPool();
-  const [rows] = await pool.query<Array<RowDataPacket & { maxSeq: number | null }>>(
-    'SELECT MAX(seq) AS maxSeq FROM messages WHERE conversation_id = ?',
-    [conversationId],
-  );
-  const maxSeq = rows[0]?.maxSeq ?? 0;
-  return maxSeq + 1;
 }
 
 export async function createMessage(params: {
@@ -45,31 +29,38 @@ export async function createMessage(params: {
   content: string;
   tokenCount?: number | null;
 }): Promise<Message> {
-  const pool = getMySqlPool();
-  const id = randomUUID();
-  const seq = await nextSequence(params.conversationId);
-  const now = new Date();
-  await pool.execute(
-    `INSERT INTO messages (id, conversation_id, role, content, seq, token_count, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [id, params.conversationId, params.role, params.content, seq, params.tokenCount ?? null, now],
-  );
-  return {
-    id,
-    conversationId: params.conversationId,
-    role: params.role,
-    content: params.content,
-    seq,
-    tokenCount: params.tokenCount ?? null,
-    createdAt: now.toISOString(),
-  };
+  return prisma.$transaction(async (tx) => {
+    const top = await tx.message.findFirst({
+      where: { conversationId: params.conversationId },
+      orderBy: { seq: 'desc' },
+      select: { seq: true },
+    });
+    const nextSeq = (top?.seq ?? 0) + 1;
+    const created = await tx.message.create({
+      data: {
+        conversationId: params.conversationId,
+        role: params.role,
+        content: params.content,
+        seq: nextSeq,
+        tokenCount: params.tokenCount ?? null,
+      },
+    });
+    await tx.conversation.update({
+      where: { id: params.conversationId },
+      data: {
+        lastActiveAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    return mapRow(created as MessageRow);
+  });
 }
 
 export async function listMessages(conversationId: string, limit = 100): Promise<Message[]> {
-  const pool = getMySqlPool();
-  const [rows] = await pool.query<MessageRow[]>(
-    `SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq ASC LIMIT ?`,
-    [conversationId, limit],
-  );
+  const rows = await prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { seq: 'asc' },
+    take: limit,
+  });
   return rows.map(mapRow);
 }

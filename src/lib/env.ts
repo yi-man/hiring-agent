@@ -44,12 +44,14 @@ const envSchema = z.object({
   JD_LLM_TIMEOUT_MS: z.coerce.number().default(120000),
 
   // Chat persistence
+  DATABASE_URL: z.string().optional(),
   MYSQL_URL: z.string().optional(),
   MYSQL_HOST: z.string().default('127.0.0.1'),
   MYSQL_PORT: z.coerce.number().int().positive().default(3306),
   MYSQL_USER: z.string().default('root'),
   MYSQL_PASS: z.string().default('mysql1234'),
   MYSQL_DATABASE: z.string().default('bia'),
+  MYSQL_CI_SUFFIX: z.string().default('_ci'),
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   CHAT_REDIS_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
   CHAT_HISTORY_REHYDRATE_LIMIT: z.coerce.number().int().positive().default(50),

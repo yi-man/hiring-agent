@@ -1,32 +1,33 @@
 /** @jest-environment node */
+import { execFileSync } from 'child_process';
 import { createClient } from 'redis';
-import { createPool, type Pool } from 'mysql2/promise';
+import { createPool } from 'mysql2/promise';
+import { requireIntegrationEnv } from './test-env';
 import { env } from '@/lib/env';
 import { buildHistoryKey } from '@/lib/chat/history/redis-chat-history';
-import { createConversation } from '@/lib/chat/repositories/conversation-repo';
+import {
+  createConversation,
+  listConversationsPaginated,
+} from '@/lib/chat/repositories/conversation-repo';
 import { createMessage, listMessages } from '@/lib/chat/repositories/message-repo';
 import { streamChatReply } from '@/lib/chat/chain';
-import { closeMySqlPool } from '@/lib/chat/mysql';
 import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
-import { requireIntegrationEnv } from './test-env';
-
-function createIntegrationPool(): Pool {
-  if (env.MYSQL_URL) {
-    return createPool({ uri: env.MYSQL_URL, connectionLimit: 2 });
-  }
-  return createPool({
-    host: env.MYSQL_HOST,
-    port: env.MYSQL_PORT,
-    user: env.MYSQL_USER,
-    password: env.MYSQL_PASS,
-    database: env.MYSQL_DATABASE,
-    connectionLimit: 2,
-  });
-}
 
 async function ensureSchema() {
-  if (!env.MYSQL_URL) {
+  if (env.DATABASE_URL) {
+    const url = new URL(env.DATABASE_URL);
+    const dbName = url.pathname.replace(/^\//, '');
+    const adminPool = createPool({
+      host: url.hostname,
+      port: Number(url.port || 3306),
+      user: decodeURIComponent(url.username),
+      password: decodeURIComponent(url.password),
+      connectionLimit: 1,
+    });
+    await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
+    await adminPool.end();
+  } else {
     const adminPool = createPool({
       host: env.MYSQL_HOST,
       port: env.MYSQL_PORT,
@@ -37,31 +38,12 @@ async function ensureSchema() {
     await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${env.MYSQL_DATABASE}\``);
     await adminPool.end();
   }
-  const pool = createIntegrationPool();
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS conversations (
-      id VARCHAR(36) PRIMARY KEY,
-      user_id VARCHAR(128) NULL,
-      title VARCHAR(255) NULL,
-      status VARCHAR(32) NOT NULL,
-      last_active_at DATETIME(3) NOT NULL,
-      created_at DATETIME(3) NOT NULL,
-      updated_at DATETIME(3) NOT NULL
-    )
-  `);
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id VARCHAR(36) PRIMARY KEY,
-      conversation_id VARCHAR(36) NOT NULL,
-      role VARCHAR(16) NOT NULL,
-      content LONGTEXT NOT NULL,
-      seq INT NOT NULL,
-      token_count INT NULL,
-      created_at DATETIME(3) NOT NULL,
-      INDEX idx_messages_conversation_seq (conversation_id, seq)
-    )
-  `);
-  await pool.end();
+
+  execFileSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: 'pipe',
+  });
 }
 
 describe('chat integration with real deps', () => {
@@ -80,7 +62,6 @@ describe('chat integration with real deps', () => {
 
   afterAll(async () => {
     await closeRedisClient();
-    await closeMySqlPool();
   });
 
   async function runTurn(conversationId: string, input: string) {
@@ -155,5 +136,17 @@ describe('chat integration with real deps', () => {
     const reply = await runTurn(c.id, '请介绍你的沟通风格，并先问我一个澄清问题。');
     expect(reply.length).toBeGreaterThan(0);
     expect(reply).not.toMatch(/我[是就是].{0,6}(专家|权威)/);
+  }, 120000);
+
+  it('orders conversations by latest lastActiveAt after new messages', async () => {
+    const older = await createConversation('sort-user');
+    const newer = await createConversation('sort-user');
+    await runTurn(older.id, '让这个会话变成最新活跃');
+    const list = await listConversationsPaginated({ limit: 20, offset: 0 });
+    const olderIndex = list.findIndex((c) => c.id === older.id);
+    const newerIndex = list.findIndex((c) => c.id === newer.id);
+    expect(olderIndex).toBeGreaterThanOrEqual(0);
+    expect(newerIndex).toBeGreaterThanOrEqual(0);
+    expect(olderIndex).toBeLessThan(newerIndex);
   }, 120000);
 });
