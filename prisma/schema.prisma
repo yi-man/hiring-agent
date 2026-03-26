@@ -1,0 +1,37 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Conversation {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  userId       String?   @map("user_id") @db.VarChar(128)
+  title        String?   @db.VarChar(255)
+  status       String    @default("active") @db.VarChar(32)
+  lastActiveAt DateTime  @map("last_active_at") @db.DateTime(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  messages     Message[]
+
+  @@index([lastActiveAt(sort: Desc)])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(uuid()) @db.VarChar(36)
+  conversationId String       @map("conversation_id") @db.VarChar(36)
+  role           String       @db.VarChar(16)
+  content        String       @db.LongText
+  seq            Int
+  tokenCount     Int?         @map("token_count")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([conversationId, seq], map: "idx_messages_conversation_seq")
+  @@unique([conversationId, seq])
+  @@map("messages")
+}
