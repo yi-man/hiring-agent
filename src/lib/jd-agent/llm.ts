@@ -50,18 +50,18 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
   }
 
   if (input.stage === 'generate') {
-    const user = buildGenerateUserPrompt(input.schema);
+    const user = await buildGenerateUserPrompt(input.schema);
     const result = await openaiGenerateJD(GENERATE_SYSTEM_PROMPT, user);
     return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
   }
 
   if (input.stage === 'evaluate') {
-    const user = buildEvaluateUserPrompt(input.jd);
+    const user = await buildEvaluateUserPrompt(input.jd);
     const result = await openaiEvaluateJD(EVALUATE_SYSTEM_PROMPT, user);
     return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
   }
 
-  const user = buildImproveUserPrompt(input.jd, input.evaluation, input.extraInstruction);
+  const user = await buildImproveUserPrompt(input.jd, input.evaluation, input.extraInstruction);
   const result = await openaiImproveJD(IMPROVE_SYSTEM_PROMPT, user);
   return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
 }
