@@ -16,6 +16,11 @@ function asPrettyJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function formatNullable(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '-';
+  return String(value);
+}
+
 export function LogDetailsDrawer({ isOpen, selectedLog, filters, onClose }: LogDetailsDrawerProps) {
   const [details, setDetails] = useState<LogItem | null>(null);
   const [loading, setLoading] = useState(false);
@@ -60,6 +65,16 @@ export function LogDetailsDrawer({ isOpen, selectedLog, filters, onClose }: LogD
     void loadDetails();
   }, [filters, isOpen, selectedLog]);
 
+  const displayLog = details ?? selectedLog;
+  const fullDetailsJson = displayLog
+    ? {
+        ...displayLog,
+        requestHeaders: details?.requestHeaders,
+        requestPayload: details?.requestPayload,
+        responsePayload: details?.responsePayload,
+      }
+    : null;
+
   return (
     <Modal
       isOpen={isOpen}
@@ -82,6 +97,58 @@ export function LogDetailsDrawer({ isOpen, selectedLog, filters, onClose }: LogD
               <div>
                 <strong>Outcome:</strong> {selectedLog.finalOutcome}
               </div>
+              {displayLog && (
+                <div className="border-divider grid grid-cols-1 gap-2 rounded border p-3 md:grid-cols-2">
+                  <div>
+                    <strong>Timestamp:</strong> {displayLog.timestamp}
+                  </div>
+                  <div>
+                    <strong>Provider:</strong> {displayLog.provider}
+                  </div>
+                  <div>
+                    <strong>Model:</strong> {displayLog.model}
+                  </div>
+                  <div>
+                    <strong>Is Error:</strong> {displayLog.isError ? 'true' : 'false'}
+                  </div>
+                  <div>
+                    <strong>HTTP Status:</strong> {formatNullable(displayLog.httpStatus)}
+                  </div>
+                  <div>
+                    <strong>Latency(ms):</strong> {displayLog.latencyMs}
+                  </div>
+                  <div>
+                    <strong>Input Tokens:</strong> {displayLog.inputTokens}
+                  </div>
+                  <div>
+                    <strong>Output Tokens:</strong> {displayLog.outputTokens}
+                  </div>
+                  <div>
+                    <strong>Total Tokens:</strong> {displayLog.totalTokens}
+                  </div>
+                  <div>
+                    <strong>Retry Count:</strong> {displayLog.retryCount}
+                  </div>
+                  <div>
+                    <strong>Error Domain:</strong> {formatNullable(displayLog.errorDomain)}
+                  </div>
+                  <div>
+                    <strong>Error Code:</strong> {formatNullable(displayLog.errorCode)}
+                  </div>
+                  <div>
+                    <strong>Provider Status:</strong> {formatNullable(displayLog.providerStatus)}
+                  </div>
+                  <div>
+                    <strong>Call ID:</strong> {formatNullable(displayLog.callId)}
+                  </div>
+                  <div>
+                    <strong>Trace ID:</strong> {formatNullable(displayLog.traceId)}
+                  </div>
+                  <div>
+                    <strong>Request ID:</strong> {formatNullable(displayLog.requestId)}
+                  </div>
+                </div>
+              )}
               {error && <div className="text-danger">{error}</div>}
               {loading && <div className="text-foreground/70">Loading detailed payloads...</div>}
               {!filters.adminToken && (
@@ -114,6 +181,14 @@ export function LogDetailsDrawer({ isOpen, selectedLog, filters, onClose }: LogD
                       {asPrettyJson(details.responsePayload)}
                     </pre>
                   </div>
+                </div>
+              )}
+              {fullDetailsJson && (
+                <div>
+                  <div className="mb-1 font-medium">Full Details JSON</div>
+                  <pre className="bg-secondary/40 overflow-x-auto rounded p-2 text-xs">
+                    {asPrettyJson(fullDetailsJson)}
+                  </pre>
                 </div>
               )}
               <Button size="sm" variant="light" onClick={onClose}>
