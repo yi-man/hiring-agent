@@ -8,8 +8,8 @@ pnpx lint-staged
 echo "🔍 Running TypeScript type check..."
 pnpm type-check
 
-# 运行单元测试
-echo "🧪 Running unit tests..."
-pnpm test:ci
+# 运行 Jest（仅针对暂存文件关联测试，非 CI 全量覆盖率模式）
+echo "🧪 Running related Jest tests..."
+pnpm test --bail --findRelatedTests --passWithNoTests --coverage=false $(git diff --cached --name-only --diff-filter=ACMR | tr '\n' ' ')
 
 echo "✅ Pre-commit checks passed!"
