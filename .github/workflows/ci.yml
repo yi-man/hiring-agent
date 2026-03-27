@@ -90,6 +90,8 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
       NEXTAUTH_SECRET: ci-nextauth-secret
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
