@@ -38,26 +38,13 @@ async function enqueueDocumentIngest(params: {
   jobId: string;
 }) {
   await markConversationDocumentIndexJobRunning(params.jobId);
-  await ingestConversationDocument(params.documentId, params.conversationId);
-  await markConversationDocumentIndexJobSuccess(params.jobId);
-}
-
-function triggerDocumentIngest(params: {
-  conversationId: string;
-  documentId: string;
-  jobId: string;
-}) {
-  void Promise.resolve()
-    .then(() => enqueueDocumentIngest(params))
-    .catch(async (error) => {
-      const message = error instanceof Error ? error.message : 'document ingest worker failed';
-      // Keep async behavior but persist failure state for deterministic recovery.
-      try {
-        await markConversationDocumentIndexJobFailed(params.jobId, message);
-      } catch {
-        // Last-resort fallback: job row remains visible (pending/running) for manual recovery.
-      }
-    });
+  try {
+    await ingestConversationDocument(params.documentId, params.conversationId);
+    await markConversationDocumentIndexJobSuccess(params.jobId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'document ingest worker failed';
+    await markConversationDocumentIndexJobFailed(params.jobId, message);
+  }
 }
 
 function asUploadFile(value: FormDataEntryValue | null): UploadFileLike | null {
@@ -122,7 +109,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     });
     const indexJob = await createConversationDocumentIndexJob(document.id);
 
-    triggerDocumentIngest({ conversationId: id, documentId: document.id, jobId: indexJob.id });
+    await enqueueDocumentIngest({
+      conversationId: id,
+      documentId: document.id,
+      jobId: indexJob.id,
+    });
 
     return NextResponse.json({ document }, { status: 201 });
   } catch (error) {

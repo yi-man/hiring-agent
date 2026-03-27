@@ -199,7 +199,6 @@ describe('conversation documents routes', () => {
         status: 'processing',
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(createConversationDocumentIndexJobMock).toHaveBeenCalledWith('d1');
     expect(markConversationDocumentIndexJobRunningMock).toHaveBeenCalledWith('job-1');
     expect(ingestConversationDocumentMock).toHaveBeenCalledWith('d1', 'c1');
@@ -232,7 +231,6 @@ describe('conversation documents routes', () => {
     });
 
     expect(res.status).toBe(201);
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(createConversationDocumentIndexJobMock).toHaveBeenCalledWith('d1');
     expect(markConversationDocumentIndexJobRunningMock).toHaveBeenCalledWith('job-1');
     expect(markConversationDocumentIndexJobSuccessMock).not.toHaveBeenCalled();
@@ -281,17 +279,19 @@ describe('conversation documents routes', () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.deleted).toBe(true);
-    expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1');
     expect(deleteDocumentPointsMock).toHaveBeenCalledWith({
       conversationId: 'c1',
       documentId: 'd1',
     });
+    expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1');
+    const qdrantCallOrder = deleteDocumentPointsMock.mock.invocationCallOrder[0];
+    const dbCallOrder = deleteConversationDocumentMock.mock.invocationCallOrder[0];
+    expect(qdrantCallOrder).toBeLessThan(dbCallOrder);
   });
 
   it('returns signal when vector cleanup fails after delete', async () => {
     requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
     conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });
-    deleteConversationDocumentMock.mockResolvedValueOnce(true);
     deleteDocumentPointsMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
 
     const res = await deleteDocument({} as Request, {
@@ -300,5 +300,6 @@ describe('conversation documents routes', () => {
     const body = await res.json();
     expect(res.status).toBe(502);
     expect(body.error).toContain('vector cleanup failed');
+    expect(deleteConversationDocumentMock).not.toHaveBeenCalled();
   });
 });

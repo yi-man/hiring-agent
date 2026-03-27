@@ -80,18 +80,18 @@ export async function DELETE(
       return NextResponse.json({ error: 'conversation not found' }, { status: 404 });
     }
 
-    const deleted = await deleteConversationDocument(id, documentId);
-    if (!deleted) {
-      return NextResponse.json({ error: 'document not found' }, { status: 404 });
-    }
     try {
       await deleteDocumentPoints({ conversationId: id, documentId });
     } catch (error) {
       const details = error instanceof Error ? error.message : 'unknown vector cleanup error';
       return NextResponse.json(
-        { error: `document was deleted but vector cleanup failed: ${details}` },
+        { error: `vector cleanup failed; document was not deleted: ${details}` },
         { status: 502 },
       );
+    }
+    const deleted = await deleteConversationDocument(id, documentId);
+    if (!deleted) {
+      return NextResponse.json({ error: 'document not found' }, { status: 404 });
     }
 
     return NextResponse.json({ deleted: true });
