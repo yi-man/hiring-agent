@@ -13,7 +13,7 @@
 - `GITHUB_SECRET`
 - `NEXTAUTH_SECRET`
 - `NEXTAUTH_URL`
-- `DATABASE_URL`（或 `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASS` / `MYSQL_DATABASE`）
+- `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASS` / `MYSQL_DATABASE`
 - `REDIS_URL`
 
 > 说明：`test:integration:chat` 还要求 `OPENAI_API_KEY`。
@@ -58,7 +58,7 @@ pnpm run test:integration:chat
 
 集成测试启动阶段会执行：
 
-1. 根据 `DATABASE_URL` 或 `MYSQL_*` 推导测试数据库名，并追加 `MYSQL_CI_SUFFIX`（默认 `_ci`）
+1. 根据 `MYSQL_*` 推导测试数据库名，并追加 `MYSQL_CI_SUFFIX`（默认 `_ci`）
 2. 自动创建测试数据库（不存在则创建）
 3. 执行 `pnpm exec prisma migrate deploy`
 4. MySQL 健康检查：`SELECT 1`

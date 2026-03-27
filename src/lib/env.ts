@@ -44,8 +44,6 @@ const envSchema = z.object({
   JD_LLM_TIMEOUT_MS: z.coerce.number().default(120000),
 
   // Chat persistence
-  DATABASE_URL: z.string().optional(),
-  MYSQL_URL: z.string().optional(),
   MYSQL_HOST: z.string().default('127.0.0.1'),
   MYSQL_PORT: z.coerce.number().int().positive().default(3306),
   MYSQL_USER: z.string().default('root'),

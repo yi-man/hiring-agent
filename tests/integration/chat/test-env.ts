@@ -9,20 +9,16 @@ config({ path: path.resolve(process.cwd(), '.env.local') });
 
 function applyCiDatabaseSuffix() {
   const ciSuffix = process.env.MYSQL_CI_SUFFIX || '_ci';
-  if (!process.env.DATABASE_URL) {
-    if (process.env.MYSQL_URL) {
-      process.env.DATABASE_URL = process.env.MYSQL_URL;
-    } else if (
-      process.env.MYSQL_HOST &&
-      process.env.MYSQL_PORT &&
-      process.env.MYSQL_USER &&
-      process.env.MYSQL_PASS &&
-      process.env.MYSQL_DATABASE
-    ) {
-      const user = encodeURIComponent(process.env.MYSQL_USER);
-      const pass = encodeURIComponent(process.env.MYSQL_PASS);
-      process.env.DATABASE_URL = `mysql://${user}:${pass}@${process.env.MYSQL_HOST}:${process.env.MYSQL_PORT}/${process.env.MYSQL_DATABASE}`;
-    }
+  if (
+    process.env.MYSQL_HOST &&
+    process.env.MYSQL_PORT &&
+    process.env.MYSQL_USER &&
+    process.env.MYSQL_PASS &&
+    process.env.MYSQL_DATABASE
+  ) {
+    const user = encodeURIComponent(process.env.MYSQL_USER);
+    const pass = encodeURIComponent(process.env.MYSQL_PASS);
+    process.env.DATABASE_URL = `mysql://${user}:${pass}@${process.env.MYSQL_HOST}:${process.env.MYSQL_PORT}/${process.env.MYSQL_DATABASE}`;
   }
 
   if (process.env.DATABASE_URL) {
@@ -50,34 +46,23 @@ export function requireIntegrationEnv(name: string): string {
 }
 
 export async function ensureIntegrationSchema(): Promise<void> {
-  if (process.env.DATABASE_URL) {
-    const url = new URL(process.env.DATABASE_URL);
-    const dbName = url.pathname.replace(/^\//, '');
-    const adminPool = createPool({
-      host: url.hostname,
-      port: Number(url.port || 3306),
-      user: decodeURIComponent(url.username),
-      password: decodeURIComponent(url.password),
-      connectionLimit: 1,
-    });
-    await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
-    await adminPool.end();
-  } else {
-    const host = requireIntegrationEnv('MYSQL_HOST');
-    const port = Number(requireIntegrationEnv('MYSQL_PORT'));
-    const user = requireIntegrationEnv('MYSQL_USER');
-    const password = requireIntegrationEnv('MYSQL_PASS');
-    const database = requireIntegrationEnv('MYSQL_DATABASE');
-    const adminPool = createPool({
-      host,
-      port,
-      user,
-      password,
-      connectionLimit: 1,
-    });
-    await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${database}\``);
-    await adminPool.end();
-  }
+  const host = requireIntegrationEnv('MYSQL_HOST');
+  const port = Number(requireIntegrationEnv('MYSQL_PORT'));
+  const user = requireIntegrationEnv('MYSQL_USER');
+  const password = requireIntegrationEnv('MYSQL_PASS');
+  const database = requireIntegrationEnv('MYSQL_DATABASE');
+  process.env.DATABASE_URL = `mysql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
+  const url = new URL(process.env.DATABASE_URL);
+  const dbName = url.pathname.replace(/^\//, '');
+  const adminPool = createPool({
+    host,
+    port,
+    user,
+    password,
+    connectionLimit: 1,
+  });
+  await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
+  await adminPool.end();
 
   execFileSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
     cwd: process.cwd(),

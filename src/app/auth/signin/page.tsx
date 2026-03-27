@@ -2,13 +2,14 @@ import { getSignInErrorMessage } from '@/lib/auth/signin-error';
 import Link from 'next/link';
 
 type SignInPageProps = {
-  searchParams?: {
+  searchParams?: Promise<{
     error?: string;
-  };
+  }>;
 };
 
-export default function SignInPage({ searchParams }: SignInPageProps) {
-  const errorCode = searchParams?.error;
+export default async function SignInPage({ searchParams }: SignInPageProps) {
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const errorCode = resolvedSearchParams?.error;
   const errorMessage = getSignInErrorMessage(errorCode);
 
   return (

@@ -57,7 +57,7 @@ CREATE INDEX `idx_conversations_user_id` ON `conversations`(`user_id`);
 
 -- Backfill cleanup for legacy orphaned conversation owners before FK enforcement
 UPDATE `conversations` c
-LEFT JOIN `User` u ON c.`user_id` = u.`id`
+LEFT JOIN `User` u ON c.`user_id` COLLATE utf8mb4_unicode_ci = u.`id` COLLATE utf8mb4_unicode_ci
 SET c.`user_id` = NULL
 WHERE c.`user_id` IS NOT NULL
   AND u.`id` IS NULL;

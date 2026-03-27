@@ -9,7 +9,13 @@ const SEEDED_USER_EMAIL = 'playwright-seeded-auth@example.com';
 const SEEDED_USER_NAME = 'Playwright Seeded User';
 const SEEDED_SESSION_TOKEN = 'playwright-seeded-session-token';
 const SEEDED_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const HAS_DB_ENV = Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL);
+const HAS_DB_ENV = Boolean(
+  process.env.MYSQL_HOST &&
+  process.env.MYSQL_PORT &&
+  process.env.MYSQL_USER &&
+  process.env.MYSQL_PASS &&
+  process.env.MYSQL_DATABASE,
+);
 const IS_CI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 
 async function seedSessionToken() {
@@ -63,13 +69,10 @@ test.describe('GitHub auth behavior', () => {
     if (!HAS_DB_ENV) {
       if (IS_CI) {
         throw new Error(
-          'DATABASE_URL or MYSQL_URL is required in CI for seeded-session auth test reliability.',
+          'MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASS/MYSQL_DATABASE are required in CI.',
         );
       }
-      test.skip(
-        true,
-        'Local-only skip: DATABASE_URL/MYSQL_URL not configured for seeded session test.',
-      );
+      test.skip(true, 'Local-only skip: MYSQL_* not configured for seeded session test.');
     }
 
     const seeded = await seedSessionToken();
@@ -114,7 +117,13 @@ test.describe('GitHub live provider flow (manual)', () => {
 
   test('navigates to provider sign-in page when login is clicked', async ({ page }) => {
     await page.goto('/chat');
+    const signinRequestPromise = page.waitForRequest((request) => {
+      return request.url().includes('/api/auth/signin/github') && request.method() === 'POST';
+    });
+
     await page.getByRole('button', { name: 'Sign in with GitHub' }).first().click();
-    await expect(page).toHaveURL(/\/api\/auth\/signin/);
+
+    await signinRequestPromise;
+    await expect(page).not.toHaveURL(/\/chat$/);
   });
 });

@@ -32,6 +32,8 @@ model User {
   accounts      Account[]
   sessions      Session[]
   conversations Conversation[]
+
+  @@map("users")
 }
 
 model Account {
@@ -51,6 +53,7 @@ model Account {
 
   @@unique([provider, providerAccountId])
   @@index([userId], map: "idx_accounts_user_id")
+  @@map("accounts")
 }
 
 model Session {
@@ -61,6 +64,7 @@ model Session {
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([userId], map: "idx_sessions_user_id")
+  @@map("sessions")
 }
 
 model VerificationToken {
@@ -69,6 +73,7 @@ model VerificationToken {
   expires    DateTime @db.DateTime(3)
 
   @@unique([identifier, token])
+  @@map("verification_tokens")
 }
 
 model Message {

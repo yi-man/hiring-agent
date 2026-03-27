@@ -155,7 +155,7 @@ pnpm run test:integration:chat
 
 执行集成测试前会自动做以下检查：
 
-- 根据 `DATABASE_URL` 或 `MYSQL_*` 推导测试库并追加 `MYSQL_CI_SUFFIX`（默认 `_ci`）
+- 根据 `MYSQL_*` 推导测试库并追加 `MYSQL_CI_SUFFIX`（默认 `_ci`）
 - 自动创建测试数据库（不存在则创建）
 - 执行 `pnpm exec prisma migrate deploy` 确保表结构
 - MySQL 连通性检查：执行 `SELECT 1`

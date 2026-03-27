@@ -50,15 +50,13 @@ import { GET as getMessages } from '@/app/api/conversations/[id]/messages/route'
 import { createUserWithSessionFixture } from './test-fixtures';
 
 const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const hasDbEnv =
-  Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL) ||
-  Boolean(
-    process.env.MYSQL_HOST &&
-    process.env.MYSQL_PORT &&
-    process.env.MYSQL_USER &&
-    process.env.MYSQL_PASS &&
-    process.env.MYSQL_DATABASE,
-  );
+const hasDbEnv = Boolean(
+  process.env.MYSQL_HOST &&
+  process.env.MYSQL_PORT &&
+  process.env.MYSQL_USER &&
+  process.env.MYSQL_PASS &&
+  process.env.MYSQL_DATABASE,
+);
 const hasAuthIntegrationEnv = Boolean(
   hasDbEnv && process.env.REDIS_URL && process.env.NEXTAUTH_SECRET,
 );
@@ -66,13 +64,11 @@ const describeAuthIntegration = hasAuthIntegrationEnv || isCI ? describe : descr
 
 describeAuthIntegration('auth integration with real mysql and redis', () => {
   beforeAll(async () => {
-    if (!process.env.DATABASE_URL && !process.env.MYSQL_URL) {
-      requireIntegrationEnv('MYSQL_HOST');
-      requireIntegrationEnv('MYSQL_PORT');
-      requireIntegrationEnv('MYSQL_USER');
-      requireIntegrationEnv('MYSQL_PASS');
-      requireIntegrationEnv('MYSQL_DATABASE');
-    }
+    requireIntegrationEnv('MYSQL_HOST');
+    requireIntegrationEnv('MYSQL_PORT');
+    requireIntegrationEnv('MYSQL_USER');
+    requireIntegrationEnv('MYSQL_PASS');
+    requireIntegrationEnv('MYSQL_DATABASE');
     requireIntegrationEnv('REDIS_URL');
     requireIntegrationEnv('NEXTAUTH_SECRET');
     await ensureIntegrationSchema();

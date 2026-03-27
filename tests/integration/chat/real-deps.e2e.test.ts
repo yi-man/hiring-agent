@@ -18,15 +18,13 @@ import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 
 const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const hasDbEnv =
-  Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL) ||
-  Boolean(
-    process.env.MYSQL_HOST &&
-    process.env.MYSQL_PORT &&
-    process.env.MYSQL_USER &&
-    process.env.MYSQL_PASS &&
-    process.env.MYSQL_DATABASE,
-  );
+const hasDbEnv = Boolean(
+  process.env.MYSQL_HOST &&
+  process.env.MYSQL_PORT &&
+  process.env.MYSQL_USER &&
+  process.env.MYSQL_PASS &&
+  process.env.MYSQL_DATABASE,
+);
 const hasChatIntegrationEnv = Boolean(
   process.env.OPENAI_API_KEY && process.env.REDIS_URL && hasDbEnv,
 );
@@ -35,13 +33,11 @@ const describeChatIntegration = hasChatIntegrationEnv || isCI ? describe : descr
 describeChatIntegration('chat integration with real deps', () => {
   beforeAll(async () => {
     requireIntegrationEnv('OPENAI_API_KEY');
-    if (!env.MYSQL_URL) {
-      requireIntegrationEnv('MYSQL_HOST');
-      requireIntegrationEnv('MYSQL_PORT');
-      requireIntegrationEnv('MYSQL_USER');
-      requireIntegrationEnv('MYSQL_PASS');
-      requireIntegrationEnv('MYSQL_DATABASE');
-    }
+    requireIntegrationEnv('MYSQL_HOST');
+    requireIntegrationEnv('MYSQL_PORT');
+    requireIntegrationEnv('MYSQL_USER');
+    requireIntegrationEnv('MYSQL_PASS');
+    requireIntegrationEnv('MYSQL_DATABASE');
     requireIntegrationEnv('REDIS_URL');
     await ensureIntegrationSchema();
     await assertMysqlReachable();
