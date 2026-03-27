@@ -2,13 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Menu, X, Github } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import { SignInButton } from '@/components/auth/sign-in-button';
+import { UserMenu } from '@/components/auth/user-menu';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button } from '@/components/ui';
 
 export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const { data: session, status } = useSession();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -62,14 +66,13 @@ export function Navbar() {
               </Link>
             ))}
             <div className="bg-border h-6 w-px" />
-            <Link
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-foreground/60 hover:text-primary dark:text-foreground/50 dark:hover:text-primary transition-all hover:scale-105"
-            >
-              <Github className="h-5 w-5" />
-            </Link>
+            {status === 'authenticated' ? (
+              <UserMenu name={session?.user?.name} />
+            ) : status === 'unauthenticated' ? (
+              <SignInButton className="px-4" />
+            ) : (
+              <div className="h-10 w-[148px]" aria-hidden />
+            )}
             <ThemeToggle />
           </div>
 
@@ -104,16 +107,19 @@ export function Navbar() {
               </Link>
             ))}
             <div className="border-border my-2 border-t" />
-            <Link
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-foreground/60 hover:text-primary dark:text-foreground/50 dark:hover:text-primary flex items-center px-4 py-3 transition-all hover:scale-105"
-              onClick={() => setIsMenuOpen(false)}
-            >
-              <Github className="mr-2 h-5 w-5" />
-              GitHub
-            </Link>
+            {status === 'authenticated' ? (
+              <div className="px-4 py-3">
+                <UserMenu name={session?.user?.name} />
+              </div>
+            ) : status === 'unauthenticated' ? (
+              <div className="px-4 py-3">
+                <SignInButton className="w-full" />
+              </div>
+            ) : (
+              <div className="px-4 py-3" aria-hidden>
+                <div className="h-10 w-full" />
+              </div>
+            )}
           </div>
         </div>
       )}

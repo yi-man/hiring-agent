@@ -2,8 +2,8 @@ import { z } from 'zod';
 import path from 'path';
 import { config } from 'dotenv';
 
-config({ path: path.resolve(process.cwd(), '.env.development') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
+config({ path: path.resolve(process.cwd(), '.env.development') });
 
 const envSchema = z.object({
   // 应用配置
@@ -54,8 +54,6 @@ const envSchema = z.object({
   LLM_OBSERVABILITY_ADMIN_TOKEN: z.string().optional(),
 
   // Chat persistence
-  DATABASE_URL: z.string().optional(),
-  MYSQL_URL: z.string().optional(),
   MYSQL_HOST: z.string().default('127.0.0.1'),
   MYSQL_PORT: z.coerce.number().int().positive().default(3306),
   MYSQL_USER: z.string().default('root'),

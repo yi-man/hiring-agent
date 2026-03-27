@@ -3,8 +3,6 @@ import { parseEnv } from '@/lib/env';
 describe('chat env config', () => {
   it('parses chat persistence defaults', () => {
     const result = parseEnv({});
-    expect(result.DATABASE_URL).toBeUndefined();
-    expect(result.MYSQL_URL).toBeUndefined();
     expect(result.MYSQL_HOST).toBe('127.0.0.1');
     expect(result.MYSQL_PORT).toBe(3306);
     expect(result.MYSQL_USER).toBe('root');
@@ -19,8 +17,6 @@ describe('chat env config', () => {
 
   it('parses chat persistence overrides', () => {
     const result = parseEnv({
-      DATABASE_URL: 'mysql://u:p@127.0.0.1:3306/bia_test',
-      MYSQL_URL: 'mysql://u:p@127.0.0.1:3306/bia_test',
       MYSQL_HOST: '127.0.0.1',
       MYSQL_PORT: '3307',
       MYSQL_USER: 'u',
@@ -32,8 +28,6 @@ describe('chat env config', () => {
       CHAT_HISTORY_REHYDRATE_LIMIT: '12',
       CHAT_TEST_REDIS_PREFIX: 'chat:ci',
     });
-    expect(result.DATABASE_URL).toBe('mysql://u:p@127.0.0.1:3306/bia_test');
-    expect(result.MYSQL_URL).toBe('mysql://u:p@127.0.0.1:3306/bia_test');
     expect(result.MYSQL_HOST).toBe('127.0.0.1');
     expect(result.MYSQL_PORT).toBe(3307);
     expect(result.MYSQL_USER).toBe('u');

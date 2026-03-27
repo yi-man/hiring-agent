@@ -16,9 +16,64 @@ model Conversation {
   createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
   messages     Message[]
+  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
   @@index([lastActiveAt(sort: Desc)])
+  @@index([userId], map: "idx_conversations_user_id")
   @@map("conversations")
+}
+
+model User {
+  id            String         @id @default(cuid()) @db.VarChar(128)
+  name          String?        @db.VarChar(191)
+  email         String?        @unique @db.VarChar(191)
+  emailVerified DateTime?      @db.DateTime(3)
+  image         String?        @db.VarChar(191)
+  accounts      Account[]
+  sessions      Session[]
+  conversations Conversation[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid()) @db.VarChar(128)
+  userId            String  @db.VarChar(128)
+  type              String  @db.VarChar(191)
+  provider          String  @db.VarChar(191)
+  providerAccountId String  @db.VarChar(191)
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String? @db.VarChar(191)
+  scope             String? @db.VarChar(191)
+  id_token          String? @db.Text
+  session_state     String? @db.VarChar(191)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId], map: "idx_accounts_user_id")
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid()) @db.VarChar(128)
+  sessionToken String   @unique @db.VarChar(191)
+  userId       String   @db.VarChar(128)
+  expires      DateTime @db.DateTime(3)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([userId], map: "idx_sessions_user_id")
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String @db.VarChar(191)
+  token      String @unique @db.VarChar(191)
+  expires    DateTime @db.DateTime(3)
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
 }
 
 model Message {
