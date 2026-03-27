@@ -111,6 +111,56 @@ pnpm lint
 pnpm format
 ```
 
+## GitHub OAuth 与集成测试
+
+### 必需环境变量（统一命名）
+
+鉴于当前使用 `next-auth v4`，认证相关环境变量统一使用 `NEXTAUTH_*` 与 `GITHUB_*`。  
+完整键名清单与示例值请以 `docs/references/auth-github-oauth.md` 为准（单一权威来源）。
+
+### GitHub OAuth 回调地址
+
+- 本地开发：`http://localhost:3000/api/auth/callback/github`
+- 生产环境：`${NEXTAUTH_URL}/api/auth/callback/github`
+
+### 测试环境复制流程
+
+建议先完成 `.env` 到 `.env.test` 的基线复制，再按项目当前加载顺序准备本地文件：
+
+```bash
+# 基线流程（计划要求）
+cp .env .env.test
+
+# 首次初始化可先从模板生成 .env
+cp .env.example .env
+
+# 当前仓库集成测试实际读取的文件
+cp .env.example .env.development
+cp .env.example .env.local
+```
+
+当前仓库中的集成测试会按顺序加载 `.env.development` 和 `.env.local`，`.env.test` 可作为共享基线模板来源。
+
+### 集成测试依赖与命令
+
+- 依赖：可访问的 MySQL、Redis，以及（仅 `test:integration:chat` 需要）可用的 `OPENAI_API_KEY`
+- 命令：
+
+```bash
+pnpm run test:integration:auth
+pnpm run test:integration:chat
+```
+
+### MySQL / Redis 健康检查行为
+
+执行集成测试前会自动做以下检查：
+
+- 根据 `DATABASE_URL` 或 `MYSQL_*` 推导测试库并追加 `MYSQL_CI_SUFFIX`（默认 `_ci`）
+- 自动创建测试数据库（不存在则创建）
+- 执行 `pnpm exec prisma migrate deploy` 确保表结构
+- MySQL 连通性检查：执行 `SELECT 1`
+- Redis 连通性检查：连接后执行 `PING`
+
 ## 项目结构
 
 ```

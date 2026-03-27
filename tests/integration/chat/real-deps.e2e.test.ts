@@ -1,8 +1,11 @@
 /** @jest-environment node */
-import { execFileSync } from 'child_process';
 import { createClient } from 'redis';
-import { createPool } from 'mysql2/promise';
-import { requireIntegrationEnv } from './test-env';
+import {
+  requireIntegrationEnv,
+  ensureIntegrationSchema,
+  assertMysqlReachable,
+  assertRedisReachable,
+} from './test-env';
 import { env } from '@/lib/env';
 import { buildHistoryKey } from '@/lib/chat/history/redis-chat-history';
 import {
@@ -14,39 +17,22 @@ import { streamChatReply } from '@/lib/chat/chain';
 import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 
-async function ensureSchema() {
-  if (env.DATABASE_URL) {
-    const url = new URL(env.DATABASE_URL);
-    const dbName = url.pathname.replace(/^\//, '');
-    const adminPool = createPool({
-      host: url.hostname,
-      port: Number(url.port || 3306),
-      user: decodeURIComponent(url.username),
-      password: decodeURIComponent(url.password),
-      connectionLimit: 1,
-    });
-    await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
-    await adminPool.end();
-  } else {
-    const adminPool = createPool({
-      host: env.MYSQL_HOST,
-      port: env.MYSQL_PORT,
-      user: env.MYSQL_USER,
-      password: env.MYSQL_PASS,
-      connectionLimit: 1,
-    });
-    await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${env.MYSQL_DATABASE}\``);
-    await adminPool.end();
-  }
+const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+const hasDbEnv =
+  Boolean(process.env.DATABASE_URL || process.env.MYSQL_URL) ||
+  Boolean(
+    process.env.MYSQL_HOST &&
+    process.env.MYSQL_PORT &&
+    process.env.MYSQL_USER &&
+    process.env.MYSQL_PASS &&
+    process.env.MYSQL_DATABASE,
+  );
+const hasChatIntegrationEnv = Boolean(
+  process.env.OPENAI_API_KEY && process.env.REDIS_URL && hasDbEnv,
+);
+const describeChatIntegration = hasChatIntegrationEnv || isCI ? describe : describe.skip;
 
-  execFileSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: 'pipe',
-  });
-}
-
-describe('chat integration with real deps', () => {
+describeChatIntegration('chat integration with real deps', () => {
   beforeAll(async () => {
     requireIntegrationEnv('OPENAI_API_KEY');
     if (!env.MYSQL_URL) {
@@ -57,7 +43,9 @@ describe('chat integration with real deps', () => {
       requireIntegrationEnv('MYSQL_DATABASE');
     }
     requireIntegrationEnv('REDIS_URL');
-    await ensureSchema();
+    await ensureIntegrationSchema();
+    await assertMysqlReachable();
+    await assertRedisReachable();
   }, 30000);
 
   afterAll(async () => {
@@ -77,7 +65,7 @@ describe('chat integration with real deps', () => {
     const redis = createClient({ url: env.REDIS_URL });
     await redis.connect();
 
-    const conversation = await createConversation('integration-test-user');
+    const conversation = await createConversation(null);
     const full = await runTurn(conversation.id, '请用一句话介绍你自己，并向我反问一个问题。');
 
     expect(full.length).toBeGreaterThan(0);
@@ -95,8 +83,8 @@ describe('chat integration with real deps', () => {
   }, 120000);
 
   it('keeps histories isolated across conversations', async () => {
-    const a = await createConversation('iso-user');
-    const b = await createConversation('iso-user');
+    const a = await createConversation(null);
+    const b = await createConversation(null);
     await runTurn(a.id, '记住暗号A是蓝海');
     await runTurn(b.id, '记住暗号B是星火');
     const aRows = await listMessages(a.id);
@@ -107,7 +95,7 @@ describe('chat integration with real deps', () => {
   }, 120000);
 
   it('uses memory in same conversation for follow-up question', async () => {
-    const c = await createConversation('memory-user');
+    const c = await createConversation(null);
     await runTurn(c.id, '记住这个词：晨星计划');
     const second = await runTurn(c.id, '我刚才让你记住的词是什么？');
     expect(second).toContain('晨星');
@@ -116,7 +104,7 @@ describe('chat integration with real deps', () => {
   it('rehydrates from mysql after redis inactivity expiration', async () => {
     const redis = createClient({ url: env.REDIS_URL });
     await redis.connect();
-    const c = await createConversation('ttl-user');
+    const c = await createConversation(null);
     await runTurn(c.id, '请记住：过期回源测试');
     const key = buildHistoryKey(c.id);
     await redis.expire(key, 1);
@@ -132,15 +120,15 @@ describe('chat integration with real deps', () => {
   }, 120000);
 
   it('keeps personality style and avoids expert identity wording', async () => {
-    const c = await createConversation('persona-user');
+    const c = await createConversation(null);
     const reply = await runTurn(c.id, '请介绍你的沟通风格，并先问我一个澄清问题。');
     expect(reply.length).toBeGreaterThan(0);
     expect(reply).not.toMatch(/我[是就是].{0,6}(专家|权威)/);
   }, 120000);
 
   it('orders conversations by latest lastActiveAt after new messages', async () => {
-    const older = await createConversation('sort-user');
-    const newer = await createConversation('sort-user');
+    const older = await createConversation(null);
+    const newer = await createConversation(null);
     await runTurn(older.id, '让这个会话变成最新活跃');
     const list = await listConversationsPaginated({ limit: 20, offset: 0 });
     const olderIndex = list.findIndex((c) => c.id === older.id);
