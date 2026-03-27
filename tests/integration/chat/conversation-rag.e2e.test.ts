@@ -6,6 +6,7 @@ const requireAuthMock = jest.fn();
 const embedDocumentsMock = jest.fn();
 const qdrantUpsertMock = jest.fn();
 const ensureCollectionMock = jest.fn();
+const deleteDocumentPointsMock = jest.fn();
 
 jest.mock('@/lib/auth/session', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -21,6 +22,19 @@ jest.mock('@/lib/rag/embed', () => ({
 jest.mock('@/lib/rag/qdrant', () => ({
   qdrantCollectionName: 'conversation_markdown_chunks',
   ensureCollection: (...args: unknown[]) => ensureCollectionMock(...args),
+  deleteDocumentPoints: (...args: unknown[]) => deleteDocumentPointsMock(...args),
+  createDeterministicQdrantPointId: (params: {
+    documentId: string;
+    version: number;
+    chunkIndex: number;
+  }) => {
+    const raw = `${params.version}${params.chunkIndex}${params.documentId}`.replace(
+      /[^a-zA-Z0-9]/g,
+      '',
+    );
+    const suffix = raw.padEnd(12, '0').slice(0, 12);
+    return `00000000-0000-0000-0000-${suffix}`;
+  },
   getQdrantClient: () => ({
     upsert: (...args: unknown[]) => qdrantUpsertMock(...args),
   }),
@@ -74,7 +88,9 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     embedDocumentsMock.mockReset();
     qdrantUpsertMock.mockReset();
     ensureCollectionMock.mockReset();
+    deleteDocumentPointsMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'rag-int-user' } });
+    deleteDocumentPointsMock.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -174,5 +190,106 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     });
     expect(latest?.status).toBe('failed');
     expect(String(latest?.errorMessage)).toContain('embedding down');
+  });
+
+  it('uses deterministic point ids across re-ingest runs', async () => {
+    await prisma.user.upsert({
+      where: { id: 'rag-int-user' },
+      update: {},
+      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+    });
+    embedDocumentsMock.mockImplementation(async (documents: string[]) =>
+      documents.map((_, index) => [index + 1, index + 2, index + 3]),
+    );
+    ensureCollectionMock.mockResolvedValue(undefined);
+    qdrantUpsertMock.mockResolvedValue({ status: 'ok' });
+
+    const conversation = await prisma.conversation.create({
+      data: {
+        userId: 'rag-int-user',
+        status: 'active',
+        lastActiveAt: new Date(),
+      },
+    });
+    const document = await prisma.conversationDocument.create({
+      data: {
+        conversationId: conversation.id,
+        filename: 'idempotent.md',
+        contentMarkdown: '# A\nx\n## B\ny',
+        status: 'processing',
+      },
+    });
+
+    await ingestConversationDocument(document.id, conversation.id);
+
+    const firstChunks = await prisma.conversationDocumentChunk.findMany({
+      where: { documentId: document.id },
+      orderBy: { chunkIndex: 'asc' },
+    });
+    expect(firstChunks.length).toBeGreaterThan(0);
+    const firstPointIds = firstChunks.map((chunk) => chunk.qdrantPointId);
+
+    await prisma.conversationDocument.update({
+      where: { id: document.id },
+      data: { status: 'processing', errorMessage: null },
+    });
+
+    await ingestConversationDocument(document.id, conversation.id);
+
+    const secondChunks = await prisma.conversationDocumentChunk.findMany({
+      where: { documentId: document.id },
+      orderBy: { chunkIndex: 'asc' },
+    });
+    const secondPointIds = secondChunks.map((chunk) => chunk.qdrantPointId);
+    expect(secondPointIds).toEqual(firstPointIds);
+    expect(deleteDocumentPointsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('prevents concurrent ingest race for the same document', async () => {
+    await prisma.user.upsert({
+      where: { id: 'rag-int-user' },
+      update: {},
+      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+    });
+
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    embedDocumentsMock.mockImplementation(async (documents: string[]) => {
+      await gate;
+      return documents.map((_, index) => [index + 10, index + 20, index + 30]);
+    });
+    ensureCollectionMock.mockResolvedValue(undefined);
+    qdrantUpsertMock.mockResolvedValue({ status: 'ok' });
+
+    const conversation = await prisma.conversation.create({
+      data: {
+        userId: 'rag-int-user',
+        status: 'active',
+        lastActiveAt: new Date(),
+      },
+    });
+    const document = await prisma.conversationDocument.create({
+      data: {
+        conversationId: conversation.id,
+        filename: 'race.md',
+        contentMarkdown: '# Race\ncontent',
+        status: 'processing',
+      },
+    });
+
+    const runA = ingestConversationDocument(document.id, conversation.id);
+    const runB = ingestConversationDocument(document.id, conversation.id);
+    release?.();
+
+    await Promise.all([runA, runB]);
+
+    const latest = await prisma.conversationDocument.findUnique({
+      where: { id: document.id },
+    });
+    expect(latest?.status).toBe('ready');
+    expect(latest?.errorMessage).toBeNull();
+    expect(embedDocumentsMock).toHaveBeenCalledTimes(1);
   });
 });

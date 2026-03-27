@@ -1,12 +1,19 @@
-import { randomUUID } from 'crypto';
 import {
+  claimConversationDocumentIngest,
+  completeConversationDocumentIngest,
+  failConversationDocumentIngest,
   getConversationDocumentById,
   replaceConversationDocumentChunks,
-  setConversationDocumentStatus,
 } from '@/lib/chat/repositories/document-repo';
 import { embedDocuments } from '@/lib/rag/embed';
 import { splitMarkdownToChunks } from '@/lib/rag/markdown';
-import { ensureCollection, getQdrantClient, qdrantCollectionName } from '@/lib/rag/qdrant';
+import {
+  createDeterministicQdrantPointId,
+  deleteDocumentPoints,
+  ensureCollection,
+  getQdrantClient,
+  qdrantCollectionName,
+} from '@/lib/rag/qdrant';
 
 type QdrantPointPayload = {
   conversationId: string;
@@ -21,6 +28,16 @@ export async function ingestConversationDocument(
   documentId: string,
   conversationId: string,
 ): Promise<void> {
+  const claimToken = `ingest:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const claimedDocument = await claimConversationDocumentIngest(
+    conversationId,
+    documentId,
+    claimToken,
+  );
+  if (!claimedDocument) {
+    return;
+  }
+
   const document = await getConversationDocumentById(conversationId, documentId);
   if (!document) {
     throw new Error('conversation document not found');
@@ -43,15 +60,21 @@ export async function ingestConversationDocument(
     await ensureCollection({ vectorSize: embeddings[0].length });
 
     const chunks = markdownChunks.map((chunk, index) => {
-      const chunkId = randomUUID();
+      const qdrantPointId = createDeterministicQdrantPointId({
+        documentId: document.id,
+        version: document.version,
+        chunkIndex: chunk.index,
+      });
       return {
-        chunkId,
-        qdrantPointId: `doc-${document.id}-chunk-${chunk.index}-${chunkId}`,
+        chunkId: qdrantPointId,
+        qdrantPointId,
         chunkIndex: chunk.index,
         content: chunk.content,
         vector: embeddings[index],
       };
     });
+
+    await deleteDocumentPoints({ conversationId, documentId: document.id });
 
     const client = getQdrantClient();
     await client.upsert(qdrantCollectionName, {
@@ -82,10 +105,10 @@ export async function ingestConversationDocument(
       })),
     );
 
-    await setConversationDocumentStatus(conversationId, documentId, 'ready', null);
+    await completeConversationDocumentIngest(conversationId, documentId, claimToken);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'document ingest failed';
-    await setConversationDocumentStatus(conversationId, documentId, 'failed', message);
+    await failConversationDocumentIngest(conversationId, documentId, claimToken, message);
     throw error;
   }
 }

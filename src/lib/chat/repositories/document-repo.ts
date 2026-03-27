@@ -45,6 +45,71 @@ export async function setConversationDocumentStatus(
   });
 }
 
+export async function claimConversationDocumentIngest(
+  conversationId: string,
+  id: string,
+  claimToken: string,
+) {
+  const result = await prisma.conversationDocument.updateMany({
+    where: {
+      id,
+      conversationId,
+      status: 'processing',
+      errorMessage: null,
+    },
+    data: {
+      errorMessage: claimToken,
+    },
+  });
+  if (result.count === 0) {
+    return null;
+  }
+  return prisma.conversationDocument.findFirst({
+    where: { id, conversationId },
+  });
+}
+
+export async function completeConversationDocumentIngest(
+  conversationId: string,
+  id: string,
+  claimToken: string,
+) {
+  const result = await prisma.conversationDocument.updateMany({
+    where: {
+      id,
+      conversationId,
+      status: 'processing',
+      errorMessage: claimToken,
+    },
+    data: {
+      status: 'ready',
+      errorMessage: null,
+    },
+  });
+  return result.count > 0;
+}
+
+export async function failConversationDocumentIngest(
+  conversationId: string,
+  id: string,
+  claimToken: string,
+  failureMessage: string,
+) {
+  const result = await prisma.conversationDocument.updateMany({
+    where: {
+      id,
+      conversationId,
+      status: 'processing',
+      errorMessage: claimToken,
+    },
+    data: {
+      status: 'failed',
+      errorMessage: failureMessage,
+    },
+  });
+  return result.count > 0;
+}
+
 export async function bulkInsertDocumentChunks(
   rows: Array<{
     id?: string;

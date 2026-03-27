@@ -1,4 +1,5 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { createHash } from 'crypto';
 import { env } from '@/lib/env';
 
 export const qdrantCollectionName = env.QDRANT_COLLECTION_NAME;
@@ -72,4 +73,38 @@ export async function ensureCollection(options: EnsureCollectionOptions): Promis
 
     await client.getCollection(qdrantCollectionName);
   }
+}
+
+export function createDeterministicQdrantPointId(params: {
+  documentId: string;
+  version: number;
+  chunkIndex: number;
+}): string {
+  const hash = createHash('sha256')
+    .update(`${params.documentId}:${params.version}:${params.chunkIndex}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+}
+
+export async function deleteDocumentPoints(params: {
+  conversationId: string;
+  documentId: string;
+}): Promise<void> {
+  const client = getQdrantClient();
+  await client.delete(qdrantCollectionName, {
+    wait: true,
+    filter: {
+      must: [
+        {
+          key: 'conversationId',
+          match: { value: params.conversationId },
+        },
+        {
+          key: 'documentId',
+          match: { value: params.documentId },
+        },
+      ],
+    },
+  });
 }
