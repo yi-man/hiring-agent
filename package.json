@@ -26,6 +26,9 @@
     "test:e2e:playwright": "playwright test",
     "test:e2e:playwright:jd": "playwright test tests/e2e-playwright/jd-generator-real.spec.ts",
     "test:integration:chat": "pnpm exec jest tests/integration/chat/real-deps.e2e.test.ts --runInBand --coverage=false",
+    "obs:run": "pnpm exec tsx src/scripts/llm-observability-ops.ts",
+    "obs:realtime": "pnpm obs:run -- realtime",
+    "obs:retention": "pnpm obs:run -- retention",
     "prepare": "husky",
     "clean": "rm -rf .next node_modules coverage",
     "reinstall": "pnpm clean && pnpm install"
