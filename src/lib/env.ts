@@ -76,19 +76,47 @@ const envSchema = z.object({
 
 type Env = z.infer<typeof envSchema>;
 
+const defaultEnv = envSchema.parse({});
+
+function getInputValue(input: Partial<NodeJS.ProcessEnv>, key: string): string | undefined {
+  try {
+    return input[key];
+  } catch (error) {
+    console.error(`❌ Failed reading environment variable "${key}":`, error);
+    return undefined;
+  }
+}
+
+function parseEnvSafely(input: Partial<NodeJS.ProcessEnv>): Env {
+  const parsed: Record<string, unknown> = { ...defaultEnv };
+  const schemaShape = envSchema.shape as Record<string, z.ZodTypeAny>;
+
+  for (const key of Object.keys(defaultEnv)) {
+    const keySchema = schemaShape[key];
+    const value = getInputValue(input, key);
+    const result = keySchema.safeParse(value);
+    if (result.success) {
+      parsed[key] = result.data;
+      continue;
+    }
+
+    console.error(`❌ Invalid environment variable "${key}":`, result.error.issues);
+    parsed[key] = defaultEnv[key as keyof Env];
+  }
+
+  return envSchema.parse(parsed);
+}
+
 // 解析环境变量的函数
 export function parseEnv(input: Partial<NodeJS.ProcessEnv> = process.env): Env {
   try {
     return envSchema.parse(input);
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      console.error('❌ Invalid environment variables:', error.issues);
-    } else {
+    // Degrade gracefully: keep valid values and only default invalid keys.
+    if (!(error instanceof z.ZodError)) {
       console.error('❌ Failed to parse environment variables:', error);
     }
-
-    // 使用默认值
-    return envSchema.parse({});
+    return parseEnvSafely(input);
   }
 }
 

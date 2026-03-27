@@ -38,6 +38,23 @@ describe('RAG env defaults', () => {
     expect(parsed.QDRANT_URL).toBe('http://127.0.0.1:6333');
     consoleErrorSpy.mockRestore();
   });
+
+  it('preserves valid keys when one key is invalid', () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+    const parsed = parseEnv({
+      QDRANT_URL: 'not-a-url',
+      RAG_TOP_K: '11',
+      OPENAI_BASE_URL: 'https://example.com/v1',
+      MYSQL_HOST: 'db.internal',
+    });
+
+    expect(parsed.QDRANT_URL).toBe('http://127.0.0.1:6333');
+    expect(parsed.RAG_TOP_K).toBe(11);
+    expect(parsed.OPENAI_BASE_URL).toBe('https://example.com/v1');
+    expect(parsed.MYSQL_HOST).toBe('db.internal');
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
 });
 
 describe('qdrant retrieval infrastructure', () => {
