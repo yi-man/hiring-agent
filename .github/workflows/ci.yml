@@ -55,6 +55,7 @@ jobs:
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       mysql:
         image: mysql:8.0
@@ -83,8 +84,8 @@ jobs:
       CI: true
       MYSQL_HOST: 127.0.0.1
       MYSQL_PORT: 3306
-      MYSQL_USER: app
-      MYSQL_PASS: app
+      MYSQL_USER: root
+      MYSQL_PASS: root
       MYSQL_DATABASE: app_test
       REDIS_URL: redis://127.0.0.1:6379
       NEXTAUTH_SECRET: ci-nextauth-secret
