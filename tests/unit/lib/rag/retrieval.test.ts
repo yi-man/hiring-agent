@@ -14,6 +14,7 @@ describe('RAG env defaults', () => {
     expect(parsed.RAG_TOP_K).toBe(6);
     expect(parsed.RAG_MIN_SCORE).toBe(0);
     expect(parsed.RAG_CONTEXT_MAX_CHARS).toBe(6000);
+    expect(parsed.OPENAI_EMBEDDING_USE_MULTIMODAL).toBe('auto');
   });
 
   it('coerces number-based rag fields from strings', () => {
@@ -160,7 +161,12 @@ describe('embedding infrastructure', () => {
 
   beforeEach(() => {
     jest.resetModules();
-    process.env = { ...originalEnv, OPENAI_API_KEY: 'test-key' };
+    process.env = {
+      ...originalEnv,
+      OPENAI_API_KEY: 'test-key',
+      OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
+      OPENAI_EMBEDDING_USE_MULTIMODAL: 'false',
+    };
   });
 
   afterAll(() => {
@@ -209,6 +215,51 @@ describe('embedding infrastructure', () => {
       [0.1, 0.2],
       [0.3, 0.4],
     ]);
+  });
+
+  it('uses multimodal endpoint when model name contains embedding-vision', async () => {
+    process.env.OPENAI_EMBEDDING_MODEL = 'doubao-embedding-vision-250615';
+    process.env.OPENAI_EMBEDDING_USE_MULTIMODAL = 'auto';
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { embedding: [0.5, 0.6] } }),
+    }) as unknown as typeof fetch;
+    global.fetch = fetchMock;
+
+    const embed = await import('@/lib/rag/embed');
+    await expect(embed.embedQuery('hello')).resolves.toEqual([0.5, 0.6]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/embeddings/multimodal');
+    const body = JSON.parse(String((init as RequestInit)?.body));
+    expect(body).toEqual({
+      model: 'doubao-embedding-vision-250615',
+      input: [{ type: 'text', text: 'hello' }],
+    });
+  });
+
+  it('embedDocuments calls multimodal once per chunk', async () => {
+    process.env.OPENAI_EMBEDDING_MODEL = 'doubao-embedding-vision-250615';
+    process.env.OPENAI_EMBEDDING_USE_MULTIMODAL = 'auto';
+
+    global.fetch = jest.fn().mockImplementation((_url, init) => {
+      const body = JSON.parse(String((init as RequestInit)?.body));
+      const text = (body.input as Array<{ text: string }>)[0]?.text;
+      const vec = text === 'a' ? [0.1, 0.2] : [0.2, 0.4];
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ data: { embedding: vec } }),
+      });
+    }) as unknown as typeof fetch;
+
+    const embed = await import('@/lib/rag/embed');
+    await expect(embed.embedDocuments(['a', 'b'])).resolves.toEqual([
+      [0.1, 0.2],
+      [0.2, 0.4],
+    ]);
+    expect((global.fetch as jest.Mock).mock.calls.length).toBe(2);
   });
 });
 

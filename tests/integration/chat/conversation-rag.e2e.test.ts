@@ -170,7 +170,7 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     expect(upsertPayload.points.length).toBe(chunks.length);
   }, 30000);
 
-  it('marks document failed when embeddings fail', async () => {
+  it('falls back to lexical chunks when embeddings fail', async () => {
     embedDocumentsMock.mockRejectedValueOnce(new Error('embedding down'));
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
@@ -194,15 +194,21 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
       },
     });
 
-    await expect(ingestConversationDocument(document.id, conversation.id)).rejects.toThrow(
-      /embedding down/,
-    );
+    await expect(ingestConversationDocument(document.id, conversation.id)).resolves.toBeUndefined();
 
     const latest = await prisma.conversationDocument.findUnique({
       where: { id: document.id },
     });
-    expect(latest?.status).toBe('failed');
-    expect(String(latest?.errorMessage)).toContain('embedding down');
+    expect(latest?.status).toBe('ready');
+
+    const chunks = await prisma.conversationDocumentChunk.findMany({
+      where: { documentId: document.id },
+      orderBy: { chunkIndex: 'asc' },
+    });
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every((c) => c.qdrantPointId === null)).toBe(true);
+    expect(ensureCollectionMock).not.toHaveBeenCalled();
+    expect(qdrantUpsertMock).not.toHaveBeenCalled();
   });
 
   it('uses deterministic point ids across re-ingest runs', async () => {
