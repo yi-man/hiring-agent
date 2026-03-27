@@ -5,6 +5,8 @@ import { createMessage } from '@/lib/chat/repositories/message-repo';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { DEPENDENCY_OUTAGE_MESSAGE, isDependencyOutageError } from '@/lib/errors/dependency-outage';
 import { prisma } from '@/lib/prisma';
+import { env } from '@/lib/env';
+import { retrieveConversationContext } from '@/lib/rag/retrieval';
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -38,7 +40,20 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     });
     await touchConversation(id);
 
-    const { chunks, collect } = await streamChatReply(id, input);
+    let retrievedContext = '';
+    try {
+      const retrieval = await retrieveConversationContext({
+        conversationId: id,
+        query: input,
+        topK: env.RAG_TOP_K,
+      });
+      retrievedContext = retrieval.contextText;
+    } catch {
+      // Retrieval is best-effort; continue with regular chat completion.
+      retrievedContext = '';
+    }
+
+    const { chunks, collect } = await streamChatReply(id, input, { retrievedContext });
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({

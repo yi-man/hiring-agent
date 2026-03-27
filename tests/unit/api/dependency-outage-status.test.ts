@@ -67,6 +67,10 @@ jest.mock('@/lib/chat/chain', () => ({
   streamChatReply: jest.fn(),
 }));
 
+jest.mock('@/lib/rag/retrieval', () => ({
+  retrieveConversationContext: jest.fn(),
+}));
+
 jest.mock('@/lib/prisma', () => ({
   prisma: {
     conversation: {

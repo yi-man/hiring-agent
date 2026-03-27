@@ -5,6 +5,7 @@ const createMessageMock = jest.fn();
 const touchConversationMock = jest.fn();
 const requireAuthMock = jest.fn();
 const conversationFindFirstMock = jest.fn();
+const retrieveConversationContextMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -19,6 +20,10 @@ const originalResponse = global.Response;
 
 jest.mock('@/lib/chat/chain', () => ({
   streamChatReply: (...args: unknown[]) => streamChatReplyMock(...args),
+}));
+
+jest.mock('@/lib/rag/retrieval', () => ({
+  retrieveConversationContext: (...args: unknown[]) => retrieveConversationContextMock(...args),
 }));
 
 jest.mock('@/lib/chat/repositories/message-repo', () => ({
@@ -67,8 +72,10 @@ describe('chat stream route', () => {
     touchConversationMock.mockReset();
     requireAuthMock.mockReset();
     conversationFindFirstMock.mockReset();
+    retrieveConversationContextMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
     conversationFindFirstMock.mockResolvedValue({ id: 'c1' });
+    retrieveConversationContextMock.mockResolvedValue({ contextText: '', matches: [] });
   });
 
   afterAll(() => {
@@ -116,6 +123,6 @@ describe('chat stream route', () => {
       content: 'hello',
     });
     expect(touchConversationMock).toHaveBeenCalledTimes(2);
-    expect(streamChatReplyMock).toHaveBeenCalledWith('c1', 'hello?');
+    expect(streamChatReplyMock).toHaveBeenCalledWith('c1', 'hello?', { retrievedContext: '' });
   });
 });

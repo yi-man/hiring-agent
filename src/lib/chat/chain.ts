@@ -47,9 +47,14 @@ export function buildChatChain() {
 export async function streamChatReply(
   conversationId: string,
   input: string,
+  options?: { retrievedContext?: string },
 ): Promise<{ chunks: AsyncGenerator<string>; collect: () => Promise<string> }> {
   const runnable = buildChatChain();
   const systemPrompt = buildSystemPrompt();
+  const retrievedContext = options?.retrievedContext?.trim();
+  const systemPromptWithContext = retrievedContext
+    ? `${systemPrompt}\n\n可参考的对话文档上下文（仅在相关时使用，不要编造）：\n${retrievedContext}`
+    : systemPrompt;
   const start = recordLlmCallStart({
     callId: randomUUID(),
     traceId: randomUUID(),
@@ -66,6 +71,9 @@ export async function streamChatReply(
       streaming: true,
       messages: [
         { role: 'system', content: systemPrompt },
+        ...(retrievedContext
+          ? [{ role: 'system', content: `retrievedContext:${retrievedContext}` }]
+          : []),
         { role: 'user', content: input },
       ],
     },
@@ -88,7 +96,7 @@ export async function streamChatReply(
 
   try {
     stream = await runnable.stream(
-      { systemPrompt, input },
+      { systemPrompt: systemPromptWithContext, input },
       { configurable: { sessionId: conversationId } },
     );
   } catch (error) {

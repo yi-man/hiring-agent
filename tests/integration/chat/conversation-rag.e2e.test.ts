@@ -7,6 +7,8 @@ const embedDocumentsMock = jest.fn();
 const qdrantUpsertMock = jest.fn();
 const ensureCollectionMock = jest.fn();
 const deleteDocumentPointsMock = jest.fn();
+const retrieveConversationContextMock = jest.fn();
+const streamChatReplyMock = jest.fn();
 
 jest.mock('@/lib/auth/session', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
@@ -17,6 +19,14 @@ jest.mock('@/lib/auth/session', () => ({
 
 jest.mock('@/lib/rag/embed', () => ({
   embedDocuments: (...args: unknown[]) => embedDocumentsMock(...args),
+}));
+
+jest.mock('@/lib/rag/retrieval', () => ({
+  retrieveConversationContext: (...args: unknown[]) => retrieveConversationContextMock(...args),
+}));
+
+jest.mock('@/lib/chat/chain', () => ({
+  streamChatReply: (...args: unknown[]) => streamChatReplyMock(...args),
 }));
 
 jest.mock('@/lib/rag/qdrant', () => ({
@@ -41,6 +51,7 @@ jest.mock('@/lib/rag/qdrant', () => ({
 }));
 
 import { POST as postConversationDocument } from '@/app/api/conversations/[id]/documents/route';
+import { POST as postStreamMessage } from '@/app/api/conversations/[id]/messages/stream/route';
 import { ingestConversationDocument } from '@/lib/rag/ingest';
 import { prisma } from '@/lib/prisma';
 
@@ -89,6 +100,8 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     qdrantUpsertMock.mockReset();
     ensureCollectionMock.mockReset();
     deleteDocumentPointsMock.mockReset();
+    retrieveConversationContextMock.mockReset();
+    streamChatReplyMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'rag-int-user' } });
     deleteDocumentPointsMock.mockResolvedValue(undefined);
   });
@@ -425,4 +438,110 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     });
     expect(latest?.status).toBe('failed');
   });
+
+  it('answers from conversation document context in stream route', async () => {
+    await prisma.user.upsert({
+      where: { id: 'rag-int-user' },
+      update: {},
+      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+    });
+    const conversation = await prisma.conversation.create({
+      data: {
+        userId: 'rag-int-user',
+        status: 'active',
+        lastActiveAt: new Date(),
+      },
+    });
+    retrieveConversationContextMock.mockResolvedValue({
+      contextText: 'PTO is 20 days per handbook.',
+      matches: [],
+    });
+    streamChatReplyMock.mockImplementation(
+      async (_conversationId: string, _input: string, options?: { retrievedContext?: string }) => {
+        const answer = String(options?.retrievedContext).includes('20 days')
+          ? 'PTO is 20 days.'
+          : 'No context found.';
+        return {
+          chunks: (async function* () {
+            yield answer;
+          })(),
+          collect: async () => answer,
+        };
+      },
+    );
+
+    const response = await postStreamMessage(
+      {
+        json: async () => ({ content: 'How many PTO days?' }),
+      } as Request,
+      { params: Promise.resolve({ id: conversation.id }) },
+    );
+
+    const text = await readTextStream(response.body);
+    expect(text).toContain('20');
+    expect(retrieveConversationContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: conversation.id,
+      }),
+    );
+    expect(streamChatReplyMock).toHaveBeenCalledWith(
+      conversation.id,
+      'How many PTO days?',
+      expect.objectContaining({
+        retrievedContext: expect.stringContaining('20 days'),
+      }),
+    );
+  });
+
+  it('degrades and still streams when retrieval fails', async () => {
+    await prisma.user.upsert({
+      where: { id: 'rag-int-user' },
+      update: {},
+      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+    });
+    const conversation = await prisma.conversation.create({
+      data: {
+        userId: 'rag-int-user',
+        status: 'active',
+        lastActiveAt: new Date(),
+      },
+    });
+    retrieveConversationContextMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
+    streamChatReplyMock.mockResolvedValue({
+      chunks: (async function* () {
+        yield 'fallback response';
+      })(),
+      collect: async () => 'fallback response',
+    });
+
+    const response = await postStreamMessage(
+      {
+        json: async () => ({ content: 'hello' }),
+      } as Request,
+      { params: Promise.resolve({ id: conversation.id }) },
+    );
+
+    const text = await readTextStream(response.body);
+    expect(text.length).toBeGreaterThan(0);
+    expect(streamChatReplyMock).toHaveBeenCalledWith(conversation.id, 'hello', {
+      retrievedContext: '',
+    });
+  });
 });
+
+async function readTextStream(body: ReadableStream<Uint8Array> | null): Promise<string> {
+  if (!body) {
+    return '';
+  }
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let text = '';
+  while (true) {
+    const part = await reader.read();
+    if (part.done) {
+      break;
+    }
+    text += decoder.decode(part.value);
+  }
+  return text;
+}
