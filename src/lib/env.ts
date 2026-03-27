@@ -64,6 +64,14 @@ const envSchema = z.object({
   CHAT_REDIS_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
   CHAT_HISTORY_REHYDRATE_LIMIT: z.coerce.number().int().positive().default(50),
   CHAT_TEST_REDIS_PREFIX: z.string().default('chat:test'),
+
+  // RAG / Qdrant
+  QDRANT_URL: z.string().default('http://127.0.0.1:6333'),
+  QDRANT_API_KEY: z.string().optional(),
+  QDRANT_COLLECTION_NAME: z.string().default('conversation_markdown_chunks'),
+  RAG_TOP_K: z.coerce.number().int().positive().default(6),
+  RAG_MIN_SCORE: z.coerce.number().default(0),
+  RAG_CONTEXT_MAX_CHARS: z.coerce.number().int().positive().default(6000),
 });
 
 type Env = z.infer<typeof envSchema>;
