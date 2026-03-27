@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ChatUI } from '@/components/chat/chat-ui';
 
 jest.mock('@/components/ui', () => ({
@@ -242,5 +242,101 @@ describe('ChatUI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '删除 done.md' }));
     await waitFor(() => expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd2'));
+  });
+
+  it('keeps polling after transient document refresh failure', async () => {
+    jest.useFakeTimers();
+    try {
+      fetchConversationsMock.mockResolvedValue({
+        conversations: [{ id: 'c1', title: 'one' }],
+        total: 1,
+        page: 1,
+        limit: 20,
+        hasMore: false,
+      });
+      fetchConversationMessagesMock.mockResolvedValue([]);
+      fetchConversationDocumentsMock
+        .mockResolvedValueOnce([
+          {
+            id: 'd1',
+            filename: 'notes.md',
+            status: 'processing',
+          },
+        ])
+        .mockRejectedValueOnce(new Error('temporary failure'))
+        .mockResolvedValueOnce([
+          {
+            id: 'd1',
+            filename: 'notes.md',
+            status: 'processing',
+          },
+        ]);
+
+      render(<ChatUI />);
+      await screen.findByText('one');
+      await screen.findByText('processing');
+
+      await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(1));
+      act(() => {
+        jest.advanceTimersByTime(2500);
+      });
+      await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(2));
+      act(() => {
+        jest.advanceTimersByTime(2500);
+      });
+      await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(3));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('ignores stale document response when switching conversations', async () => {
+    let releaseC1: ((value: unknown) => void) | null = null;
+    const c1Promise = new Promise((resolve) => {
+      releaseC1 = resolve;
+    });
+    fetchConversationsMock.mockResolvedValue({
+      conversations: [
+        { id: 'c1', title: 'one' },
+        { id: 'c2', title: 'two' },
+      ],
+      total: 2,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+    });
+    fetchConversationMessagesMock.mockResolvedValue([]);
+    fetchConversationDocumentsMock.mockImplementation((conversationId: string) => {
+      if (conversationId === 'c1') {
+        return c1Promise;
+      }
+      return Promise.resolve([
+        {
+          id: 'd2',
+          filename: 'two.md',
+          status: 'ready',
+        },
+      ]);
+    });
+
+    render(<ChatUI />);
+    await screen.findByText('one');
+    fireEvent.click(screen.getByRole('button', { name: 'two' }));
+
+    await screen.findByText('two.md');
+    expect(screen.queryByText('one.md')).not.toBeInTheDocument();
+
+    releaseC1?.([
+      {
+        id: 'd1',
+        filename: 'one.md',
+        status: 'ready',
+      },
+    ]);
+
+    await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledWith('c1'));
+    await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledWith('c2'));
+    expect(screen.queryByText('one.md')).not.toBeInTheDocument();
+    expect(screen.getByText('two.md')).toBeInTheDocument();
   });
 });

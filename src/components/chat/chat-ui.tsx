@@ -40,10 +40,46 @@ export function ChatUI() {
   const [isUploadingDocument, setIsUploadingDocument] = useState(false);
   const conversationListRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
+  const documentPollTimerRef = useRef<number | null>(null);
+  const latestDocumentRequestIdRef = useRef(0);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  const clearDocumentPollTimer = () => {
+    if (documentPollTimerRef.current !== null) {
+      window.clearTimeout(documentPollTimerRef.current);
+      documentPollTimerRef.current = null;
+    }
+  };
+
+  const startDocumentPolling = () => {
+    clearDocumentPollTimer();
+    documentPollTimerRef.current = window.setTimeout(function tick() {
+      const currentConversationId = activeConversationIdRef.current;
+      if (!currentConversationId) {
+        clearDocumentPollTimer();
+        return;
+      }
+      void (async () => {
+        try {
+          const nextRows = await loadDocuments(currentConversationId, { silent: true });
+          const shouldContinue = nextRows.some((doc) => doc.status === 'processing');
+          if (shouldContinue) {
+            clearDocumentPollTimer();
+            documentPollTimerRef.current = window.setTimeout(tick, 2500);
+          } else {
+            clearDocumentPollTimer();
+          }
+        } catch {
+          // Keep retrying on transient refresh failures while processing may still be ongoing.
+          clearDocumentPollTimer();
+          documentPollTimerRef.current = window.setTimeout(tick, 2500);
+        }
+      })();
+    }, 2500);
+  };
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConversationId),
@@ -110,15 +146,21 @@ export function ChatUI() {
 
   const loadDocuments = async (conversationId: string, options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
+    const requestId = ++latestDocumentRequestIdRef.current;
     if (!silent) {
       setIsRefreshingDocuments(true);
     }
     try {
       const rows = await fetchConversationDocuments(conversationId);
-      setDocuments(rows);
+      const isStillLatest =
+        requestId === latestDocumentRequestIdRef.current &&
+        activeConversationIdRef.current === conversationId;
+      if (isStillLatest) {
+        setDocuments(rows);
+      }
       return rows;
     } finally {
-      if (!silent) {
+      if (!silent && requestId === latestDocumentRequestIdRef.current) {
         setIsRefreshingDocuments(false);
       }
     }
@@ -137,26 +179,24 @@ export function ChatUI() {
 
   useEffect(() => {
     if (!activeConversationId) return;
+    clearDocumentPollTimer();
+    setDocuments([]);
     void (async () => {
       try {
         await loadMessages(activeConversationId);
-        await loadDocuments(activeConversationId);
+        const rows = await loadDocuments(activeConversationId);
+        if (rows.some((doc) => doc.status === 'processing')) {
+          startDocumentPolling();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : '加载会话失败');
       }
     })();
+    return () => {
+      clearDocumentPollTimer();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConversationId]);
-
-  useEffect(() => {
-    if (!activeConversationId) return;
-    if (!documents.some((doc) => doc.status === 'processing')) return;
-    const timer = window.setTimeout(() => {
-      void loadDocuments(activeConversationId, { silent: true }).catch(() => {
-        // Best effort polling.
-      });
-    }, 2500);
-    return () => window.clearTimeout(timer);
-  }, [activeConversationId, documents]);
 
   const onSend = async () => {
     const text = input.trim();
@@ -204,7 +244,10 @@ export function ChatUI() {
     setIsUploadingDocument(true);
     try {
       await uploadConversationDocument(activeConversationId, file);
-      await loadDocuments(activeConversationId);
+      const rows = await loadDocuments(activeConversationId);
+      if (rows.some((doc) => doc.status === 'processing')) {
+        startDocumentPolling();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '上传文档失败');
     } finally {
@@ -215,7 +258,12 @@ export function ChatUI() {
   const onRefreshDocuments = async () => {
     if (!activeConversationId) return;
     try {
-      await loadDocuments(activeConversationId);
+      const rows = await loadDocuments(activeConversationId);
+      if (rows.some((doc) => doc.status === 'processing')) {
+        startDocumentPolling();
+      } else {
+        clearDocumentPollTimer();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '刷新文档失败');
     }
@@ -226,7 +274,12 @@ export function ChatUI() {
     setError(null);
     try {
       await deleteConversationDocument(activeConversationId, documentId);
-      await loadDocuments(activeConversationId);
+      const rows = await loadDocuments(activeConversationId);
+      if (rows.some((doc) => doc.status === 'processing')) {
+        startDocumentPolling();
+      } else {
+        clearDocumentPollTimer();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '删除文档失败');
     }
