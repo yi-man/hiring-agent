@@ -388,4 +388,78 @@ describe('retrieveConversationContext', () => {
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]?.chunkId).toBe('chunk-a');
   });
+
+  it('skips oversized hit and still includes later smaller hit', async () => {
+    const searchMock = jest.fn().mockResolvedValue([
+      {
+        id: 'p-big',
+        score: 0.99,
+        payload: {
+          conversationId: 'conv-1',
+          documentId: 'doc-big',
+          chunkId: 'chunk-big',
+          chunkIndex: 0,
+          filename: 'big.md',
+        },
+      },
+      {
+        id: 'p-small',
+        score: 0.95,
+        payload: {
+          conversationId: 'conv-1',
+          documentId: 'doc-small',
+          chunkId: 'chunk-small',
+          chunkIndex: 1,
+          filename: 'small.md',
+        },
+      },
+    ]);
+    const findManyMock = jest.fn().mockResolvedValue([
+      {
+        id: 'chunk-big',
+        qdrantPointId: 'p-big',
+        content: '1234567890',
+      },
+      {
+        id: 'chunk-small',
+        qdrantPointId: 'p-small',
+        content: 'ok',
+      },
+    ]);
+
+    jest.doMock('@/lib/env', () => ({
+      env: {
+        RAG_TOP_K: 6,
+        RAG_MIN_SCORE: 0.5,
+        RAG_CONTEXT_MAX_CHARS: 5,
+      },
+    }));
+    jest.doMock('@/lib/rag/embed', () => ({
+      embedQuery: jest.fn().mockResolvedValue([0.7, 0.8]),
+    }));
+    jest.doMock('@/lib/rag/qdrant', () => ({
+      qdrantCollectionName: 'conversation_markdown_chunks',
+      getQdrantClient: () => ({
+        search: searchMock,
+      }),
+    }));
+    jest.doMock('@/lib/prisma', () => ({
+      prisma: {
+        conversationDocumentChunk: {
+          findMany: findManyMock,
+        },
+      },
+    }));
+
+    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
+    const result = await retrieveConversationContext({
+      conversationId: 'conv-1',
+      query: 'question',
+      topK: 5,
+    });
+
+    expect(result.contextText).toBe('ok');
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]?.chunkId).toBe('chunk-small');
+  });
 });

@@ -114,7 +114,7 @@ export async function retrieveConversationContext(params: {
 
     const nextChars = contextChars + content.length;
     if (nextChars > env.RAG_CONTEXT_MAX_CHARS) {
-      break;
+      continue;
     }
     contextChars = nextChars;
     selectedTexts.push(content);
