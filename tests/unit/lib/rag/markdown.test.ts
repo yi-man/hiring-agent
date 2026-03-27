@@ -34,8 +34,8 @@ describe('markdown chunking', () => {
     ].join('\n');
 
     const chunks = await splitMarkdownToChunks(markdown, {
-      chunkSize: 90,
-      chunkOverlap: 20,
+      targetTokens: 90,
+      overlapTokens: 20,
     });
 
     expect(chunks.length).toBeGreaterThan(1);
@@ -47,23 +47,58 @@ describe('markdown chunking', () => {
   it('respects basic chunk size and overlap guarantees', async () => {
     const repeatedLine = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ';
     const markdown = `# Header\n\n${repeatedLine.repeat(12)}`;
-    const chunkSize = 120;
-    const chunkOverlap = 24;
+    const targetTokens = 120;
+    const overlapTokens = 24;
 
     const chunks = await splitMarkdownToChunks(markdown, {
-      chunkSize,
-      chunkOverlap,
+      targetTokens,
+      overlapTokens,
     });
 
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.content.length <= chunkSize)).toBe(true);
+    expect(chunks.every((chunk) => chunk.content.length <= targetTokens)).toBe(true);
 
     const overlaps = chunks
       .slice(1)
       .map((chunk, index) =>
-        getMaxHeadTailOverlap(chunks[index].content, chunk.content, chunkOverlap),
+        getMaxHeadTailOverlap(chunks[index].content, chunk.content, overlapTokens),
       );
     expect(overlaps.some((value) => value > 0)).toBe(true);
-    expect(overlaps.every((value) => value <= chunkOverlap)).toBe(true);
+    expect(overlaps.every((value) => value <= overlapTokens)).toBe(true);
+  });
+
+  it('keeps backward option aliases for chunk sizing', async () => {
+    const markdown = `# Header\n\n${'x '.repeat(200)}`;
+
+    const chunks = await splitMarkdownToChunks(markdown, {
+      chunkSize: 80,
+      chunkOverlap: 10,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.content.length <= 80)).toBe(true);
+  });
+
+  it('does not split on heading-like lines inside fenced code blocks', async () => {
+    const markdown = [
+      '# Real Heading',
+      '',
+      '```ts',
+      '# not-a-heading',
+      'console.log("inside code fence");',
+      '```',
+      '',
+      '## Next Heading',
+      'Outside fence text.',
+    ].join('\n');
+
+    const chunks = await splitMarkdownToChunks(markdown, {
+      targetTokens: 10_000,
+      overlapTokens: 0,
+    });
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0].content).toContain('# not-a-heading');
+    expect(chunks[1].content).toContain('## Next Heading');
   });
 });

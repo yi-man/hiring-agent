@@ -6,6 +6,8 @@ export type MarkdownChunk = {
 };
 
 export type SplitMarkdownOptions = {
+  targetTokens?: number;
+  overlapTokens?: number;
   chunkSize?: number;
   chunkOverlap?: number;
 };
@@ -18,10 +20,23 @@ const HEADING_LINE_REGEX = /^#{1,6}\s+/;
 function splitByHeadings(markdown: string): string[] {
   const lines = markdown.split('\n');
   const sections: string[] = [];
+  let activeFence: { marker: '`' | '~'; minLength: number } | null = null;
 
   let currentSection: string[] = [];
   for (const line of lines) {
-    if (HEADING_LINE_REGEX.test(line) && currentSection.length > 0) {
+    const fenceMatch = line.match(/^\s*([`~]{3,})/);
+    if (fenceMatch) {
+      const fenceToken = fenceMatch[1];
+      const marker = fenceToken[0] as '`' | '~';
+      const minLength = fenceToken.length;
+      if (!activeFence) {
+        activeFence = { marker, minLength };
+      } else if (activeFence.marker === marker && fenceToken.length >= activeFence.minLength) {
+        activeFence = null;
+      }
+    }
+
+    if (!activeFence && HEADING_LINE_REGEX.test(line) && currentSection.length > 0) {
       sections.push(currentSection.join('\n').trim());
       currentSection = [line];
       continue;
@@ -56,8 +71,8 @@ export async function splitMarkdownToChunks(
     return [];
   }
 
-  const chunkSize = options?.chunkSize ?? DEFAULT_CHUNK_SIZE;
-  const chunkOverlap = options?.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP;
+  const chunkSize = options?.targetTokens ?? options?.chunkSize ?? DEFAULT_CHUNK_SIZE;
+  const chunkOverlap = options?.overlapTokens ?? options?.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP;
 
   const characterSplitter = new RecursiveCharacterTextSplitter({
     chunkSize,

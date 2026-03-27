@@ -23,16 +23,25 @@ export async function createConversationDocument(params: {
 }
 
 export async function setConversationDocumentStatus(
+  conversationId: string,
   id: string,
   status: ConversationDocumentStatus,
   errorMessage?: string | null,
 ) {
-  return prisma.conversationDocument.update({
-    where: { id },
+  const result = await prisma.conversationDocument.updateMany({
+    where: { id, conversationId },
     data: {
       status,
       errorMessage: errorMessage ?? null,
     },
+  });
+
+  if (result.count === 0) {
+    return null;
+  }
+
+  return prisma.conversationDocument.findFirst({
+    where: { id, conversationId },
   });
 }
 
@@ -73,14 +82,18 @@ export async function listConversationDocuments(conversationId: string) {
   });
 }
 
-export async function getConversationDocumentById(id: string) {
-  return prisma.conversationDocument.findUnique({
-    where: { id },
+export async function getConversationDocumentById(conversationId: string, id: string) {
+  return prisma.conversationDocument.findFirst({
+    where: { id, conversationId },
   });
 }
 
-export async function deleteConversationDocument(id: string) {
-  return prisma.conversationDocument.delete({
-    where: { id },
+export async function deleteConversationDocument(
+  conversationId: string,
+  id: string,
+): Promise<boolean> {
+  const result = await prisma.conversationDocument.deleteMany({
+    where: { id, conversationId },
   });
+  return result.count > 0;
 }
