@@ -17,7 +17,6 @@ import { streamChatReply } from '@/lib/chat/chain';
 import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 
-const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 const hasDbEnv = Boolean(
   process.env.MYSQL_HOST &&
   process.env.MYSQL_PORT &&
@@ -28,7 +27,7 @@ const hasDbEnv = Boolean(
 const hasChatIntegrationEnv = Boolean(
   process.env.OPENAI_API_KEY && process.env.REDIS_URL && hasDbEnv,
 );
-const describeChatIntegration = hasChatIntegrationEnv || isCI ? describe : describe.skip;
+const describeChatIntegration = hasChatIntegrationEnv ? describe : describe.skip;
 
 describeChatIntegration('chat integration with real deps', () => {
   beforeAll(async () => {

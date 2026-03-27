@@ -101,4 +101,8 @@ jobs:
       - name: Run auth integration tests
         run: pnpm test:integration:auth
       - name: Run chat integration tests
+        if: ${{ env.OPENAI_API_KEY != '' }}
         run: pnpm test:integration:chat
+      - name: Skip chat integration tests when OPENAI_API_KEY is missing
+        if: ${{ env.OPENAI_API_KEY == '' }}
+        run: echo "Skipping chat integration tests because OPENAI_API_KEY is not configured."
