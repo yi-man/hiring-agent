@@ -66,7 +66,7 @@ const envSchema = z.object({
   CHAT_TEST_REDIS_PREFIX: z.string().default('chat:test'),
 
   // RAG / Qdrant
-  QDRANT_URL: z.string().default('http://127.0.0.1:6333'),
+  QDRANT_URL: z.string().url().default('http://127.0.0.1:6333'),
   QDRANT_API_KEY: z.string().optional(),
   QDRANT_COLLECTION_NAME: z.string().default('conversation_markdown_chunks'),
   RAG_TOP_K: z.coerce.number().int().positive().default(6),

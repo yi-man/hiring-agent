@@ -29,6 +29,21 @@ function isCollectionNotFoundError(error: unknown): boolean {
   return maybeError?.status === 404 || maybeError?.statusCode === 404;
 }
 
+function isCollectionAlreadyExistsError(error: unknown): boolean {
+  const maybeError = error as {
+    status?: number;
+    statusCode?: number;
+    message?: string;
+    data?: { status?: { error?: string } };
+  } | null;
+  const message = `${maybeError?.message ?? ''} ${maybeError?.data?.status?.error ?? ''}`;
+  return (
+    maybeError?.status === 409 ||
+    maybeError?.statusCode === 409 ||
+    /already exists|conflict/i.test(message)
+  );
+}
+
 export async function ensureCollection(options: EnsureCollectionOptions): Promise<void> {
   const client = getQdrantClient();
   const distance = options.distance ?? 'Cosine';
@@ -42,10 +57,19 @@ export async function ensureCollection(options: EnsureCollectionOptions): Promis
     }
   }
 
-  await client.createCollection(qdrantCollectionName, {
-    vectors: {
-      size: options.vectorSize,
-      distance,
-    },
-  });
+  try {
+    await client.createCollection(qdrantCollectionName, {
+      vectors: {
+        size: options.vectorSize,
+        distance,
+      },
+    });
+  } catch (error) {
+    // Handle concurrent creators; if another worker created it, treat as success.
+    if (!isCollectionAlreadyExistsError(error)) {
+      throw error;
+    }
+
+    await client.getCollection(qdrantCollectionName);
+  }
 }

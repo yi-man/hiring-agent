@@ -3,7 +3,7 @@ import { env } from '@/lib/env';
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 
 type EmbedResponse = {
-  data?: Array<{ embedding?: number[] }>;
+  data?: Array<{ embedding?: unknown }>;
   error?: { message?: string };
 };
 
@@ -43,14 +43,30 @@ async function requestEmbeddings(input: string | string[], model?: string): Prom
       throw new Error(message);
     }
 
-    return (payload.data ?? []).map((item) => item.embedding ?? []);
+    if (!Array.isArray(payload.data) || payload.data.length === 0) {
+      throw new Error('Embedding API returned empty or malformed data payload');
+    }
+
+    return payload.data.map((item, index) => {
+      const maybeVector = item.embedding;
+      if (!Array.isArray(maybeVector) || maybeVector.length === 0) {
+        throw new Error(`Embedding API returned empty or malformed vector at index ${index}`);
+      }
+      if (!maybeVector.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+        throw new Error(`Embedding API returned non-numeric vector values at index ${index}`);
+      }
+      return maybeVector;
+    });
   } finally {
     clearTimeout(timeout);
   }
 }
 
 export async function embedQuery(query: string, model?: string): Promise<number[]> {
-  const [first = []] = await requestEmbeddings(query, model);
+  const [first] = await requestEmbeddings(query, model);
+  if (!first || first.length === 0) {
+    throw new Error('Embedding API returned empty query vector');
+  }
   return first;
 }
 
