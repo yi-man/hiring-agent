@@ -6,6 +6,7 @@ import {
   getConversationDocumentById,
 } from '@/lib/chat/repositories/document-repo';
 import { prisma } from '@/lib/prisma';
+import { deleteDocumentPoints } from '@/lib/rag/qdrant';
 
 async function findOwnedConversationId(conversationId: string, userId: string) {
   return prisma.conversation.findFirst({
@@ -82,6 +83,15 @@ export async function DELETE(
     const deleted = await deleteConversationDocument(id, documentId);
     if (!deleted) {
       return NextResponse.json({ error: 'document not found' }, { status: 404 });
+    }
+    try {
+      await deleteDocumentPoints({ conversationId: id, documentId });
+    } catch (error) {
+      const details = error instanceof Error ? error.message : 'unknown vector cleanup error';
+      return NextResponse.json(
+        { error: `document was deleted but vector cleanup failed: ${details}` },
+        { status: 502 },
+      );
     }
 
     return NextResponse.json({ deleted: true });

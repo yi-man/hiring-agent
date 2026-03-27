@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 
 export type ConversationDocumentStatus = 'processing' | 'ready' | 'failed';
+export type ConversationDocumentIndexJobStatus = 'pending' | 'running' | 'success' | 'failed';
 
 export async function createConversationDocument(params: {
   conversationId: string;
@@ -186,4 +187,55 @@ export async function deleteConversationDocument(
     where: { id, conversationId },
   });
   return result.count > 0;
+}
+
+export async function createConversationDocumentIndexJob(documentId: string) {
+  return prisma.conversationDocumentIndexJob.create({
+    data: {
+      documentId,
+      status: 'pending',
+      attempts: 0,
+      lastError: null,
+      startedAt: null,
+      finishedAt: null,
+    },
+  });
+}
+
+export async function markConversationDocumentIndexJobRunning(jobId: string) {
+  const now = new Date();
+  return prisma.conversationDocumentIndexJob.update({
+    where: { id: jobId },
+    data: {
+      status: 'running',
+      attempts: {
+        increment: 1,
+      },
+      startedAt: now,
+      finishedAt: null,
+      lastError: null,
+    },
+  });
+}
+
+export async function markConversationDocumentIndexJobSuccess(jobId: string) {
+  return prisma.conversationDocumentIndexJob.update({
+    where: { id: jobId },
+    data: {
+      status: 'success',
+      finishedAt: new Date(),
+      lastError: null,
+    },
+  });
+}
+
+export async function markConversationDocumentIndexJobFailed(jobId: string, lastError: string) {
+  return prisma.conversationDocumentIndexJob.update({
+    where: { id: jobId },
+    data: {
+      status: 'failed',
+      finishedAt: new Date(),
+      lastError,
+    },
+  });
 }

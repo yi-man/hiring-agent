@@ -3,7 +3,11 @@ import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { DEPENDENCY_OUTAGE_MESSAGE, isDependencyOutageError } from '@/lib/errors/dependency-outage';
 import {
   createConversationDocument,
+  createConversationDocumentIndexJob,
   listConversationDocuments,
+  markConversationDocumentIndexJobFailed,
+  markConversationDocumentIndexJobRunning,
+  markConversationDocumentIndexJobSuccess,
 } from '@/lib/chat/repositories/document-repo';
 import { ingestConversationDocument } from '@/lib/rag/ingest';
 import { prisma } from '@/lib/prisma';
@@ -28,15 +32,31 @@ async function findOwnedConversationId(conversationId: string, userId: string) {
   });
 }
 
-async function enqueueDocumentIngest(params: { conversationId: string; documentId: string }) {
+async function enqueueDocumentIngest(params: {
+  conversationId: string;
+  documentId: string;
+  jobId: string;
+}) {
+  await markConversationDocumentIndexJobRunning(params.jobId);
   await ingestConversationDocument(params.documentId, params.conversationId);
+  await markConversationDocumentIndexJobSuccess(params.jobId);
 }
 
-function triggerDocumentIngest(params: { conversationId: string; documentId: string }) {
+function triggerDocumentIngest(params: {
+  conversationId: string;
+  documentId: string;
+  jobId: string;
+}) {
   void Promise.resolve()
     .then(() => enqueueDocumentIngest(params))
-    .catch(() => {
-      // Swallow errors because ingestion is best-effort and async.
+    .catch(async (error) => {
+      const message = error instanceof Error ? error.message : 'document ingest worker failed';
+      // Keep async behavior but persist failure state for deterministic recovery.
+      try {
+        await markConversationDocumentIndexJobFailed(params.jobId, message);
+      } catch {
+        // Last-resort fallback: job row remains visible (pending/running) for manual recovery.
+      }
     });
 }
 
@@ -100,8 +120,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       contentMarkdown,
       status: 'processing',
     });
+    const indexJob = await createConversationDocumentIndexJob(document.id);
 
-    triggerDocumentIngest({ conversationId: id, documentId: document.id });
+    triggerDocumentIngest({ conversationId: id, documentId: document.id, jobId: indexJob.id });
 
     return NextResponse.json({ document }, { status: 201 });
   } catch (error) {

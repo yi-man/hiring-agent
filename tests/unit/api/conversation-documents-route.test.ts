@@ -14,6 +14,11 @@ const listConversationDocumentsMock = jest.fn();
 const getConversationDocumentByIdMock = jest.fn();
 const deleteConversationDocumentMock = jest.fn();
 const ingestConversationDocumentMock = jest.fn();
+const createConversationDocumentIndexJobMock = jest.fn();
+const markConversationDocumentIndexJobRunningMock = jest.fn();
+const markConversationDocumentIndexJobSuccessMock = jest.fn();
+const markConversationDocumentIndexJobFailedMock = jest.fn();
+const deleteDocumentPointsMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -47,10 +52,22 @@ jest.mock('@/lib/chat/repositories/document-repo', () => ({
   listConversationDocuments: (...args: unknown[]) => listConversationDocumentsMock(...args),
   getConversationDocumentById: (...args: unknown[]) => getConversationDocumentByIdMock(...args),
   deleteConversationDocument: (...args: unknown[]) => deleteConversationDocumentMock(...args),
+  createConversationDocumentIndexJob: (...args: unknown[]) =>
+    createConversationDocumentIndexJobMock(...args),
+  markConversationDocumentIndexJobRunning: (...args: unknown[]) =>
+    markConversationDocumentIndexJobRunningMock(...args),
+  markConversationDocumentIndexJobSuccess: (...args: unknown[]) =>
+    markConversationDocumentIndexJobSuccessMock(...args),
+  markConversationDocumentIndexJobFailed: (...args: unknown[]) =>
+    markConversationDocumentIndexJobFailedMock(...args),
 }));
 
 jest.mock('@/lib/rag/ingest', () => ({
   ingestConversationDocument: (...args: unknown[]) => ingestConversationDocumentMock(...args),
+}));
+
+jest.mock('@/lib/rag/qdrant', () => ({
+  deleteDocumentPoints: (...args: unknown[]) => deleteDocumentPointsMock(...args),
 }));
 
 describe('conversation documents routes', () => {
@@ -62,7 +79,23 @@ describe('conversation documents routes', () => {
     getConversationDocumentByIdMock.mockReset();
     deleteConversationDocumentMock.mockReset();
     ingestConversationDocumentMock.mockReset();
+    createConversationDocumentIndexJobMock.mockReset();
+    markConversationDocumentIndexJobRunningMock.mockReset();
+    markConversationDocumentIndexJobSuccessMock.mockReset();
+    markConversationDocumentIndexJobFailedMock.mockReset();
+    deleteDocumentPointsMock.mockReset();
     ingestConversationDocumentMock.mockResolvedValue(undefined);
+    createConversationDocumentIndexJobMock.mockResolvedValue({ id: 'job-1' });
+    markConversationDocumentIndexJobRunningMock.mockResolvedValue({
+      id: 'job-1',
+      status: 'running',
+    });
+    markConversationDocumentIndexJobSuccessMock.mockResolvedValue({
+      id: 'job-1',
+      status: 'success',
+    });
+    markConversationDocumentIndexJobFailedMock.mockResolvedValue({ id: 'job-1', status: 'failed' });
+    deleteDocumentPointsMock.mockResolvedValue(undefined);
   });
 
   it('returns 401 when uploading without auth', async () => {
@@ -166,6 +199,47 @@ describe('conversation documents routes', () => {
         status: 'processing',
       }),
     );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createConversationDocumentIndexJobMock).toHaveBeenCalledWith('d1');
+    expect(markConversationDocumentIndexJobRunningMock).toHaveBeenCalledWith('job-1');
+    expect(ingestConversationDocumentMock).toHaveBeenCalledWith('d1', 'c1');
+    expect(markConversationDocumentIndexJobSuccessMock).toHaveBeenCalledWith('job-1');
+    expect(markConversationDocumentIndexJobFailedMock).not.toHaveBeenCalled();
+  });
+
+  it('marks index job failed when ingest fails', async () => {
+    requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
+    conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });
+    createConversationDocumentMock.mockResolvedValueOnce({
+      id: 'd1',
+      conversationId: 'c1',
+      filename: 'notes.md',
+      contentMarkdown: '# hello',
+      status: 'processing',
+    });
+    ingestConversationDocumentMock.mockRejectedValueOnce(new Error('ingest crash'));
+    const formData = {
+      get: () =>
+        ({
+          name: 'notes.md',
+          size: 7,
+          text: async () => '# hello',
+        }) as FormDataEntryValue,
+    };
+
+    const res = await postDocument({ formData: async () => formData } as Request, {
+      params: Promise.resolve({ id: 'c1' }),
+    });
+
+    expect(res.status).toBe(201);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createConversationDocumentIndexJobMock).toHaveBeenCalledWith('d1');
+    expect(markConversationDocumentIndexJobRunningMock).toHaveBeenCalledWith('job-1');
+    expect(markConversationDocumentIndexJobSuccessMock).not.toHaveBeenCalled();
+    expect(markConversationDocumentIndexJobFailedMock).toHaveBeenCalledWith(
+      'job-1',
+      expect.stringContaining('ingest crash'),
+    );
   });
 
   it('lists documents for owned conversation', async () => {
@@ -208,5 +282,23 @@ describe('conversation documents routes', () => {
     expect(res.status).toBe(200);
     expect(body.deleted).toBe(true);
     expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1');
+    expect(deleteDocumentPointsMock).toHaveBeenCalledWith({
+      conversationId: 'c1',
+      documentId: 'd1',
+    });
+  });
+
+  it('returns signal when vector cleanup fails after delete', async () => {
+    requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
+    conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });
+    deleteConversationDocumentMock.mockResolvedValueOnce(true);
+    deleteDocumentPointsMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
+
+    const res = await deleteDocument({} as Request, {
+      params: Promise.resolve({ id: 'c1', documentId: 'd1' }),
+    });
+    const body = await res.json();
+    expect(res.status).toBe(502);
+    expect(body.error).toContain('vector cleanup failed');
   });
 });
