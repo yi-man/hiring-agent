@@ -44,12 +44,21 @@ const fetchConversationsMock = jest.fn();
 const createConversationApiMock = jest.fn();
 const fetchConversationMessagesMock = jest.fn();
 const streamConversationMessageMock = jest.fn();
+const uploadConversationDocumentMock = jest.fn();
+const fetchConversationDocumentsMock = jest.fn();
+const fetchConversationDocumentDetailMock = jest.fn();
+const deleteConversationDocumentMock = jest.fn();
 
 jest.mock('@/lib/chat/client', () => ({
   fetchConversations: () => fetchConversationsMock(),
   createConversationApi: () => createConversationApiMock(),
   fetchConversationMessages: (...args: unknown[]) => fetchConversationMessagesMock(...args),
   streamConversationMessage: (...args: unknown[]) => streamConversationMessageMock(...args),
+  uploadConversationDocument: (...args: unknown[]) => uploadConversationDocumentMock(...args),
+  fetchConversationDocuments: (...args: unknown[]) => fetchConversationDocumentsMock(...args),
+  fetchConversationDocumentDetail: (...args: unknown[]) =>
+    fetchConversationDocumentDetailMock(...args),
+  deleteConversationDocument: (...args: unknown[]) => deleteConversationDocumentMock(...args),
 }));
 
 function makeStream(chunks: string[]) {
@@ -71,6 +80,11 @@ describe('ChatUI', () => {
     createConversationApiMock.mockReset();
     fetchConversationMessagesMock.mockReset();
     streamConversationMessageMock.mockReset();
+    uploadConversationDocumentMock.mockReset();
+    fetchConversationDocumentsMock.mockReset();
+    fetchConversationDocumentDetailMock.mockReset();
+    deleteConversationDocumentMock.mockReset();
+    fetchConversationDocumentsMock.mockResolvedValue([]);
   });
 
   it('create/select conversation and load messages', async () => {
@@ -159,5 +173,74 @@ describe('ChatUI', () => {
     render(<ChatUI />);
     fireEvent.click(await screen.findByRole('button', { name: '新建会话' }));
     expect(await screen.findByText('new chat')).toBeInTheDocument();
+  });
+
+  it('shows markdown upload entry for active conversation and uploads file', async () => {
+    fetchConversationsMock.mockResolvedValue({
+      conversations: [{ id: 'c1', title: 'one' }],
+      total: 1,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+    });
+    fetchConversationMessagesMock.mockResolvedValue([]);
+    fetchConversationDocumentsMock.mockResolvedValue([]);
+    uploadConversationDocumentMock.mockResolvedValue({
+      id: 'd1',
+      status: 'processing',
+    });
+
+    render(<ChatUI />);
+    await screen.findByText('one');
+
+    const uploadInput = await screen.findByLabelText('上传 Markdown');
+    const file = new File(['# Hello'], 'notes.md', { type: 'text/markdown' });
+    fireEvent.change(uploadInput, { target: { files: [file] } });
+
+    await waitFor(() =>
+      expect(uploadConversationDocumentMock).toHaveBeenCalledWith('c1', expect.any(File)),
+    );
+  });
+
+  it('renders document status and supports refresh/delete actions', async () => {
+    fetchConversationsMock.mockResolvedValue({
+      conversations: [{ id: 'c1', title: 'one' }],
+      total: 1,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+    });
+    fetchConversationMessagesMock.mockResolvedValue([]);
+    fetchConversationDocumentsMock.mockResolvedValue([
+      {
+        id: 'd1',
+        filename: 'notes.md',
+        status: 'processing',
+      },
+      {
+        id: 'd2',
+        filename: 'done.md',
+        status: 'ready',
+      },
+      {
+        id: 'd3',
+        filename: 'bad.md',
+        status: 'failed',
+      },
+    ]);
+    deleteConversationDocumentMock.mockResolvedValue(undefined);
+
+    render(<ChatUI />);
+    await screen.findByText('one');
+    expect(await screen.findByText('notes.md')).toBeInTheDocument();
+    expect(screen.getByText('processing')).toBeInTheDocument();
+    expect(screen.getByText('ready')).toBeInTheDocument();
+    expect(screen.getByText('failed')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新文档' }));
+    await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole('button', { name: '删除 done.md' }));
+    await waitFor(() => expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd2'));
   });
 });

@@ -4,9 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, CardBody, Input } from '@/components/ui';
 import {
   createConversationApi,
+  deleteConversationDocument,
+  fetchConversationDocuments,
   fetchConversationMessages,
   fetchConversations,
+  type ConversationDocumentDto,
   streamConversationMessage,
+  uploadConversationDocument,
 } from '@/lib/chat/client';
 
 type ChatMessage = {
@@ -31,6 +35,9 @@ export function ChatUI() {
   const [conversationHasMore, setConversationHasMore] = useState(true);
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [documents, setDocuments] = useState<ConversationDocumentDto[]>([]);
+  const [isRefreshingDocuments, setIsRefreshingDocuments] = useState(false);
+  const [isUploadingDocument, setIsUploadingDocument] = useState(false);
   const conversationListRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
 
@@ -101,6 +108,22 @@ export function ChatUI() {
     setMessages(filtered);
   };
 
+  const loadDocuments = async (conversationId: string, options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      setIsRefreshingDocuments(true);
+    }
+    try {
+      const rows = await fetchConversationDocuments(conversationId);
+      setDocuments(rows);
+      return rows;
+    } finally {
+      if (!silent) {
+        setIsRefreshingDocuments(false);
+      }
+    }
+  };
+
   useEffect(() => {
     void (async () => {
       try {
@@ -117,11 +140,23 @@ export function ChatUI() {
     void (async () => {
       try {
         await loadMessages(activeConversationId);
+        await loadDocuments(activeConversationId);
       } catch (e) {
         setError(e instanceof Error ? e.message : '加载会话失败');
       }
     })();
   }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    if (!documents.some((doc) => doc.status === 'processing')) return;
+    const timer = window.setTimeout(() => {
+      void loadDocuments(activeConversationId, { silent: true }).catch(() => {
+        // Best effort polling.
+      });
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [activeConversationId, documents]);
 
   const onSend = async () => {
     const text = input.trim();
@@ -160,6 +195,40 @@ export function ChatUI() {
       setError(e instanceof Error ? e.message : '请求失败');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const onUploadDocument = async (file: File | null) => {
+    if (!file || !activeConversationId || isUploadingDocument) return;
+    setError(null);
+    setIsUploadingDocument(true);
+    try {
+      await uploadConversationDocument(activeConversationId, file);
+      await loadDocuments(activeConversationId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '上传文档失败');
+    } finally {
+      setIsUploadingDocument(false);
+    }
+  };
+
+  const onRefreshDocuments = async () => {
+    if (!activeConversationId) return;
+    try {
+      await loadDocuments(activeConversationId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '刷新文档失败');
+    }
+  };
+
+  const onDeleteDocument = async (documentId: string) => {
+    if (!activeConversationId) return;
+    setError(null);
+    try {
+      await deleteConversationDocument(activeConversationId, documentId);
+      await loadDocuments(activeConversationId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '删除文档失败');
     }
   };
 
@@ -246,6 +315,55 @@ export function ChatUI() {
 
           <div className="shrink-0 pt-3">
             {error && <p className="text-danger mb-2 text-sm">{error}</p>}
+            {activeConversation && (
+              <div className="mb-3 space-y-2 rounded-lg border border-dashed p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium">Markdown 文档</p>
+                  <Button
+                    onClick={() => void onRefreshDocuments()}
+                    isDisabled={isRefreshingDocuments}
+                  >
+                    刷新文档
+                  </Button>
+                </div>
+                <label className="text-xs" htmlFor="conversation-md-upload">
+                  上传 Markdown
+                </label>
+                <input
+                  id="conversation-md-upload"
+                  type="file"
+                  accept=".md,text/markdown"
+                  disabled={isUploadingDocument}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null;
+                    void onUploadDocument(file);
+                    e.currentTarget.value = '';
+                  }}
+                />
+                <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
+                  {documents.length === 0 ? (
+                    <p className="text-xs opacity-70">暂无文档</p>
+                  ) : (
+                    documents.map((doc) => (
+                      <div key={doc.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate">{doc.filename}</span>
+                        <div className="flex items-center gap-2">
+                          <span>{doc.status}</span>
+                          <button
+                            type="button"
+                            className="underline"
+                            aria-label={`删除 ${doc.filename}`}
+                            onClick={() => void onDeleteDocument(doc.id)}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
             <div className="flex gap-3">
               <Input
                 value={input}

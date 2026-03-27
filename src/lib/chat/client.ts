@@ -17,6 +17,20 @@ export type ConversationPageDto = {
   hasMore: boolean;
 };
 
+export type ConversationDocumentStatus = 'processing' | 'ready' | 'failed';
+
+export type ConversationDocumentDto = {
+  id: string;
+  conversationId: string;
+  filename: string;
+  contentMarkdown: string;
+  status: ConversationDocumentStatus;
+  errorMessage: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export async function fetchConversations(params?: {
   page?: number;
   limit?: number;
@@ -57,4 +71,57 @@ export async function streamConversationMessage(
     throw new Error(data.error || 'Chat request failed');
   }
   return res.body;
+}
+
+export async function uploadConversationDocument(
+  conversationId: string,
+  file: File,
+): Promise<ConversationDocumentDto> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`/api/conversations/${conversationId}/documents`, {
+    method: 'POST',
+    body: form,
+  });
+  const data = (await res.json()) as { document?: ConversationDocumentDto; error?: string };
+  if (!res.ok || !data.document) {
+    throw new Error(data.error || '上传文档失败');
+  }
+  return data.document;
+}
+
+export async function fetchConversationDocuments(
+  conversationId: string,
+): Promise<ConversationDocumentDto[]> {
+  const res = await fetch(`/api/conversations/${conversationId}/documents`);
+  const data = (await res.json()) as { documents?: ConversationDocumentDto[]; error?: string };
+  if (!res.ok || !data.documents) {
+    throw new Error(data.error || '加载文档列表失败');
+  }
+  return data.documents;
+}
+
+export async function fetchConversationDocumentDetail(
+  conversationId: string,
+  documentId: string,
+): Promise<ConversationDocumentDto> {
+  const res = await fetch(`/api/conversations/${conversationId}/documents/${documentId}`);
+  const data = (await res.json()) as { document?: ConversationDocumentDto; error?: string };
+  if (!res.ok || !data.document) {
+    throw new Error(data.error || '加载文档详情失败');
+  }
+  return data.document;
+}
+
+export async function deleteConversationDocument(
+  conversationId: string,
+  documentId: string,
+): Promise<void> {
+  const res = await fetch(`/api/conversations/${conversationId}/documents/${documentId}`, {
+    method: 'DELETE',
+  });
+  const data = (await res.json()) as { deleted?: boolean; error?: string };
+  if (!res.ok || !data.deleted) {
+    throw new Error(data.error || '删除文档失败');
+  }
 }
