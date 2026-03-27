@@ -339,4 +339,76 @@ describe('ChatUI', () => {
     expect(screen.queryByText('one.md')).not.toBeInTheDocument();
     expect(screen.getByText('two.md')).toBeInTheDocument();
   });
+
+  it('does not rearm timer from stale in-flight poll after conversation switch', async () => {
+    jest.useFakeTimers();
+    try {
+      let resolveInFlightPoll: ((value: unknown) => void) | null = null;
+      const inFlightPollPromise = new Promise((resolve) => {
+        resolveInFlightPoll = resolve;
+      });
+
+      fetchConversationsMock.mockResolvedValue({
+        conversations: [
+          { id: 'c1', title: 'one' },
+          { id: 'c2', title: 'two' },
+        ],
+        total: 2,
+        page: 1,
+        limit: 20,
+        hasMore: false,
+      });
+      fetchConversationMessagesMock.mockResolvedValue([]);
+      fetchConversationDocumentsMock
+        .mockResolvedValueOnce([
+          {
+            id: 'd1',
+            filename: 'one.md',
+            status: 'processing',
+          },
+        ])
+        .mockImplementationOnce(() => inFlightPollPromise)
+        .mockResolvedValueOnce([
+          {
+            id: 'd2',
+            filename: 'two.md',
+            status: 'ready',
+          },
+        ]);
+
+      render(<ChatUI />);
+      await screen.findByText('one');
+      await screen.findByText('processing');
+      await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(1));
+
+      act(() => {
+        jest.advanceTimersByTime(2500);
+      });
+      await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(2));
+
+      fireEvent.click(screen.getByRole('button', { name: 'two' }));
+      await screen.findByText('two.md');
+      await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(3));
+
+      await act(async () => {
+        resolveInFlightPoll?.([
+          {
+            id: 'd1',
+            filename: 'one.md',
+            status: 'processing',
+          },
+        ]);
+        await Promise.resolve();
+      });
+
+      act(() => {
+        jest.advanceTimersByTime(5000);
+      });
+      expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(3);
+      expect(screen.queryByText('one.md')).not.toBeInTheDocument();
+      expect(screen.getByText('two.md')).toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

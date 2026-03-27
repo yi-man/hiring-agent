@@ -41,6 +41,7 @@ export function ChatUI() {
   const conversationListRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const documentPollTimerRef = useRef<number | null>(null);
+  const documentPollSessionIdRef = useRef(0);
   const latestDocumentRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -55,6 +56,7 @@ export function ChatUI() {
   };
 
   const startDocumentPolling = () => {
+    const sessionId = ++documentPollSessionIdRef.current;
     clearDocumentPollTimer();
     documentPollTimerRef.current = window.setTimeout(function tick() {
       const currentConversationId = activeConversationIdRef.current;
@@ -65,6 +67,11 @@ export function ChatUI() {
       void (async () => {
         try {
           const nextRows = await loadDocuments(currentConversationId, { silent: true });
+          const isCurrentSession = sessionId === documentPollSessionIdRef.current;
+          const isCurrentConversation = activeConversationIdRef.current === currentConversationId;
+          if (!isCurrentSession || !isCurrentConversation) {
+            return;
+          }
           const shouldContinue = nextRows.some((doc) => doc.status === 'processing');
           if (shouldContinue) {
             clearDocumentPollTimer();
@@ -74,6 +81,11 @@ export function ChatUI() {
           }
         } catch {
           // Keep retrying on transient refresh failures while processing may still be ongoing.
+          const isCurrentSession = sessionId === documentPollSessionIdRef.current;
+          const isCurrentConversation = activeConversationIdRef.current === currentConversationId;
+          if (!isCurrentSession || !isCurrentConversation) {
+            return;
+          }
           clearDocumentPollTimer();
           documentPollTimerRef.current = window.setTimeout(tick, 2500);
         }
