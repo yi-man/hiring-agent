@@ -35,3 +35,98 @@ model Message {
   @@unique([conversationId, seq])
   @@map("messages")
 }
+
+model LlmCallLog {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  callId         String?  @map("call_id") @db.VarChar(128)
+  traceId        String?  @map("trace_id") @db.VarChar(128)
+  requestId      String?  @map("request_id") @db.VarChar(128)
+  endpoint       String   @db.VarChar(128)
+  provider       String   @db.VarChar(64)
+  model          String   @db.VarChar(128)
+  requestHeaders Json     @map("request_headers")
+  requestPayload Json     @map("request_payload")
+  responsePayload Json?   @map("response_payload")
+  inputTokens    Int      @map("input_tokens")
+  outputTokens   Int      @map("output_tokens")
+  totalTokens    Int      @map("total_tokens")
+  latencyMs      Int      @map("latency_ms")
+  httpStatus     Int?     @map("http_status")
+  isError        Boolean  @default(false) @map("is_error")
+  errorDomain    String?  @map("error_domain") @db.VarChar(64)
+  errorCode      String?  @map("error_code") @db.VarChar(128)
+  providerStatus String?  @map("provider_status") @db.VarChar(128)
+  retryCount     Int      @default(0) @map("retry_count")
+  finalOutcome   String   @map("final_outcome") @db.VarChar(32)
+  timestamp      DateTime @db.DateTime(3)
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@unique([callId], map: "llm_call_logs_call_id_key")
+  @@unique([provider, requestId], map: "llm_call_logs_provider_request_id_key")
+  @@index([timestamp], map: "idx_llm_call_logs_timestamp")
+  @@index([isError, timestamp], map: "idx_llm_call_logs_is_error_timestamp")
+  @@index([provider, model, timestamp], map: "idx_llm_call_logs_provider_model_timestamp")
+  @@index([endpoint, timestamp], map: "idx_llm_call_logs_endpoint_timestamp")
+  @@map("llm_call_logs")
+}
+
+model LlmUsageStatsDaily {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  bucketDate  DateTime @map("bucket_date") @db.Date
+  provider    String   @db.VarChar(64)
+  model       String   @db.VarChar(128)
+  endpoint    String   @db.VarChar(128)
+  totalCalls  Int      @default(0) @map("total_calls")
+  successCalls Int     @default(0) @map("success_calls")
+  errorCalls  Int      @default(0) @map("error_calls")
+  inputTokens Int      @default(0) @map("input_tokens")
+  outputTokens Int     @default(0) @map("output_tokens")
+  totalTokens Int      @default(0) @map("total_tokens")
+  avgLatencyMs Float   @default(0) @map("avg_latency_ms")
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@unique([bucketDate, provider, model, endpoint], map: "llm_usage_stats_daily_bucket_provider_model_endpoint_key")
+  @@index([bucketDate], map: "idx_llm_usage_stats_daily_bucket_date")
+  @@map("llm_usage_stats_daily")
+}
+
+model LlmUsageStatsWeekly {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  bucketWeek   DateTime @map("bucket_week") @db.Date
+  provider     String   @db.VarChar(64)
+  model        String   @db.VarChar(128)
+  endpoint     String   @db.VarChar(128)
+  totalCalls   Int      @default(0) @map("total_calls")
+  successCalls Int      @default(0) @map("success_calls")
+  errorCalls   Int      @default(0) @map("error_calls")
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  totalTokens  Int      @default(0) @map("total_tokens")
+  avgLatencyMs Float    @default(0) @map("avg_latency_ms")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@unique([bucketWeek, provider, model, endpoint], map: "llm_usage_stats_weekly_bucket_provider_model_endpoint_key")
+  @@index([bucketWeek], map: "idx_llm_usage_stats_weekly_bucket_week")
+  @@map("llm_usage_stats_weekly")
+}
+
+model LlmUsageStatsTotal {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  provider     String   @db.VarChar(64)
+  model        String   @db.VarChar(128)
+  endpoint     String   @db.VarChar(128)
+  totalCalls   Int      @default(0) @map("total_calls")
+  successCalls Int      @default(0) @map("success_calls")
+  errorCalls   Int      @default(0) @map("error_calls")
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  totalTokens  Int      @default(0) @map("total_tokens")
+  avgLatencyMs Float    @default(0) @map("avg_latency_ms")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@unique([provider, model, endpoint], map: "llm_usage_stats_total_provider_model_endpoint_key")
+  @@map("llm_usage_stats_total")
+}
