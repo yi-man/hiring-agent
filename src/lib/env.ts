@@ -2,8 +2,8 @@ import { z } from 'zod';
 import path from 'path';
 import { config } from 'dotenv';
 
-config({ path: path.resolve(process.cwd(), '.env.development') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
+config({ path: path.resolve(process.cwd(), '.env.development') });
 
 const envSchema = z.object({
   // 应用配置

@@ -4,8 +4,8 @@ import { URL } from 'url';
 import { execFileSync } from 'child_process';
 import { createPool } from 'mysql2/promise';
 
-config({ path: path.resolve(process.cwd(), '.env.development') });
 config({ path: path.resolve(process.cwd(), '.env.local') });
+config({ path: path.resolve(process.cwd(), '.env.development') });
 
 function applyCiDatabaseSuffix() {
   const ciSuffix = process.env.MYSQL_CI_SUFFIX || '_ci';
