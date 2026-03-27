@@ -211,3 +211,181 @@ describe('embedding infrastructure', () => {
     ]);
   });
 });
+
+describe('retrieveConversationContext', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
+    process.env = { ...originalEnv };
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  it('searches with conversationId filter and score threshold', async () => {
+    const searchMock = jest.fn().mockResolvedValue([
+      {
+        id: 'p1',
+        score: 0.92,
+        payload: {
+          conversationId: 'conv-1',
+          documentId: 'doc-1',
+          chunkId: 'chunk-1',
+          chunkIndex: 0,
+          filename: 'policy.md',
+        },
+      },
+    ]);
+    const findManyMock = jest.fn().mockResolvedValue([
+      {
+        id: 'chunk-1',
+        qdrantPointId: 'p1',
+        content: 'PTO is 20 days.',
+      },
+    ]);
+
+    jest.doMock('@/lib/env', () => ({
+      env: {
+        RAG_TOP_K: 6,
+        RAG_MIN_SCORE: 0.6,
+        RAG_CONTEXT_MAX_CHARS: 1000,
+      },
+    }));
+    jest.doMock('@/lib/rag/embed', () => ({
+      embedQuery: jest.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+    }));
+    jest.doMock('@/lib/rag/qdrant', () => ({
+      qdrantCollectionName: 'conversation_markdown_chunks',
+      getQdrantClient: () => ({
+        search: searchMock,
+      }),
+    }));
+    jest.doMock('@/lib/prisma', () => ({
+      prisma: {
+        conversationDocumentChunk: {
+          findMany: findManyMock,
+        },
+      },
+    }));
+
+    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
+    const result = await retrieveConversationContext({
+      conversationId: 'conv-1',
+      query: 'How many PTO days?',
+      topK: 3,
+    });
+
+    expect(searchMock).toHaveBeenCalledWith(
+      'conversation_markdown_chunks',
+      expect.objectContaining({
+        limit: 3,
+        score_threshold: 0.6,
+        filter: {
+          must: [{ key: 'conversationId', match: { value: 'conv-1' } }],
+        },
+      }),
+    );
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          conversationId: 'conv-1',
+        }),
+      }),
+    );
+    expect(result.contextText).toContain('PTO is 20 days.');
+    expect(result.matches).toHaveLength(1);
+  });
+
+  it('enforces minScore and context max chars when building output', async () => {
+    const searchMock = jest.fn().mockResolvedValue([
+      {
+        id: 'p-low',
+        score: 0.2,
+        payload: {
+          conversationId: 'conv-1',
+          documentId: 'doc-low',
+          chunkId: 'chunk-low',
+          chunkIndex: 0,
+          filename: 'low.md',
+        },
+      },
+      {
+        id: 'p-a',
+        score: 0.95,
+        payload: {
+          conversationId: 'conv-1',
+          documentId: 'doc-a',
+          chunkId: 'chunk-a',
+          chunkIndex: 0,
+          filename: 'a.md',
+        },
+      },
+      {
+        id: 'p-b',
+        score: 0.9,
+        payload: {
+          conversationId: 'conv-1',
+          documentId: 'doc-b',
+          chunkId: 'chunk-b',
+          chunkIndex: 1,
+          filename: 'b.md',
+        },
+      },
+    ]);
+    const findManyMock = jest.fn().mockResolvedValue([
+      {
+        id: 'chunk-low',
+        qdrantPointId: 'p-low',
+        content: 'ignored',
+      },
+      {
+        id: 'chunk-a',
+        qdrantPointId: 'p-a',
+        content: '12345',
+      },
+      {
+        id: 'chunk-b',
+        qdrantPointId: 'p-b',
+        content: '67890',
+      },
+    ]);
+
+    jest.doMock('@/lib/env', () => ({
+      env: {
+        RAG_TOP_K: 6,
+        RAG_MIN_SCORE: 0.5,
+        RAG_CONTEXT_MAX_CHARS: 6,
+      },
+    }));
+    jest.doMock('@/lib/rag/embed', () => ({
+      embedQuery: jest.fn().mockResolvedValue([0.4, 0.5]),
+    }));
+    jest.doMock('@/lib/rag/qdrant', () => ({
+      qdrantCollectionName: 'conversation_markdown_chunks',
+      getQdrantClient: () => ({
+        search: searchMock,
+      }),
+    }));
+    jest.doMock('@/lib/prisma', () => ({
+      prisma: {
+        conversationDocumentChunk: {
+          findMany: findManyMock,
+        },
+      },
+    }));
+
+    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
+    const result = await retrieveConversationContext({
+      conversationId: 'conv-1',
+      query: 'question',
+      topK: 5,
+    });
+
+    expect(result.contextText).toBe('12345');
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]?.chunkId).toBe('chunk-a');
+  });
+});
