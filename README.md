@@ -161,6 +161,36 @@ pnpm run test:integration:chat
 - MySQL 连通性检查：执行 `SELECT 1`
 - Redis 连通性检查：连接后执行 `PING`
 
+## Conversation Markdown RAG（Qdrant）
+
+### 依赖准备
+
+- 需要可访问的 Qdrant 实例（本地或远端）。
+- 推荐本地快速启动：
+
+```bash
+docker run -p 6333:6333 qdrant/qdrant
+```
+
+### 环境变量
+
+在 `.env.development` / `.env.local` 中配置以下键（示例值见 `.env.example`）：
+
+- `QDRANT_URL`
+- `QDRANT_API_KEY`
+- `QDRANT_COLLECTION_NAME`
+- `RAG_TOP_K`
+- `RAG_MIN_SCORE`
+- `RAG_CONTEXT_MAX_CHARS`
+- `RAG_INGEST_LEASE_MS`
+
+### 使用方式（会话级 Markdown RAG）
+
+1. 进入聊天页面并打开一个会话。
+2. 在会话内上传 `.md` 文档，等待状态变为 `ready`。
+3. 在同一会话提问，系统会检索该会话文档并增强流式回答。
+4. 若检索链路异常，聊天会自动降级为普通对话（不中断流式输出）。
+
 ## 项目结构
 
 ```
