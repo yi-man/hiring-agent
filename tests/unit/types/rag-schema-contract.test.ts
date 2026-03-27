@@ -15,6 +15,8 @@ describe('rag schema contract', () => {
       '@@map("conversation_document_index_jobs")',
       'documents    ConversationDocument[]',
       '@@unique([documentId, chunkIndex]',
+      '@@unique([id, conversationId]',
+      '@relation(fields: [documentId, conversationId], references: [id, conversationId]',
     ];
 
     for (const snippet of requiredSnippets) {
