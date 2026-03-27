@@ -4,6 +4,9 @@ import { evaluationJsonSchema, extractJsonObject, jdJsonSchema } from './json-sc
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
 type TokenUsage = { promptTokens: number; completionTokens: number; totalTokens: number };
+type OpenAiRequestMeta = { url: string; headers: Record<string, string>; payload: object };
+type OpenAiResponseMeta = { status: number; body: OpenAIChatResponse };
+type OpenAiCallMeta = { request: OpenAiRequestMeta; response: OpenAiResponseMeta };
 
 type OpenAIChatResponse = {
   choices?: Array<{ message?: { content?: string } }>;
@@ -20,7 +23,7 @@ function isUnsupportedJsonObjectError(message: string): boolean {
 async function postChatOnce(
   messages: ChatMessage[],
   includeJsonObjectFormat: boolean,
-): Promise<{ ok: boolean; status: number; data: OpenAIChatResponse }> {
+): Promise<{ ok: boolean; status: number; data: OpenAIChatResponse; meta: OpenAiCallMeta }> {
   const key = env.OPENAI_API_KEY;
   if (!key) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -30,24 +33,35 @@ async function postChatOnce(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), env.JD_LLM_TIMEOUT_MS);
 
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+  };
+  const requestPayload = {
+    model: env.OPENAI_MODEL,
+    messages,
+    temperature: 0.4,
+    ...(includeJsonObjectFormat ? { response_format: { type: 'json_object' } } : {}),
+  };
+
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: env.OPENAI_MODEL,
-        messages,
-        temperature: 0.4,
-        ...(includeJsonObjectFormat ? { response_format: { type: 'json_object' } } : {}),
-      }),
+      headers: requestHeaders,
+      body: JSON.stringify(requestPayload),
       signal: controller.signal,
     });
 
     const data = (await res.json()) as OpenAIChatResponse;
-    return { ok: res.ok, status: res.status, data };
+    return {
+      ok: res.ok,
+      status: res.status,
+      data,
+      meta: {
+        request: { url, headers: requestHeaders, payload: requestPayload },
+        response: { status: res.status, body: data },
+      },
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -69,41 +83,60 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   };
 }
 
-async function postChat(messages: ChatMessage[]): Promise<{ content: string; usage: TokenUsage }> {
+async function postChat(
+  messages: ChatMessage[],
+): Promise<{ content: string; usage: TokenUsage; meta: OpenAiCallMeta }> {
   const includeJson = env.OPENAI_JSON_MODE;
-  let { ok, data } = await postChatOnce(messages, includeJson);
+  let { ok, data, meta } = await postChatOnce(messages, includeJson);
 
   if (!ok && includeJson && isUnsupportedJsonObjectError(data.error?.message ?? '')) {
-    ({ ok, data } = await postChatOnce(messages, false));
+    ({ ok, data, meta } = await postChatOnce(messages, false));
   }
 
   if (!ok) {
-    throw new Error(data.error?.message || `LLM HTTP error`);
+    const providerError = Object.assign(new Error(data.error?.message || `LLM HTTP error`), {
+      status: meta.response.status,
+      code: data.error?.message ? undefined : `http_${meta.response.status}`,
+      type: 'provider_error',
+      body: data,
+      response: {
+        status: meta.response.status,
+        body: data,
+      },
+      meta,
+      llmMeta: meta,
+    });
+    throw providerError;
   }
 
   const content = data.choices?.[0]?.message?.content;
   if (!content?.trim()) {
     throw new Error('Empty LLM response');
   }
-  return { content, usage: toUsage(data.usage) };
+  return { content, usage: toUsage(data.usage), meta };
 }
 
 async function completeJson<T>(
   messages: ChatMessage[],
   parse: (json: unknown) => T,
-): Promise<{ output: T; usage: TokenUsage }> {
+): Promise<{ output: T; usage: TokenUsage; meta: OpenAiCallMeta }> {
   let lastError: Error | null = null;
   let accumulated: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let latestMeta: OpenAiCallMeta | null = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      const { content, usage } = await postChat(messages);
+      const { content, usage, meta } = await postChat(messages);
+      latestMeta = meta;
       accumulated = addUsage(accumulated, usage);
       const jsonText = extractJsonObject(content);
       const parsed = JSON.parse(jsonText) as unknown;
-      return { output: parse(parsed), usage: accumulated };
+      return { output: parse(parsed), usage: accumulated, meta };
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
     }
+  }
+  if (latestMeta) {
+    Object.assign(lastError ?? {}, { llmMeta: latestMeta });
   }
   throw lastError ?? new Error('LLM JSON parse failed');
 }
@@ -111,7 +144,7 @@ async function completeJson<T>(
 export async function openaiGenerateJD(
   system: string,
   user: string,
-): Promise<{ output: JD; usage: TokenUsage }> {
+): Promise<{ output: JD; usage: TokenUsage; meta: OpenAiCallMeta }> {
   return completeJson(
     [
       { role: 'system', content: system },
@@ -124,7 +157,7 @@ export async function openaiGenerateJD(
 export async function openaiEvaluateJD(
   system: string,
   user: string,
-): Promise<{ output: EvaluationResult; usage: TokenUsage }> {
+): Promise<{ output: EvaluationResult; usage: TokenUsage; meta: OpenAiCallMeta }> {
   return completeJson(
     [
       { role: 'system', content: system },
@@ -137,6 +170,6 @@ export async function openaiEvaluateJD(
 export async function openaiImproveJD(
   system: string,
   user: string,
-): Promise<{ output: JD; usage: TokenUsage }> {
+): Promise<{ output: JD; usage: TokenUsage; meta: OpenAiCallMeta }> {
   return openaiGenerateJD(system, user);
 }

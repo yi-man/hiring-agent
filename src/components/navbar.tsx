@@ -27,6 +27,7 @@ export function Navbar() {
     { name: '首页', href: '/' },
     { name: 'Chat', href: '/chat' },
     { name: 'JD生成', href: '/jd-generator' },
+    { name: 'LLM 观测', href: '/llm-observability' },
     { name: '关于', href: '/about' },
     { name: '服务', href: '/services' },
     { name: '博客', href: '/blog' },
