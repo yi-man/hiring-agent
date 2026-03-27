@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 describe('rag schema contract', () => {
-  it('includes rag model and table contracts', () => {
+  it('includes rag model and key constraint contracts', () => {
     const schemaPath = resolve(process.cwd(), 'prisma/schema.prisma');
     const schema = readFileSync(schemaPath, 'utf8');
 
