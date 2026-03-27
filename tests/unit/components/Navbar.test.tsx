@@ -1,6 +1,15 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Navbar } from '@/components/navbar';
 
+jest.mock('next-auth/react', () => ({
+  useSession: () => ({
+    status: 'unauthenticated',
+    data: null,
+  }),
+  signIn: jest.fn(),
+  signOut: jest.fn(),
+}));
+
 // 模拟 lucide-react 图标
 jest.mock('lucide-react', () => ({
   Menu: jest.fn(() => <div data-testid="menu-icon" />),

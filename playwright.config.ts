@@ -19,15 +19,15 @@ export default defineConfig({
   timeout: 600_000,
   expect: { timeout: 60_000 },
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: 'http://127.0.0.1:3100',
     trace: 'on-first-retry',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'pnpm dev',
-    url: 'http://localhost:3000',
-    /** 本机已 `pnpm dev` 时复用；CI 无服务时会自动拉起 */
-    reuseExistingServer: true,
+    command: 'PORT=3100 pnpm dev',
+    url: 'http://127.0.0.1:3100',
+    /** 强制拉起当前 worktree 的服务，避免复用到其他目录中的旧实例 */
+    reuseExistingServer: false,
     timeout: 120_000,
     env: {
       ...process.env,
