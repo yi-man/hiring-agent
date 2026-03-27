@@ -16,6 +16,8 @@ model Conversation {
   createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
   messages     Message[]
+  documents    ConversationDocument[]
+  documentChunks ConversationDocumentChunk[]
   user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
   @@index([lastActiveAt(sort: Desc)])
@@ -89,6 +91,61 @@ model Message {
   @@index([conversationId, seq], map: "idx_messages_conversation_seq")
   @@unique([conversationId, seq])
   @@map("messages")
+}
+
+model ConversationDocument {
+  id              String                         @id @default(uuid()) @db.VarChar(36)
+  conversationId  String                         @map("conversation_id") @db.VarChar(36)
+  filename        String                         @db.VarChar(255)
+  contentMarkdown String                         @map("content_markdown") @db.LongText
+  status          String                         @default("processing") @db.VarChar(32)
+  errorMessage    String?                        @map("error_message") @db.Text
+  version         Int                            @default(1)
+  createdAt       DateTime                       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime                       @updatedAt @map("updated_at") @db.DateTime(3)
+  chunks          ConversationDocumentChunk[]
+  jobs            ConversationDocumentIndexJob[]
+  conversation    Conversation                   @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([conversationId], map: "idx_conversation_documents_conversation_id")
+  @@index([status], map: "idx_conversation_documents_status")
+  @@map("conversation_documents")
+}
+
+model ConversationDocumentChunk {
+  id            String               @id @default(uuid()) @db.VarChar(36)
+  documentId    String               @map("document_id") @db.VarChar(36)
+  conversationId String              @map("conversation_id") @db.VarChar(36)
+  chunkIndex    Int                  @map("chunk_index")
+  content       String               @db.LongText
+  tokenEstimate Int?                 @map("token_estimate")
+  qdrantPointId String?              @unique @map("qdrant_point_id") @db.VarChar(128)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  document      ConversationDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  conversation  Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([documentId, chunkIndex], map: "conversation_document_chunks_document_id_chunk_index_key")
+  @@index([documentId], map: "idx_conversation_document_chunks_document_id")
+  @@index([conversationId], map: "idx_conversation_document_chunks_conversation_id")
+  @@index([conversationId, chunkIndex], map: "idx_conversation_document_chunks_conversation_chunk_index")
+  @@map("conversation_document_chunks")
+}
+
+model ConversationDocumentIndexJob {
+  id         String               @id @default(uuid()) @db.VarChar(36)
+  documentId String               @map("document_id") @db.VarChar(36)
+  status     String               @default("pending") @db.VarChar(32)
+  attempts   Int                  @default(0)
+  lastError  String?              @map("last_error") @db.Text
+  startedAt  DateTime?            @map("started_at") @db.DateTime(3)
+  finishedAt DateTime?            @map("finished_at") @db.DateTime(3)
+  createdAt  DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt  DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
+  document   ConversationDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([documentId], map: "idx_conversation_document_index_jobs_document_id")
+  @@index([status], map: "idx_conversation_document_index_jobs_status")
+  @@map("conversation_document_index_jobs")
 }
 
 model LlmCallLog {
