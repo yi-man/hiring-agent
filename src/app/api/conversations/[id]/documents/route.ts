@@ -5,6 +5,7 @@ import {
   createConversationDocument,
   listConversationDocuments,
 } from '@/lib/chat/repositories/document-repo';
+import { ingestConversationDocument } from '@/lib/rag/ingest';
 import { prisma } from '@/lib/prisma';
 
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
@@ -28,8 +29,7 @@ async function findOwnedConversationId(conversationId: string, userId: string) {
 }
 
 async function enqueueDocumentIngest(params: { conversationId: string; documentId: string }) {
-  void params;
-  // TODO: wire this to the async ingest/indexing pipeline.
+  await ingestConversationDocument(params.documentId, params.conversationId);
 }
 
 function triggerDocumentIngest(params: { conversationId: string; documentId: string }) {

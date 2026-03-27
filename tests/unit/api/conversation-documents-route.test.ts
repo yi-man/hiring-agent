@@ -13,6 +13,7 @@ const createConversationDocumentMock = jest.fn();
 const listConversationDocumentsMock = jest.fn();
 const getConversationDocumentByIdMock = jest.fn();
 const deleteConversationDocumentMock = jest.fn();
+const ingestConversationDocumentMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -48,6 +49,10 @@ jest.mock('@/lib/chat/repositories/document-repo', () => ({
   deleteConversationDocument: (...args: unknown[]) => deleteConversationDocumentMock(...args),
 }));
 
+jest.mock('@/lib/rag/ingest', () => ({
+  ingestConversationDocument: (...args: unknown[]) => ingestConversationDocumentMock(...args),
+}));
+
 describe('conversation documents routes', () => {
   beforeEach(() => {
     requireAuthMock.mockReset();
@@ -56,6 +61,8 @@ describe('conversation documents routes', () => {
     listConversationDocumentsMock.mockReset();
     getConversationDocumentByIdMock.mockReset();
     deleteConversationDocumentMock.mockReset();
+    ingestConversationDocumentMock.mockReset();
+    ingestConversationDocumentMock.mockResolvedValue(undefined);
   });
 
   it('returns 401 when uploading without auth', async () => {

@@ -47,6 +47,7 @@ export async function setConversationDocumentStatus(
 
 export async function bulkInsertDocumentChunks(
   rows: Array<{
+    id?: string;
     documentId: string;
     conversationId: string;
     chunkIndex: number;
@@ -61,6 +62,7 @@ export async function bulkInsertDocumentChunks(
 
   const result = await prisma.conversationDocumentChunk.createMany({
     data: rows.map((row) => ({
+      id: row.id,
       documentId: row.documentId,
       conversationId: row.conversationId,
       chunkIndex: row.chunkIndex,
@@ -71,6 +73,28 @@ export async function bulkInsertDocumentChunks(
   });
 
   return result.count;
+}
+
+export async function replaceConversationDocumentChunks(
+  documentId: string,
+  rows: Array<{
+    id?: string;
+    conversationId: string;
+    chunkIndex: number;
+    content: string;
+    tokenEstimate?: number | null;
+    qdrantPointId?: string | null;
+  }>,
+): Promise<number> {
+  await prisma.conversationDocumentChunk.deleteMany({
+    where: { documentId },
+  });
+  return bulkInsertDocumentChunks(
+    rows.map((row) => ({
+      ...row,
+      documentId,
+    })),
+  );
 }
 
 export async function listConversationDocuments(conversationId: string) {
