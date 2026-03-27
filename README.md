@@ -280,6 +280,76 @@ export async function getStaticPaths() {
 
 可以使用 Docker 或其他方式部署。
 
+## LLM 可观测性运行手册（安全与保留）
+
+### 敏感数据访问控制
+
+- `GET /api/llm-stats/logs` 默认只返回聚合友好的非敏感字段。
+- 仅当 `includeDetails=true` 时才会返回 `requestHeaders` / `requestPayload` / `responsePayload`。
+- 访问明细必须提供请求头 `x-llm-observability-admin-token`，并且值与服务端环境变量 `LLM_OBSERVABILITY_ADMIN_TOKEN` 一致。
+- 任何明细访问（允许/拒绝）都会写入审计日志事件，便于后续安全排查。
+
+### 加密与存储控制（Encryption at Rest）
+
+- 所有 LLM 原始 payload 与 headers 落在应用数据库（`llm_call_logs`）中，需依赖数据库层开启磁盘加密（例如云盘 KMS、MySQL TDE 或底层卷加密）。
+- 生产环境检查项：
+  - **数据库存储卷已启用加密**（云平台控制台或 IaC 证明）；
+  - **数据库备份已启用加密**（快照/备份策略）；
+  - **KMS 密钥轮换策略已配置**（按组织安全基线）；
+  - **最小权限访问**：仅应用服务账号可读写业务库。
+- 应用侧默认限制超大 payload 写入体积（见 `LLM_OBSERVABILITY_MAX_PAYLOAD_CHARS`），避免异常大响应导致敏感信息扩散和存储膨胀。
+
+### 数据保留策略（TTL）
+
+- 原始调用日志（含 payload）与聚合数据分开保留：
+  - `LLM_OBSERVABILITY_RAW_PAYLOAD_RETENTION_DAYS`（默认 `7`）；
+  - `LLM_OBSERVABILITY_AGGREGATE_RETENTION_DAYS`（默认 `90`）。
+- 保留清理任务由聚合 cron 触发，调度时间可配置：
+  - `LLM_OBSERVABILITY_RETENTION_CLEANUP_HOUR_UTC`（默认 `1`）；
+  - `LLM_OBSERVABILITY_RETENTION_CLEANUP_MINUTE_UTC`（默认 `0`）。
+- 清理实现为幂等删除（`deleteMany where < cutoff`），重复执行不会产生副作用。
+
+### 运维执行命令（realtime / daily / weekly / backfill / retention）
+
+- 统一入口脚本：`src/scripts/llm-observability-ops.ts`
+- 快捷命令（`package.json`）：
+  - `pnpm obs:realtime`
+  - `pnpm obs:retention`
+- 全量运维命令（推荐，参数显式）：
+
+```bash
+# 1) 准实时聚合（按 now-水位线 重新计算 D-2/D-1/D）
+pnpm obs:run -- realtime
+
+# 2) 日固化（重算指定 UTC 自然日）
+pnpm obs:run -- daily --date 2026-03-29T00:00:00.000Z
+
+# 3) 周固化（重算指定周，传入该周任意时间或周起始时间均可）
+pnpm obs:run -- weekly --week-start 2026-03-23T00:00:00.000Z
+
+# 4) 历史回填（闭区间 [startDate, endDate]，按天+按周重算）
+pnpm obs:run -- backfill --start-date 2026-03-01T00:00:00.000Z --end-date 2026-03-15T00:00:00.000Z
+
+# 5) 保留清理（可选指定 now；不传则使用当前 UTC 时间）
+pnpm obs:run -- retention --now 2026-03-30T01:00:00.000Z
+```
+
+### Task 8 最新验证结果（PASS / FAIL 分离）
+
+> 以下结果来自最近一次本地执行（Task 8 验证轮次）：
+
+- **PASS**
+  - `pnpm exec eslint src/lib/llm-observability/ops-runner.ts src/scripts/llm-observability-ops.ts tests/integration/llm-observability/ops-runner.e2e.test.ts`
+  - `pnpm exec eslint tests/e2e-playwright/llm-observability.spec.ts`（Playwright 新增 spec 的静态检查通过）
+  - `tests/integration/llm-observability/ops-runner.e2e.test.ts` 已在 `pnpm test:ci` 中通过。
+  - `tests/e2e-playwright/llm-observability.spec.ts` 已新增（基于 Playwright 路由拦截的稳定化验证流）。
+- **FAIL**
+  - `pnpm lint`：仓库存在大量既有格式/规则问题（跨多个非 Task 8 文件）。
+  - `pnpm type-check`：存在既有类型/Prisma 问题（例如 `message-repo.ts` 隐式 any、`src/lib/prisma.ts` PrismaClient 导出异常）。
+  - `pnpm test:ci`：主体验证通过但有 2 个既有失败套件，报错为 Prisma 生成产物缺失（`.prisma/client/*`）。
+  - `pnpm exec playwright test tests/e2e-playwright/llm-observability.spec.ts`：在当前环境执行失败（`/llm-observability` 返回 `404`，可能复用了旧 dev server）。
+  - 可重试命令：`PLAYWRIGHT_REUSE_SERVER=false pnpm exec playwright test tests/e2e-playwright/llm-observability.spec.ts`（强制使用当前工作区代码启动 webServer）。
+
 ## 许可证
 
 MIT

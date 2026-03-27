@@ -42,6 +42,16 @@ const envSchema = z.object({
   OPENAI_JSON_MODE: z.coerce.boolean().default(true),
   /** JD Agent 调用上游 LLM 的超时（毫秒），与通用 API_TIMEOUT 分离，避免慢模型被 10s 截断 */
   JD_LLM_TIMEOUT_MS: z.coerce.number().default(120000),
+  /** LLM 聚合准实时任务水位线（分钟） */
+  LLM_OBSERVABILITY_REALTIME_WATERMARK_MINUTES: z.coerce.number().int().nonnegative().default(10),
+  /** LLM 聚合：每日固化 UTC 调度时间 */
+  LLM_OBSERVABILITY_DAILY_SOLIDIFY_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(0),
+  LLM_OBSERVABILITY_DAILY_SOLIDIFY_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(5),
+  /** LLM 聚合：每周固化 UTC 调度时间，weekday 遵循 JS getUTCDay (0=Sun..6=Sat) */
+  LLM_OBSERVABILITY_WEEKLY_SOLIDIFY_WEEKDAY_UTC: z.coerce.number().int().min(0).max(6).default(1),
+  LLM_OBSERVABILITY_WEEKLY_SOLIDIFY_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(0),
+  LLM_OBSERVABILITY_WEEKLY_SOLIDIFY_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(10),
+  LLM_OBSERVABILITY_ADMIN_TOKEN: z.string().optional(),
 
   // Chat persistence
   MYSQL_HOST: z.string().default('127.0.0.1'),
