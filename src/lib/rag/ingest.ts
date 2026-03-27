@@ -24,26 +24,30 @@ type QdrantPointPayload = {
   version: number;
 };
 
+const INGEST_CLAIM_LEASE_MS = 2 * 60 * 1000;
+
 export async function ingestConversationDocument(
   documentId: string,
   conversationId: string,
 ): Promise<void> {
   const claimToken = `ingest:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const staleBefore = new Date(Date.now() - INGEST_CLAIM_LEASE_MS);
   const claimedDocument = await claimConversationDocumentIngest(
     conversationId,
     documentId,
     claimToken,
+    staleBefore,
   );
   if (!claimedDocument) {
     return;
   }
 
-  const document = await getConversationDocumentById(conversationId, documentId);
-  if (!document) {
-    throw new Error('conversation document not found');
-  }
-
   try {
+    const document = await getConversationDocumentById(conversationId, documentId);
+    if (!document) {
+      throw new Error('conversation document not found');
+    }
+
     const markdownChunks = await splitMarkdownToChunks(document.contentMarkdown);
     if (markdownChunks.length === 0) {
       throw new Error('document produced no indexable markdown chunks');
@@ -105,10 +109,25 @@ export async function ingestConversationDocument(
       })),
     );
 
-    await completeConversationDocumentIngest(conversationId, documentId, claimToken);
+    const completed = await completeConversationDocumentIngest(
+      conversationId,
+      documentId,
+      claimToken,
+    );
+    if (!completed) {
+      throw new Error('ingest lost ownership before marking document ready');
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'document ingest failed';
-    await failConversationDocumentIngest(conversationId, documentId, claimToken, message);
+    const failed = await failConversationDocumentIngest(
+      conversationId,
+      documentId,
+      claimToken,
+      message,
+    );
+    if (!failed) {
+      throw new Error(`${message}; and failed to atomically mark document failed`);
+    }
     throw error;
   }
 }

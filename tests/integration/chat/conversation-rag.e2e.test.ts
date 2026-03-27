@@ -292,4 +292,93 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     expect(latest?.errorMessage).toBeNull();
     expect(embedDocumentsMock).toHaveBeenCalledTimes(1);
   });
+
+  it('reclaims stale processing claims after lease timeout', async () => {
+    await prisma.user.upsert({
+      where: { id: 'rag-int-user' },
+      update: {},
+      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+    });
+    embedDocumentsMock.mockResolvedValue([[0.11, 0.22, 0.33]]);
+    ensureCollectionMock.mockResolvedValue(undefined);
+    qdrantUpsertMock.mockResolvedValue({ status: 'ok' });
+
+    const conversation = await prisma.conversation.create({
+      data: {
+        userId: 'rag-int-user',
+        status: 'active',
+        lastActiveAt: new Date(),
+      },
+    });
+    const document = await prisma.conversationDocument.create({
+      data: {
+        conversationId: conversation.id,
+        filename: 'stale.md',
+        contentMarkdown: '# Stale\nclaim',
+        status: 'processing',
+        errorMessage: 'ingest:stale-holder',
+      },
+    });
+
+    const oldDate = new Date(Date.now() - 10 * 60 * 1000);
+    await prisma.$executeRaw`
+      UPDATE conversation_documents
+      SET updated_at = ${oldDate}
+      WHERE id = ${document.id}
+    `;
+
+    await ingestConversationDocument(document.id, conversation.id);
+
+    const latest = await prisma.conversationDocument.findUnique({
+      where: { id: document.id },
+    });
+    expect(latest?.status).toBe('ready');
+    expect(latest?.errorMessage).toBeNull();
+  });
+
+  it('throws when CAS completion fails and fail CAS also misses', async () => {
+    await prisma.user.upsert({
+      where: { id: 'rag-int-user' },
+      update: {},
+      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+    });
+    embedDocumentsMock.mockResolvedValue([[1.1, 1.2, 1.3]]);
+    ensureCollectionMock.mockResolvedValue(undefined);
+
+    const conversation = await prisma.conversation.create({
+      data: {
+        userId: 'rag-int-user',
+        status: 'active',
+        lastActiveAt: new Date(),
+      },
+    });
+    const document = await prisma.conversationDocument.create({
+      data: {
+        conversationId: conversation.id,
+        filename: 'cas-false.md',
+        contentMarkdown: '# CAS\nfalse',
+        status: 'processing',
+      },
+    });
+
+    qdrantUpsertMock.mockImplementationOnce(async () => {
+      await prisma.conversationDocument.update({
+        where: { id: document.id },
+        data: {
+          status: 'failed',
+          errorMessage: null,
+        },
+      });
+      return { status: 'ok' };
+    });
+
+    await expect(ingestConversationDocument(document.id, conversation.id)).rejects.toThrow(
+      /failed to atomically mark document failed/,
+    );
+
+    const latest = await prisma.conversationDocument.findUnique({
+      where: { id: document.id },
+    });
+    expect(latest?.status).toBe('failed');
+  });
 });

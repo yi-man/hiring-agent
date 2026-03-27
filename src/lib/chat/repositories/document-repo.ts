@@ -49,13 +49,14 @@ export async function claimConversationDocumentIngest(
   conversationId: string,
   id: string,
   claimToken: string,
+  staleBefore?: Date,
 ) {
   const result = await prisma.conversationDocument.updateMany({
     where: {
       id,
       conversationId,
       status: 'processing',
-      errorMessage: null,
+      OR: [{ errorMessage: null }, ...(staleBefore ? [{ updatedAt: { lt: staleBefore } }] : [])],
     },
     data: {
       errorMessage: claimToken,
