@@ -295,6 +295,7 @@ describe('retrieveConversationContext', () => {
         }),
       }),
     );
+    expect(result.contextText).toContain('[source filename="policy.md" chunkIndex=0]');
     expect(result.contextText).toContain('PTO is 20 days.');
     expect(result.matches).toHaveLength(1);
   });
@@ -357,7 +358,7 @@ describe('retrieveConversationContext', () => {
       env: {
         RAG_TOP_K: 6,
         RAG_MIN_SCORE: 0.5,
-        RAG_CONTEXT_MAX_CHARS: 6,
+        RAG_CONTEXT_MAX_CHARS: 45,
       },
     }));
     jest.doMock('@/lib/rag/embed', () => ({
@@ -384,7 +385,7 @@ describe('retrieveConversationContext', () => {
       topK: 5,
     });
 
-    expect(result.contextText).toBe('12345');
+    expect(result.contextText).toBe('[source filename="a.md" chunkIndex=0]\n12345');
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]?.chunkId).toBe('chunk-a');
   });
@@ -431,7 +432,7 @@ describe('retrieveConversationContext', () => {
       env: {
         RAG_TOP_K: 6,
         RAG_MIN_SCORE: 0.5,
-        RAG_CONTEXT_MAX_CHARS: 5,
+        RAG_CONTEXT_MAX_CHARS: 45,
       },
     }));
     jest.doMock('@/lib/rag/embed', () => ({
@@ -458,7 +459,7 @@ describe('retrieveConversationContext', () => {
       topK: 5,
     });
 
-    expect(result.contextText).toBe('ok');
+    expect(result.contextText).toBe('[source filename="small.md" chunkIndex=1]\nok');
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]?.chunkId).toBe('chunk-small');
   });

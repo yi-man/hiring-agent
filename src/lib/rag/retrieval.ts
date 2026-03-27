@@ -112,18 +112,25 @@ export async function retrieveConversationContext(params: {
       continue;
     }
 
-    const nextChars = contextChars + content.length;
+    const filename = asString(payload?.filename) ?? 'unknown';
+    const chunkIndex = asInteger(payload?.chunkIndex) ?? chunk.chunkIndex;
+    const formattedChunk = [
+      `[source filename="${filename}" chunkIndex=${chunkIndex}]`,
+      content,
+    ].join('\n');
+
+    const nextChars = contextChars + formattedChunk.length;
     if (nextChars > env.RAG_CONTEXT_MAX_CHARS) {
       continue;
     }
     contextChars = nextChars;
-    selectedTexts.push(content);
+    selectedTexts.push(formattedChunk);
     matches.push({
       score,
       documentId: asString(payload?.documentId),
       chunkId: payloadChunkId ?? chunk.id,
-      chunkIndex: asInteger(payload?.chunkIndex),
-      filename: asString(payload?.filename),
+      chunkIndex,
+      filename,
       qdrantPointId: pointId,
     });
   }
