@@ -320,7 +320,7 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
       },
     });
 
-    const oldDate = new Date(Date.now() - 10 * 60 * 1000);
+    const oldDate = new Date(Date.now() - 40 * 60 * 1000);
     await prisma.$executeRaw`
       UPDATE conversation_documents
       SET updated_at = ${oldDate}
@@ -334,6 +334,50 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     });
     expect(latest?.status).toBe('ready');
     expect(latest?.errorMessage).toBeNull();
+  });
+
+  it('does not reclaim a valid in-flight claim within lease window', async () => {
+    await prisma.user.upsert({
+      where: { id: 'rag-int-user' },
+      update: {},
+      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+    });
+    embedDocumentsMock.mockResolvedValue([[0.51, 0.52, 0.53]]);
+    ensureCollectionMock.mockResolvedValue(undefined);
+    qdrantUpsertMock.mockResolvedValue({ status: 'ok' });
+
+    const conversation = await prisma.conversation.create({
+      data: {
+        userId: 'rag-int-user',
+        status: 'active',
+        lastActiveAt: new Date(),
+      },
+    });
+    const document = await prisma.conversationDocument.create({
+      data: {
+        conversationId: conversation.id,
+        filename: 'within-lease.md',
+        contentMarkdown: '# Lease\nwindow',
+        status: 'processing',
+        errorMessage: 'ingest:active-holder',
+      },
+    });
+
+    const recentDate = new Date(Date.now() - 10 * 60 * 1000);
+    await prisma.$executeRaw`
+      UPDATE conversation_documents
+      SET updated_at = ${recentDate}
+      WHERE id = ${document.id}
+    `;
+
+    await ingestConversationDocument(document.id, conversation.id);
+
+    const latest = await prisma.conversationDocument.findUnique({
+      where: { id: document.id },
+    });
+    expect(latest?.status).toBe('processing');
+    expect(latest?.errorMessage).toBe('ingest:active-holder');
+    expect(embedDocumentsMock).not.toHaveBeenCalled();
   });
 
   it('throws when CAS completion fails and fail CAS also misses', async () => {

@@ -72,6 +72,7 @@ const envSchema = z.object({
   RAG_TOP_K: z.coerce.number().int().positive().default(6),
   RAG_MIN_SCORE: z.coerce.number().default(0),
   RAG_CONTEXT_MAX_CHARS: z.coerce.number().int().positive().default(6000),
+  RAG_INGEST_LEASE_MS: z.coerce.number().int().positive().default(1800000),
 });
 
 type Env = z.infer<typeof envSchema>;

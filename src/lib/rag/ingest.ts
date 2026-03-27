@@ -5,6 +5,7 @@ import {
   getConversationDocumentById,
   replaceConversationDocumentChunks,
 } from '@/lib/chat/repositories/document-repo';
+import { env } from '@/lib/env';
 import { embedDocuments } from '@/lib/rag/embed';
 import { splitMarkdownToChunks } from '@/lib/rag/markdown';
 import {
@@ -24,14 +25,12 @@ type QdrantPointPayload = {
   version: number;
 };
 
-const INGEST_CLAIM_LEASE_MS = 2 * 60 * 1000;
-
 export async function ingestConversationDocument(
   documentId: string,
   conversationId: string,
 ): Promise<void> {
   const claimToken = `ingest:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-  const staleBefore = new Date(Date.now() - INGEST_CLAIM_LEASE_MS);
+  const staleBefore = new Date(Date.now() - env.RAG_INGEST_LEASE_MS);
   const claimedDocument = await claimConversationDocumentIngest(
     conversationId,
     documentId,
