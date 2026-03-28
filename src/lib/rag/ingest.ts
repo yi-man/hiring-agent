@@ -96,17 +96,16 @@ export async function ingestConversationDocument(
       })),
     });
 
-    await replaceConversationDocumentChunks(
-      document.id,
-      chunks.map((chunk) => ({
-        id: chunk.chunkId,
-        conversationId,
-        chunkIndex: chunk.chunkIndex,
-        content: chunk.content,
-        tokenEstimate: null,
-        qdrantPointId: chunk.qdrantPointId,
-      })),
-    );
+    const chunkRows = chunks.map((chunk) => ({
+      id: chunk.chunkId,
+      conversationId,
+      chunkIndex: chunk.chunkIndex,
+      content: chunk.content,
+      tokenEstimate: null,
+      qdrantPointId: chunk.qdrantPointId,
+    }));
+
+    await replaceConversationDocumentChunks(document.id, chunkRows);
 
     const completed = await completeConversationDocumentIngest(
       conversationId,

@@ -48,9 +48,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         topK: env.RAG_TOP_K,
       });
       retrievedContext = retrieval.contextText;
-    } catch {
-      // Retrieval is best-effort; continue with regular chat completion.
-      retrievedContext = '';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'RAG retrieval failed';
+      return NextResponse.json({ error: message, code: 'RAG_RETRIEVAL_FAILED' }, { status: 502 });
     }
 
     const { chunks, collect } = await streamChatReply(id, input, { retrievedContext });

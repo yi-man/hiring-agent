@@ -170,7 +170,7 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     expect(upsertPayload.points.length).toBe(chunks.length);
   }, 30000);
 
-  it('falls back to lexical chunks when embeddings fail', async () => {
+  it('marks document failed when embeddings fail', async () => {
     embedDocumentsMock.mockRejectedValueOnce(new Error('embedding down'));
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
@@ -194,19 +194,15 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
       },
     });
 
-    await expect(ingestConversationDocument(document.id, conversation.id)).resolves.toBeUndefined();
+    await expect(ingestConversationDocument(document.id, conversation.id)).rejects.toThrow(
+      /embedding down/,
+    );
 
     const latest = await prisma.conversationDocument.findUnique({
       where: { id: document.id },
     });
-    expect(latest?.status).toBe('ready');
-
-    const chunks = await prisma.conversationDocumentChunk.findMany({
-      where: { documentId: document.id },
-      orderBy: { chunkIndex: 'asc' },
-    });
-    expect(chunks.length).toBeGreaterThan(0);
-    expect(chunks.every((c) => c.qdrantPointId === null)).toBe(true);
+    expect(latest?.status).toBe('failed');
+    expect(String(latest?.errorMessage)).toContain('embedding down');
     expect(ensureCollectionMock).not.toHaveBeenCalled();
     expect(qdrantUpsertMock).not.toHaveBeenCalled();
   });
@@ -499,7 +495,7 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     );
   });
 
-  it('degrades and still streams when retrieval fails', async () => {
+  it('returns 502 when retrieval throws', async () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
@@ -513,12 +509,6 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
       },
     });
     retrieveConversationContextMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
-    streamChatReplyMock.mockResolvedValue({
-      chunks: (async function* () {
-        yield 'fallback response';
-      })(),
-      collect: async () => 'fallback response',
-    });
 
     const response = await postStreamMessage(
       {
@@ -527,11 +517,11 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
       { params: Promise.resolve({ id: conversation.id }) },
     );
 
-    const text = await readTextStream(response.body);
-    expect(text.length).toBeGreaterThan(0);
-    expect(streamChatReplyMock).toHaveBeenCalledWith(conversation.id, 'hello', {
-      retrievedContext: '',
-    });
+    expect(response.status).toBe(502);
+    const data = (await response.json()) as { error?: string; code?: string };
+    expect(data.code).toBe('RAG_RETRIEVAL_FAILED');
+    expect(String(data.error)).toContain('qdrant unavailable');
+    expect(streamChatReplyMock).not.toHaveBeenCalled();
   });
 });
 

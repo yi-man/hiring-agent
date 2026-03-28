@@ -125,4 +125,15 @@ describe('chat stream route', () => {
     expect(touchConversationMock).toHaveBeenCalledTimes(2);
     expect(streamChatReplyMock).toHaveBeenCalledWith('c1', 'hello?', { retrievedContext: '' });
   });
+
+  it('returns 502 when RAG retrieval fails', async () => {
+    retrieveConversationContextMock.mockRejectedValueOnce(new Error('embedding API timeout'));
+    const req = { json: async () => ({ content: 'hi' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.code).toBe('RAG_RETRIEVAL_FAILED');
+    expect(body.error).toContain('embedding API timeout');
+    expect(streamChatReplyMock).not.toHaveBeenCalled();
+  });
 });

@@ -514,4 +514,75 @@ describe('retrieveConversationContext', () => {
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]?.chunkId).toBe('chunk-small');
   });
+
+  it('returns empty context when Qdrant has no hits (no DB keyword fallback)', async () => {
+    const searchMock = jest.fn().mockResolvedValue([]);
+    const findManyMock = jest.fn();
+
+    jest.doMock('@/lib/env', () => ({
+      env: {
+        RAG_TOP_K: 6,
+        RAG_MIN_SCORE: 0.5,
+        RAG_CONTEXT_MAX_CHARS: 1000,
+      },
+    }));
+    jest.doMock('@/lib/rag/embed', () => ({
+      embedQuery: jest.fn().mockResolvedValue([0.1, 0.2]),
+    }));
+    jest.doMock('@/lib/rag/qdrant', () => ({
+      qdrantCollectionName: 'conversation_markdown_chunks',
+      getQdrantClient: () => ({
+        search: searchMock,
+      }),
+    }));
+    jest.doMock('@/lib/prisma', () => ({
+      prisma: {
+        conversationDocumentChunk: {
+          findMany: findManyMock,
+        },
+      },
+    }));
+
+    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
+    const result = await retrieveConversationContext({
+      conversationId: 'conv-1',
+      query: 'anything',
+      topK: 3,
+    });
+
+    expect(result.contextText).toBe('');
+    expect(result.matches).toEqual([]);
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates embedding API errors', async () => {
+    jest.doMock('@/lib/env', () => ({
+      env: {
+        RAG_TOP_K: 6,
+        RAG_MIN_SCORE: 0.5,
+        RAG_CONTEXT_MAX_CHARS: 1000,
+      },
+    }));
+    jest.doMock('@/lib/rag/embed', () => ({
+      embedQuery: jest.fn().mockRejectedValue(new Error('upstream embedding error')),
+    }));
+    jest.doMock('@/lib/rag/qdrant', () => ({
+      qdrantCollectionName: 'conversation_markdown_chunks',
+      getQdrantClient: () => ({
+        search: jest.fn(),
+      }),
+    }));
+    jest.doMock('@/lib/prisma', () => ({
+      prisma: {
+        conversationDocumentChunk: {
+          findMany: jest.fn(),
+        },
+      },
+    }));
+
+    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
+    await expect(
+      retrieveConversationContext({ conversationId: 'conv-1', query: 'q', topK: 3 }),
+    ).rejects.toThrow(/upstream embedding error/);
+  });
 });
