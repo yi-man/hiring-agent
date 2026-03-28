@@ -255,8 +255,11 @@ export function ChatUI() {
     setError(null);
     setIsUploadingDocument(true);
     try {
-      await uploadConversationDocument(activeConversationId, file);
+      const uploaded = await uploadConversationDocument(activeConversationId, file);
       const rows = await loadDocuments(activeConversationId);
+      if (uploaded.status === 'failed' && uploaded.errorMessage) {
+        setError(uploaded.errorMessage);
+      }
       if (rows.some((doc) => doc.status === 'processing')) {
         startDocumentPolling();
       }
@@ -413,7 +416,25 @@ export function ChatUI() {
                       <div key={doc.id} className="flex items-center justify-between gap-2 text-xs">
                         <span className="truncate">{doc.filename}</span>
                         <div className="flex items-center gap-2">
-                          <span>{doc.status}</span>
+                          <span
+                            className="shrink-0"
+                            title={
+                              doc.status === 'failed' && doc.errorMessage
+                                ? doc.errorMessage
+                                : undefined
+                            }
+                          >
+                            {doc.status}
+                            {doc.status === 'failed' && doc.errorMessage ? (
+                              <span className="text-danger ml-1 opacity-90">
+                                （
+                                {doc.errorMessage.length > 48
+                                  ? `${doc.errorMessage.slice(0, 48)}…`
+                                  : doc.errorMessage}
+                                ）
+                              </span>
+                            ) : null}
+                          </span>
                           <button
                             type="button"
                             className="underline"

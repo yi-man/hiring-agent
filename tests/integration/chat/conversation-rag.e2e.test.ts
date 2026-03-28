@@ -65,24 +65,6 @@ const hasDbEnv = Boolean(
 );
 const describeRagIngestIntegration = hasDbEnv || isCI ? describe : describe.skip;
 
-async function waitForDocumentStatus(
-  documentId: string,
-  expectedStatus: 'ready' | 'failed',
-  timeoutMs = 5000,
-): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const latest = await prisma.conversationDocument.findUnique({
-      where: { id: documentId },
-    });
-    if (latest?.status === expectedStatus) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`timed out waiting for document ${documentId} to become ${expectedStatus}`);
-}
-
 describeRagIngestIntegration('conversation markdown rag ingest integration', () => {
   beforeAll(async () => {
     requireIntegrationEnv('MYSQL_HOST');
@@ -110,7 +92,7 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     await prisma.user.deleteMany({ where: { id: 'rag-int-user' } });
   });
 
-  it('ingests uploaded markdown and transitions processing -> ready', async () => {
+  it('ingests uploaded markdown and returns ready after synchronous ingest', async () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
@@ -147,9 +129,7 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
 
     expect(res.status).toBe(201);
     const body = (await res.json()) as { document: { id: string; status: string } };
-    expect(body.document.status).toBe('processing');
-
-    await waitForDocumentStatus(body.document.id, 'ready');
+    expect(body.document.status).toBe('ready');
 
     const document = await prisma.conversationDocument.findUnique({
       where: { id: body.document.id },

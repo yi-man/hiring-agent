@@ -4,6 +4,7 @@ import { DEPENDENCY_OUTAGE_MESSAGE, isDependencyOutageError } from '@/lib/errors
 import {
   createConversationDocument,
   createConversationDocumentIndexJob,
+  getConversationDocumentById,
   listConversationDocuments,
   markConversationDocumentIndexJobFailed,
   markConversationDocumentIndexJobRunning,
@@ -115,7 +116,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       jobId: indexJob.id,
     });
 
-    return NextResponse.json({ document }, { status: 201 });
+    const latestDocument = await getConversationDocumentById(id, document.id);
+    return NextResponse.json({ document: latestDocument ?? document }, { status: 201 });
   } catch (error) {
     if (
       error instanceof UnauthorizedError ||

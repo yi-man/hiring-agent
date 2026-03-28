@@ -185,12 +185,24 @@ describe('conversation documents routes', () => {
         }) as FormDataEntryValue,
     };
 
+    getConversationDocumentByIdMock.mockResolvedValueOnce({
+      id: 'd1',
+      conversationId: 'c1',
+      filename: 'notes.md',
+      contentMarkdown: '# hello',
+      status: 'ready',
+      errorMessage: null,
+      version: 1,
+    });
+
     const res = await postDocument({ formData: async () => formData } as Request, {
       params: Promise.resolve({ id: 'c1' }),
     });
     const body = await res.json();
     expect(res.status).toBe(201);
     expect(body.document.id).toBe('d1');
+    expect(body.document.status).toBe('ready');
+    expect(getConversationDocumentByIdMock).toHaveBeenCalledWith('c1', 'd1');
     expect(createConversationDocumentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         conversationId: 'c1',
@@ -217,6 +229,15 @@ describe('conversation documents routes', () => {
       status: 'processing',
     });
     ingestConversationDocumentMock.mockRejectedValueOnce(new Error('ingest crash'));
+    getConversationDocumentByIdMock.mockResolvedValueOnce({
+      id: 'd1',
+      conversationId: 'c1',
+      filename: 'notes.md',
+      contentMarkdown: '# hello',
+      status: 'failed',
+      errorMessage: 'ingest crash',
+      version: 1,
+    });
     const formData = {
       get: () =>
         ({
@@ -229,8 +250,12 @@ describe('conversation documents routes', () => {
     const res = await postDocument({ formData: async () => formData } as Request, {
       params: Promise.resolve({ id: 'c1' }),
     });
+    const body = await res.json();
 
     expect(res.status).toBe(201);
+    expect(body.document.status).toBe('failed');
+    expect(String(body.document.errorMessage)).toContain('ingest crash');
+    expect(getConversationDocumentByIdMock).toHaveBeenCalledWith('c1', 'd1');
     expect(createConversationDocumentIndexJobMock).toHaveBeenCalledWith('d1');
     expect(markConversationDocumentIndexJobRunningMock).toHaveBeenCalledWith('job-1');
     expect(markConversationDocumentIndexJobSuccessMock).not.toHaveBeenCalled();
