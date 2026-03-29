@@ -23,17 +23,20 @@ jest.mock('@/components/ui', () => ({
     placeholder,
     onKeyDown,
     isDisabled,
+    classNames,
   }: {
     value: string;
     onValueChange?: (v: string) => void;
     placeholder?: string;
     onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
     isDisabled?: boolean;
+    classNames?: Record<string, string>;
   }) => (
     <input
       value={value}
       placeholder={placeholder}
       disabled={isDisabled}
+      data-class-wrapper={classNames?.inputWrapper}
       onChange={(e) => onValueChange?.(e.target.value)}
       onKeyDown={onKeyDown}
     />
@@ -124,7 +127,7 @@ describe('ChatUI', () => {
     streamConversationMessageMock.mockResolvedValue(makeStream(['你', '好']));
     render(<ChatUI />);
     await screen.findByText('one');
-    const input = screen.getByPlaceholderText('输入你的问题');
+    const input = screen.getByPlaceholderText('发消息…');
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     expect(await screen.findByText('hello')).toBeInTheDocument();
@@ -153,7 +156,7 @@ describe('ChatUI', () => {
     streamConversationMessageMock.mockResolvedValue(makeStream(['a']));
     render(<ChatUI />);
     await screen.findByText('one');
-    const input = screen.getByPlaceholderText('输入你的问题');
+    const input = screen.getByPlaceholderText('发消息…');
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('hello');
@@ -184,10 +187,29 @@ describe('ChatUI', () => {
       hasMore: false,
     });
     fetchConversationMessagesMock.mockResolvedValue([]);
-    fetchConversationDocumentsMock.mockResolvedValue([]);
+    fetchConversationDocumentsMock.mockResolvedValue([
+      {
+        id: 'd1',
+        conversationId: 'c1',
+        filename: 'notes.md',
+        contentMarkdown: '# Hello',
+        status: 'processing',
+        errorMessage: null,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]);
     uploadConversationDocumentMock.mockResolvedValue({
       id: 'd1',
+      conversationId: 'c1',
+      filename: 'notes.md',
+      contentMarkdown: '# Hello',
       status: 'processing',
+      errorMessage: null,
+      version: 1,
+      createdAt: '',
+      updatedAt: '',
     });
 
     render(<ChatUI />);
@@ -200,8 +222,7 @@ describe('ChatUI', () => {
     await waitFor(() =>
       expect(uploadConversationDocumentMock).toHaveBeenCalledWith('c1', expect.any(File)),
     );
-    expect(await screen.findByText(/上下文文档：/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '移除上传' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '移除上传' })).toBeInTheDocument();
   });
 
   it('removes upload via composer when thread is empty (calls delete API)', async () => {
@@ -213,11 +234,29 @@ describe('ChatUI', () => {
       hasMore: false,
     });
     fetchConversationMessagesMock.mockResolvedValue([]);
-    fetchConversationDocumentsMock.mockResolvedValue([]);
+    fetchConversationDocumentsMock.mockResolvedValue([
+      {
+        id: 'd1',
+        conversationId: 'c1',
+        filename: 'notes.md',
+        contentMarkdown: '# Hello',
+        status: 'ready',
+        errorMessage: null,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]);
     uploadConversationDocumentMock.mockResolvedValue({
       id: 'd1',
+      conversationId: 'c1',
       filename: 'notes.md',
+      contentMarkdown: '# Hello',
       status: 'ready',
+      errorMessage: null,
+      version: 1,
+      createdAt: '',
+      updatedAt: '',
     });
     deleteConversationDocumentMock.mockResolvedValue(undefined);
 
@@ -229,7 +268,7 @@ describe('ChatUI', () => {
     fireEvent.change(uploadInput, { target: { files: [file] } });
 
     await waitFor(() => expect(uploadConversationDocumentMock).toHaveBeenCalled());
-    await screen.findByText(/上下文文档：/);
+    expect(await screen.findByRole('button', { name: '移除上传' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '移除上传' }));
     await waitFor(() => expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1'));
@@ -248,22 +287,35 @@ describe('ChatUI', () => {
       { id: 'm2', role: 'assistant', content: 'hello' },
     ]);
     fetchConversationDocumentsMock.mockResolvedValue([
-      { id: 'd1', filename: 'notes.md', status: 'ready' },
+      {
+        id: 'd1',
+        conversationId: 'c1',
+        filename: 'notes.md',
+        contentMarkdown: 'x',
+        status: 'ready',
+        errorMessage: null,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
+      },
     ]);
     streamConversationMessageMock.mockResolvedValue(makeStream(['a']));
 
     render(<ChatUI />);
     await screen.findByText('one');
-    await screen.findByText(/上下文文档：notes\.md/);
+    expect(screen.queryByRole('button', { name: '不作为上下文' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '将 notes.md 作为下文上下文' }));
+    expect(await screen.findByRole('button', { name: '不作为上下文' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '不作为上下文' }));
     expect(deleteConversationDocumentMock).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(screen.queryByText(/上下文文档：notes\.md/)).not.toBeInTheDocument(),
+      expect(screen.queryByRole('button', { name: '不作为上下文' })).not.toBeInTheDocument(),
     );
 
     fireEvent.click(screen.getByRole('button', { name: '将 notes.md 作为下文上下文' }));
-    expect(await screen.findByText(/上下文文档：notes\.md/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '不作为上下文' })).toBeInTheDocument();
   });
 
   it('renders document status and supports refresh/delete actions', async () => {
@@ -278,18 +330,36 @@ describe('ChatUI', () => {
     fetchConversationDocumentsMock.mockResolvedValue([
       {
         id: 'd1',
+        conversationId: 'c1',
         filename: 'notes.md',
+        contentMarkdown: '',
         status: 'processing',
+        errorMessage: null,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
       },
       {
         id: 'd2',
+        conversationId: 'c1',
         filename: 'done.md',
+        contentMarkdown: '',
         status: 'ready',
+        errorMessage: null,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
       },
       {
         id: 'd3',
+        conversationId: 'c1',
         filename: 'bad.md',
+        contentMarkdown: '',
         status: 'failed',
+        errorMessage: null,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
       },
     ]);
     deleteConversationDocumentMock.mockResolvedValue(undefined);
@@ -301,7 +371,7 @@ describe('ChatUI', () => {
     expect(screen.getByText('ready')).toBeInTheDocument();
     expect(screen.getByText('failed')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '刷新文档' }));
+    fireEvent.click(screen.getByRole('button', { name: '刷新文档状态' }));
     await waitFor(() => expect(fetchConversationDocumentsMock).toHaveBeenCalledTimes(2));
 
     fireEvent.click(screen.getByRole('button', { name: '删除 done.md' }));
@@ -323,16 +393,28 @@ describe('ChatUI', () => {
         .mockResolvedValueOnce([
           {
             id: 'd1',
+            conversationId: 'c1',
             filename: 'notes.md',
+            contentMarkdown: '',
             status: 'processing',
+            errorMessage: null,
+            version: 1,
+            createdAt: '',
+            updatedAt: '',
           },
         ])
         .mockRejectedValueOnce(new Error('temporary failure'))
         .mockResolvedValueOnce([
           {
             id: 'd1',
+            conversationId: 'c1',
             filename: 'notes.md',
+            contentMarkdown: '',
             status: 'processing',
+            errorMessage: null,
+            version: 1,
+            createdAt: '',
+            updatedAt: '',
           },
         ]);
 
@@ -377,8 +459,14 @@ describe('ChatUI', () => {
       return Promise.resolve([
         {
           id: 'd2',
+          conversationId: 'c2',
           filename: 'two.md',
+          contentMarkdown: '',
           status: 'ready',
+          errorMessage: null,
+          version: 1,
+          createdAt: '',
+          updatedAt: '',
         },
       ]);
     });
@@ -393,8 +481,14 @@ describe('ChatUI', () => {
     releaseC1?.([
       {
         id: 'd1',
+        conversationId: 'c1',
         filename: 'one.md',
+        contentMarkdown: '',
         status: 'ready',
+        errorMessage: null,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
       },
     ]);
 
@@ -427,16 +521,28 @@ describe('ChatUI', () => {
         .mockResolvedValueOnce([
           {
             id: 'd1',
+            conversationId: 'c1',
             filename: 'one.md',
+            contentMarkdown: '',
             status: 'processing',
+            errorMessage: null,
+            version: 1,
+            createdAt: '',
+            updatedAt: '',
           },
         ])
         .mockImplementationOnce(() => inFlightPollPromise)
         .mockResolvedValueOnce([
           {
             id: 'd2',
+            conversationId: 'c2',
             filename: 'two.md',
+            contentMarkdown: '',
             status: 'ready',
+            errorMessage: null,
+            version: 1,
+            createdAt: '',
+            updatedAt: '',
           },
         ]);
 
@@ -458,8 +564,14 @@ describe('ChatUI', () => {
         resolveInFlightPoll?.([
           {
             id: 'd1',
+            conversationId: 'c1',
             filename: 'one.md',
+            contentMarkdown: '',
             status: 'processing',
+            errorMessage: null,
+            version: 1,
+            createdAt: '',
+            updatedAt: '',
           },
         ]);
         await Promise.resolve();

@@ -130,12 +130,14 @@ describe('chat stream route', () => {
       content: 'hello',
     });
     expect(touchConversationMock).toHaveBeenCalledTimes(2);
+    expect(retrieveConversationContextMock).not.toHaveBeenCalled();
     expect(streamChatReplyMock).toHaveBeenCalledWith('c1', 'hello?', { retrievedContext: '' });
   });
 
-  it('returns 502 when RAG retrieval fails', async () => {
+  it('returns 502 when RAG retrieval fails for a scoped ready document', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'ready' });
     retrieveConversationContextMock.mockRejectedValueOnce(new Error('embedding API timeout'));
-    const req = { json: async () => ({ content: 'hi' }) } as Request;
+    const req = { json: async () => ({ content: 'hi', documentId: 'd1' }) } as Request;
     const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
     expect(res.status).toBe(502);
     const body = await res.json();
@@ -171,13 +173,7 @@ describe('chat stream route', () => {
       content: 'hi',
       documentId: null,
     });
-    expect(retrieveConversationContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversationId: 'c1',
-        query: 'hi',
-        documentId: null,
-      }),
-    );
+    expect(retrieveConversationContextMock).not.toHaveBeenCalled();
   });
 
   it('scopes retrieval to document when documentId is valid and ready', async () => {

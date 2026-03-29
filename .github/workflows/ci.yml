@@ -40,6 +40,43 @@ jobs:
   test:
     name: Jest Test
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: hiring
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: '3306'
+      MYSQL_USER: root
+      MYSQL_PASS: root
+      MYSQL_DATABASE: hiring
+      REDIS_URL: redis://redis:6379
+      NEXTAUTH_SECRET: ci-nextauth-secret-not-for-production
+      NEXTAUTH_URL: http://localhost:3000
+      # Chat integration calls a real LLM; add OPENAI_API_KEY in repo Actions secrets (fork PRs cannot use it).
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: https://api.openai.com/v1
+      OPENAI_MODEL: gpt-4o-mini
+      OPENAI_EMBEDDING_MODEL: text-embedding-3-small
+      OPENAI_EMBEDDING_USE_MULTIMODAL: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -49,6 +86,6 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Run unit/API Jest suite with coverage
-        run: pnpm exec jest --coverage --testPathIgnorePatterns tests/integration
+      - name: Run Jest (unit + integration) with coverage
+        run: pnpm exec jest --ci --coverage --runInBand --coverageReporters=text-summary
 

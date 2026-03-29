@@ -55,17 +55,7 @@ import { POST as postStreamMessage } from '@/app/api/conversations/[id]/messages
 import { ingestConversationDocument } from '@/lib/rag/ingest';
 import { prisma } from '@/lib/prisma';
 
-const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const hasDbEnv = Boolean(
-  process.env.MYSQL_HOST &&
-  process.env.MYSQL_PORT &&
-  process.env.MYSQL_USER &&
-  process.env.MYSQL_PASS &&
-  process.env.MYSQL_DATABASE,
-);
-const describeRagIngestIntegration = hasDbEnv || isCI ? describe : describe.skip;
-
-describeRagIngestIntegration('conversation markdown rag ingest integration', () => {
+describe('conversation markdown rag ingest integration', () => {
   beforeAll(async () => {
     requireIntegrationEnv('MYSQL_HOST');
     requireIntegrationEnv('MYSQL_PORT');
@@ -434,6 +424,14 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
         lastActiveAt: new Date(),
       },
     });
+    const document = await prisma.conversationDocument.create({
+      data: {
+        conversationId: conversation.id,
+        filename: 'handbook.md',
+        contentMarkdown: '# PTO\n20 days per handbook.',
+        status: 'ready',
+      },
+    });
     retrieveConversationContextMock.mockResolvedValue({
       contextText: 'PTO is 20 days per handbook.',
       matches: [],
@@ -454,7 +452,10 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
 
     const response = await postStreamMessage(
       {
-        json: async () => ({ content: 'How many PTO days?' }),
+        json: async () => ({
+          content: 'How many PTO days?',
+          documentId: document.id,
+        }),
       } as Request,
       { params: Promise.resolve({ id: conversation.id }) },
     );
@@ -464,6 +465,7 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
     expect(retrieveConversationContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         conversationId: conversation.id,
+        documentId: document.id,
       }),
     );
     expect(streamChatReplyMock).toHaveBeenCalledWith(
@@ -488,11 +490,19 @@ describeRagIngestIntegration('conversation markdown rag ingest integration', () 
         lastActiveAt: new Date(),
       },
     });
+    const document = await prisma.conversationDocument.create({
+      data: {
+        conversationId: conversation.id,
+        filename: 'x.md',
+        contentMarkdown: 'x',
+        status: 'ready',
+      },
+    });
     retrieveConversationContextMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
 
     const response = await postStreamMessage(
       {
-        json: async () => ({ content: 'hello' }),
+        json: async () => ({ content: 'hello', documentId: document.id }),
       } as Request,
       { params: Promise.resolve({ id: conversation.id }) },
     );

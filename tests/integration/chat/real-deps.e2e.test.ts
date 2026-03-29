@@ -17,20 +17,7 @@ import { streamChatReply } from '@/lib/chat/chain';
 import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 
-const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const hasDbEnv = Boolean(
-  process.env.MYSQL_HOST &&
-  process.env.MYSQL_PORT &&
-  process.env.MYSQL_USER &&
-  process.env.MYSQL_PASS &&
-  process.env.MYSQL_DATABASE,
-);
-const hasChatIntegrationEnv = Boolean(
-  process.env.OPENAI_API_KEY && process.env.REDIS_URL && hasDbEnv,
-);
-const describeChatIntegration = hasChatIntegrationEnv || isCI ? describe : describe.skip;
-
-describeChatIntegration('chat integration with real deps', () => {
+describe('chat integration with real deps', () => {
   beforeAll(async () => {
     requireIntegrationEnv('OPENAI_API_KEY');
     requireIntegrationEnv('MYSQL_HOST');

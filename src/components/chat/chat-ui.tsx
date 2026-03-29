@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUp, FileCode, Paperclip, RefreshCw, X } from 'lucide-react';
 import { Button, Card, CardBody, Input } from '@/components/ui';
 import {
   createConversationApi,
@@ -46,6 +47,7 @@ export function ChatUI() {
   const documentPollTimerRef = useRef<number | null>(null);
   const documentPollSessionIdRef = useRef(0);
   const latestDocumentRequestIdRef = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -163,8 +165,6 @@ export function ChatUI() {
         documentId: m.documentId ?? null,
       }));
     setMessages(filtered);
-    const lastUserWithDoc = [...filtered].reverse().find((m) => m.role === 'user' && m.documentId);
-    setFocusedDocumentId(lastUserWithDoc?.documentId ?? null);
   };
 
   const loadDocuments = async (conversationId: string, options?: { silent?: boolean }) => {
@@ -340,6 +340,12 @@ export function ChatUI() {
     ? documents.find((d) => d.id === focusedDocumentId)
     : undefined;
   const focusedDocumentLabel = focusedDocumentRow?.filename;
+  const hasProcessingDocuments = documents.some((d) => d.status === 'processing');
+  const markdownByteLabel = (md: string) => {
+    const n = new TextEncoder().encode(md).length;
+    if (n < 1024) return `${n} B`;
+    return `${Math.round(n / 1024)} KB`;
+  };
 
   return (
     <div className="mx-auto grid w-full grid-cols-1 gap-4 pb-12 md:h-[70vh] md:grid-cols-[240px_minmax(0,1fr)]">
@@ -447,41 +453,41 @@ export function ChatUI() {
 
           <div className="shrink-0 pt-3">
             {error && <p className="text-danger mb-2 text-sm">{error}</p>}
-            {activeConversation && (
-              <div className="mb-3 space-y-2 rounded-lg border border-dashed p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium">Markdown 文档</p>
-                  <Button
-                    onClick={() => void onRefreshDocuments()}
-                    isDisabled={isRefreshingDocuments}
-                  >
-                    刷新文档
-                  </Button>
-                </div>
-                <label className="text-xs" htmlFor="conversation-md-upload">
-                  上传 Markdown
-                </label>
-                <input
-                  id="conversation-md-upload"
-                  type="file"
-                  accept=".md,text/markdown"
-                  disabled={isUploadingDocument}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0] ?? null;
-                    void onUploadDocument(file);
-                    e.currentTarget.value = '';
-                  }}
-                />
-                <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
-                  {documents.length === 0 ? (
-                    <p className="text-xs opacity-70">暂无文档</p>
-                  ) : (
-                    documents.map((doc) => (
-                      <div key={doc.id} className="flex items-center justify-between gap-2 text-xs">
-                        <span className="truncate">{doc.filename}</span>
-                        <div className="flex items-center gap-2">
+            {activeConversation ? (
+              <div className="border-primary/25 bg-background/90 rounded-2xl border p-3 shadow-sm">
+                {hasProcessingDocuments ? (
+                  <p className="mb-2 flex flex-wrap items-center gap-2 text-xs text-amber-800 dark:text-amber-200">
+                    <span>有文档正在索引…</span>
+                    <button
+                      type="button"
+                      className="text-primary underline-offset-2 hover:underline"
+                      disabled={isRefreshingDocuments}
+                      onClick={() => void onRefreshDocuments()}
+                    >
+                      刷新状态
+                    </button>
+                  </p>
+                ) : null}
+
+                {messages.length === 0 && documents.length > 0 ? (
+                  <div className="border-border/60 mb-2 max-h-28 space-y-1.5 overflow-y-auto rounded-lg border border-dashed px-2 py-2">
+                    <p className="text-secondary-foreground text-[11px] font-medium">
+                      本会话文档（未发送消息前可删除）
+                    </p>
+                    {documents.map((doc) => (
+                      <div
+                        key={doc.id}
+                        className="text-secondary-foreground flex items-center justify-between gap-2 text-xs"
+                      >
+                        <button
+                          type="button"
+                          className="text-foreground min-w-0 truncate text-left underline-offset-2 hover:underline"
+                          onClick={() => setFocusedDocumentId(doc.id)}
+                        >
+                          {doc.filename}
+                        </button>
+                        <div className="flex shrink-0 items-center gap-2">
                           <span
-                            className="shrink-0"
                             title={
                               doc.status === 'failed' && doc.errorMessage
                                 ? doc.errorMessage
@@ -490,10 +496,10 @@ export function ChatUI() {
                           >
                             {doc.status}
                             {doc.status === 'failed' && doc.errorMessage ? (
-                              <span className="text-danger ml-1 opacity-90">
+                              <span className="text-danger ml-1">
                                 （
-                                {doc.errorMessage.length > 48
-                                  ? `${doc.errorMessage.slice(0, 48)}…`
+                                {doc.errorMessage.length > 40
+                                  ? `${doc.errorMessage.slice(0, 40)}…`
                                   : doc.errorMessage}
                                 ）
                               </span>
@@ -509,52 +515,119 @@ export function ChatUI() {
                           </button>
                         </div>
                       </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-            {activeConversation && focusedDocumentId ? (
-              <div className="bg-secondary/40 mb-2 space-y-1 rounded-lg border px-3 py-2 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate">上下文文档：{focusedDocumentLabel ?? '文档'}</span>
+                    ))}
+                  </div>
+                ) : null}
+
+                {focusedDocumentId ? (
+                  <div className="bg-secondary/50 mb-2 flex items-start gap-2 rounded-xl px-3 py-2.5">
+                    <FileCode
+                      className="mt-0.5 size-9 shrink-0 text-emerald-600 dark:text-emerald-400"
+                      aria-hidden
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm leading-tight font-medium">
+                        {focusedDocumentLabel ?? '文档'}
+                      </p>
+                      {focusedDocumentRow ? (
+                        <>
+                          <p className="text-secondary-foreground mt-0.5 text-xs">
+                            Markdown · {markdownByteLabel(focusedDocumentRow.contentMarkdown)}
+                          </p>
+                          {focusedDocumentRow.status !== 'ready' ? (
+                            <p className="text-secondary-foreground mt-1 text-[11px] leading-snug opacity-90">
+                              索引未完成，发送时不会按该文档检索。
+                            </p>
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="text-secondary-foreground mt-0.5 text-xs opacity-80">
+                          正在同步文档信息…
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="text-secondary-foreground hover:text-foreground mt-0.5 shrink-0 rounded-full p-1"
+                      aria-label={messages.length === 0 ? '移除上传' : '不作为上下文'}
+                      onClick={() => void dismissComposerDocument()}
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                ) : null}
+
+                <Input
+                  value={input}
+                  onValueChange={setInput}
+                  placeholder="发消息…"
+                  variant="bordered"
+                  classNames={{
+                    inputWrapper:
+                      'border-0 bg-transparent shadow-none px-0 min-h-10 data-[hover=true]:bg-transparent group-data-[focus=true]:bg-transparent',
+                    input: 'text-sm',
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void onSend();
+                    }
+                  }}
+                  isDisabled={isLoading}
+                />
+
+                <div className="border-border/50 mt-1 flex items-center gap-2 border-t pt-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".md,text/markdown"
+                    className="sr-only"
+                    tabIndex={-1}
+                    aria-label="上传 Markdown"
+                    disabled={isUploadingDocument}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      void onUploadDocument(file);
+                      e.currentTarget.value = '';
+                    }}
+                  />
                   <button
                     type="button"
-                    className="text-secondary-foreground shrink-0 underline"
-                    onClick={() => void dismissComposerDocument()}
+                    className="text-secondary-foreground hover:text-foreground rounded-lg p-2"
+                    aria-label="打开文件选择"
+                    disabled={isUploadingDocument}
+                    onClick={() => fileInputRef.current?.click()}
                   >
-                    {messages.length === 0 ? '移除上传' : '不作为上下文'}
+                    <Paperclip className="size-5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="text-secondary-foreground hover:text-foreground rounded-lg p-2"
+                    aria-label="刷新文档状态"
+                    disabled={isRefreshingDocuments}
+                    onClick={() => void onRefreshDocuments()}
+                  >
+                    <RefreshCw
+                      className={`size-4 ${isRefreshingDocuments ? 'animate-spin' : ''}`}
+                    />
+                  </button>
+                  <div className="flex-1" />
+                  <button
+                    type="button"
+                    className="bg-primary text-primary-foreground inline-flex size-10 shrink-0 items-center justify-center rounded-full hover:opacity-90 disabled:opacity-40"
+                    aria-label="发送"
+                    disabled={isLoading || !input.trim()}
+                    onClick={() => void onSend()}
+                  >
+                    {isLoading ? (
+                      <span className="bg-primary-foreground/30 size-5 animate-pulse rounded-sm" />
+                    ) : (
+                      <ArrowUp className="size-5" strokeWidth={2.25} />
+                    )}
                   </button>
                 </div>
-                {focusedDocumentRow && focusedDocumentRow.status !== 'ready' ? (
-                  <p className="text-secondary-foreground opacity-80">
-                    索引未完成，本条消息暂按全会话检索；就绪后发送将只检索该文档。
-                  </p>
-                ) : null}
               </div>
             ) : null}
-            <div className="flex gap-3">
-              <Input
-                value={input}
-                onValueChange={setInput}
-                placeholder="输入你的问题"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void onSend();
-                  }
-                }}
-                isDisabled={isLoading || !activeConversation}
-              />
-              <Button
-                color="primary"
-                onClick={() => void onSend()}
-                isLoading={isLoading}
-                isDisabled={!activeConversation}
-              >
-                发送
-              </Button>
-            </div>
           </div>
         </CardBody>
       </Card>

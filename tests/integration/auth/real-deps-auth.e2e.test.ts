@@ -49,20 +49,7 @@ import { POST as postConversation } from '@/app/api/conversations/route';
 import { GET as getMessages } from '@/app/api/conversations/[id]/messages/route';
 import { createUserWithSessionFixture } from './test-fixtures';
 
-const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const hasDbEnv = Boolean(
-  process.env.MYSQL_HOST &&
-  process.env.MYSQL_PORT &&
-  process.env.MYSQL_USER &&
-  process.env.MYSQL_PASS &&
-  process.env.MYSQL_DATABASE,
-);
-const hasAuthIntegrationEnv = Boolean(
-  hasDbEnv && process.env.REDIS_URL && process.env.NEXTAUTH_SECRET,
-);
-const describeAuthIntegration = hasAuthIntegrationEnv || isCI ? describe : describe.skip;
-
-describeAuthIntegration('auth integration with real mysql and redis', () => {
+describe('auth integration with real mysql and redis', () => {
   beforeAll(async () => {
     requireIntegrationEnv('MYSQL_HOST');
     requireIntegrationEnv('MYSQL_PORT');

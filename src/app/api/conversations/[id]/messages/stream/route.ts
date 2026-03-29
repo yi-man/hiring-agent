@@ -57,17 +57,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     await touchConversation(id);
 
     let retrievedContext = '';
-    try {
-      const retrieval = await retrieveConversationContext({
-        conversationId: id,
-        query: input,
-        topK: env.RAG_TOP_K,
-        documentId: ragDocumentId,
-      });
-      retrievedContext = retrieval.contextText;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'RAG retrieval failed';
-      return NextResponse.json({ error: message, code: 'RAG_RETRIEVAL_FAILED' }, { status: 502 });
+    if (ragDocumentId) {
+      try {
+        const retrieval = await retrieveConversationContext({
+          conversationId: id,
+          query: input,
+          topK: env.RAG_TOP_K,
+          documentId: ragDocumentId,
+        });
+        retrievedContext = retrieval.contextText;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'RAG retrieval failed';
+        return NextResponse.json({ error: message, code: 'RAG_RETRIEVAL_FAILED' }, { status: 502 });
+      }
     }
 
     const { chunks, collect } = await streamChatReply(id, input, { retrievedContext });

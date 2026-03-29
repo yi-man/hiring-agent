@@ -85,11 +85,11 @@ test.describe('Chat: new conversation, upload markdown, send message (real strea
       await page.getByRole('button', { name: '新建会话' }).click();
 
       const sampleMd = path.join(process.cwd(), 'tests/e2e-playwright/fixtures', 'sample-chat.md');
-      await page.locator('#conversation-md-upload').setInputFiles(sampleMd);
+      await page.getByLabel('上传 Markdown').setInputFiles(sampleMd);
 
       await expect(page.getByText('sample-chat.md').first()).toBeVisible({ timeout: 120_000 });
 
-      await page.getByPlaceholder('输入你的问题').fill(userPrompt);
+      await page.getByPlaceholder('发消息…').fill(userPrompt);
 
       const streamPromise = page.waitForResponse(
         (r) =>
