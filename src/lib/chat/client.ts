@@ -73,8 +73,19 @@ export async function streamConversationMessage(
     body: JSON.stringify(payload),
   });
   if (!res.ok || !res.body) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || 'Chat request failed');
+    const text = await res.text().catch(() => '');
+    let message = 'Chat request failed';
+    try {
+      const data = JSON.parse(text) as { error?: string };
+      if (typeof data.error === 'string' && data.error.trim()) {
+        message = data.error;
+      }
+    } catch {
+      if (text.trim()) {
+        message = text.trim().slice(0, 500);
+      }
+    }
+    throw new Error(message);
   }
   return res.body;
 }

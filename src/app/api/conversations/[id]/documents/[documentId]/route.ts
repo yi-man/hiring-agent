@@ -83,11 +83,9 @@ export async function DELETE(
     try {
       await deleteDocumentPoints({ conversationId: id, documentId });
     } catch (error) {
-      const details = error instanceof Error ? error.message : 'unknown vector cleanup error';
-      return NextResponse.json(
-        { error: `vector cleanup failed; document was not deleted: ${details}` },
-        { status: 502 },
-      );
+      // Qdrant 不可用时仍删除 MySQL：列表与 chunk 正文消失，检索无法拼出上下文；
+      // 若向量点残留，Qdrant 可能仍命中但 hydrate 阶段找不到 chunk，行为等同不可检索。
+      console.warn('conversation document delete: qdrant cleanup failed', error);
     }
     const deleted = await deleteConversationDocument(id, documentId);
     if (!deleted) {

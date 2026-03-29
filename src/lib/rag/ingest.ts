@@ -25,6 +25,49 @@ type QdrantPointPayload = {
   version: number;
 };
 
+const CONCURRENT_INGEST_MAX_WAIT_MS = 90_000;
+const CONCURRENT_INGEST_POLL_MS = 400;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 与 claimConversationDocumentIngest 写入的 lease 格式一致：`ingest:<Date.now()>:<random hex>` */
+function looksLikeIngestClaimLease(errorMessage: string | null): boolean {
+  if (!errorMessage || !errorMessage.startsWith('ingest:')) {
+    return false;
+  }
+  const parts = errorMessage.split(':');
+  return parts.length >= 3 && /^\d+$/.test(parts[1] ?? '');
+}
+
+/**
+ * 未拿到 claim 时：可能另有 ingest 正在写同一文档。轮询直到 ready/failed，避免静默 return 导致
+ * enqueue 误标 job success、文档长期 processing。
+ */
+async function awaitConcurrentIngestTerminal(
+  conversationId: string,
+  documentId: string,
+): Promise<void> {
+  const deadline = Date.now() + CONCURRENT_INGEST_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const doc = await getConversationDocumentById(conversationId, documentId);
+    if (!doc) {
+      throw new Error('conversation document not found');
+    }
+    if (doc.status === 'ready') {
+      return;
+    }
+    if (doc.status === 'failed') {
+      throw new Error(doc.errorMessage ?? 'document ingest failed');
+    }
+    await sleep(CONCURRENT_INGEST_POLL_MS);
+  }
+  throw new Error(
+    'document ingest timed out while waiting for indexer (still processing — check embeddings API, Qdrant, and DB)',
+  );
+}
+
 export async function ingestConversationDocument(
   documentId: string,
   conversationId: string,
@@ -38,6 +81,19 @@ export async function ingestConversationDocument(
     staleBefore,
   );
   if (!claimedDocument) {
+    const snapshot = await getConversationDocumentById(conversationId, documentId);
+    if (!snapshot) {
+      throw new Error('conversation document not found');
+    }
+    if (snapshot.status === 'ready') {
+      return;
+    }
+    if (snapshot.status === 'failed') {
+      throw new Error(snapshot.errorMessage ?? 'document ingest failed');
+    }
+    if (snapshot.status === 'processing' && looksLikeIngestClaimLease(snapshot.errorMessage)) {
+      await awaitConcurrentIngestTerminal(conversationId, documentId);
+    }
     return;
   }
 

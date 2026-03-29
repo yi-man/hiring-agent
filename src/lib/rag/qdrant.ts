@@ -92,19 +92,26 @@ export async function deleteDocumentPoints(params: {
   documentId: string;
 }): Promise<void> {
   const client = getQdrantClient();
-  await client.delete(qdrantCollectionName, {
-    wait: true,
-    filter: {
-      must: [
-        {
-          key: 'conversationId',
-          match: { value: params.conversationId },
-        },
-        {
-          key: 'documentId',
-          match: { value: params.documentId },
-        },
-      ],
-    },
-  });
+  try {
+    await client.delete(qdrantCollectionName, {
+      wait: true,
+      filter: {
+        must: [
+          {
+            key: 'conversationId',
+            match: { value: params.conversationId },
+          },
+          {
+            key: 'documentId',
+            match: { value: params.documentId },
+          },
+        ],
+      },
+    });
+  } catch (error) {
+    if (isCollectionNotFoundError(error)) {
+      return;
+    }
+    throw error;
+  }
 }

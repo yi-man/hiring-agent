@@ -117,7 +117,20 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     });
 
     const latestDocument = await getConversationDocumentById(id, document.id);
-    return NextResponse.json({ document: latestDocument ?? document }, { status: 201 });
+    if (!latestDocument) {
+      return NextResponse.json({ error: 'document record missing after upload' }, { status: 500 });
+    }
+    if (latestDocument.status === 'processing') {
+      return NextResponse.json(
+        {
+          error:
+            '文档仍在索引中。请稍后点击「刷新文档」，若长时间不变请重新上传或检查嵌入接口与 Qdrant。',
+          document: latestDocument,
+        },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ document: latestDocument }, { status: 201 });
   } catch (error) {
     if (
       error instanceof UnauthorizedError ||

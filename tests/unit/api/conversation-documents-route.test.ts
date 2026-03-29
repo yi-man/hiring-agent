@@ -218,6 +218,45 @@ describe('conversation documents routes', () => {
     expect(markConversationDocumentIndexJobFailedMock).not.toHaveBeenCalled();
   });
 
+  it('returns 409 when document is still processing after ingest completes', async () => {
+    requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
+    conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });
+    createConversationDocumentMock.mockResolvedValueOnce({
+      id: 'd1',
+      conversationId: 'c1',
+      filename: 'notes.md',
+      contentMarkdown: '# hello',
+      status: 'processing',
+    });
+    const formData = {
+      get: () =>
+        ({
+          name: 'notes.md',
+          size: 7,
+          text: async () => '# hello',
+        }) as FormDataEntryValue,
+    };
+
+    getConversationDocumentByIdMock.mockResolvedValueOnce({
+      id: 'd1',
+      conversationId: 'c1',
+      filename: 'notes.md',
+      contentMarkdown: '# hello',
+      status: 'processing',
+      errorMessage: null,
+      version: 1,
+    });
+
+    const res = await postDocument({ formData: async () => formData } as Request, {
+      params: Promise.resolve({ id: 'c1' }),
+    });
+    const body = (await res.json()) as { error?: string; document?: { status: string } };
+
+    expect(res.status).toBe(409);
+    expect(body.document?.status).toBe('processing');
+    expect(String(body.error)).toContain('索引');
+  });
+
   it('marks index job failed when ingest fails', async () => {
     requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
     conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });

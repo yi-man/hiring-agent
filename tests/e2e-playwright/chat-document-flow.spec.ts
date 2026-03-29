@@ -46,16 +46,18 @@ async function cleanupSeededUser(userId: string) {
   await prisma.user.deleteMany({ where: { id: userId } });
 }
 
-test.describe('Chat: new conversation, upload markdown, send message', () => {
+test.describe('Chat: new conversation, upload markdown, send message (real stream)', () => {
   test.beforeEach(async ({ context }) => {
     await context.clearCookies();
+    test.skip(!HAS_DB_ENV, 'Requires MYSQL_* in env (see .env.local).');
+    test.skip(
+      !process.env.OPENAI_API_KEY?.trim(),
+      'Requires OPENAI_API_KEY in .env.local — same stack as local dev (no stream mock).',
+    );
   });
 
-  test('completes flow without client error (stream mocked)', async ({
-    context,
-    page,
-  }, testInfo) => {
-    test.skip(!HAS_DB_ENV, 'Requires MYSQL_* in env (see .env.local).');
+  test('upload then chat hits real LLM and RAG stack', async ({ context, page }, testInfo) => {
+    test.setTimeout(900_000);
 
     const seeded = await seedSessionToken();
 
@@ -74,20 +76,10 @@ test.describe('Chat: new conversation, upload markdown, send message', () => {
       },
     ]);
 
-    await page.route('**/api/conversations/*/messages/stream', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.continue();
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        body: 'E2E mock assistant reply',
-      });
-    });
+    const userPrompt = '用一两句话概括上文 Markdown 里 Sample 一节在说什么。';
 
     try {
-      await page.goto('/chat');
+      await page.goto('/chat', { waitUntil: 'domcontentloaded', timeout: 300_000 });
       await expect(page.getByRole('button', { name: '新建会话' })).toBeVisible();
 
       await page.getByRole('button', { name: '新建会话' }).click();
@@ -95,14 +87,39 @@ test.describe('Chat: new conversation, upload markdown, send message', () => {
       const sampleMd = path.join(process.cwd(), 'tests/e2e-playwright/fixtures', 'sample-chat.md');
       await page.locator('#conversation-md-upload').setInputFiles(sampleMd);
 
-      await expect(page.getByText('sample-chat.md').first()).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByText('sample-chat.md').first()).toBeVisible({ timeout: 120_000 });
 
-      await page.getByPlaceholder('输入你的问题').fill('你好，请确认链路');
+      await page.getByPlaceholder('输入你的问题').fill(userPrompt);
+
+      const streamPromise = page.waitForResponse(
+        (r) =>
+          r.url().includes('/api/conversations/') &&
+          r.url().includes('/messages/stream') &&
+          r.request().method() === 'POST',
+        { timeout: 600_000 },
+      );
+
       await page.getByRole('button', { name: '发送' }).click();
 
-      await expect(page.getByText('E2E mock assistant reply')).toBeVisible({ timeout: 30_000 });
+      const streamResp = await streamPromise;
+      expect(
+        streamResp.ok(),
+        `stream failed: HTTP ${streamResp.status()} ${(await streamResp.text().catch(() => '')).slice(0, 500)}`,
+      ).toBeTruthy();
+
+      await expect(page.getByRole('button', { name: '发送' })).toBeEnabled({ timeout: 120_000 });
+
       await expect(page.getByText('请求失败')).toHaveCount(0);
       await expect(page.getByText('document is not ready')).toHaveCount(0);
+
+      const assistantBubbles = page.locator(
+        'div.rounded-xl.bg-secondary.text-secondary-foreground',
+      );
+      await expect(assistantBubbles.last()).not.toHaveText('', { timeout: 60_000 });
+      const reply = (await assistantBubbles.last().innerText()).trim();
+      expect(reply.length, `assistant reply too short: ${JSON.stringify(reply)}`).toBeGreaterThan(
+        8,
+      );
     } finally {
       await cleanupSeededUser(seeded.userId);
     }
