@@ -71,7 +71,7 @@ jobs:
       REDIS_URL: redis://redis:6379
       NEXTAUTH_SECRET: ci-nextauth-secret-not-for-production
       NEXTAUTH_URL: http://localhost:3000
-      # Chat LLM integration (real-deps.e2e) needs a key; fork PRs have no secrets — that suite is skipped there.
+      # MySQL/Redis come from job services above. OPENAI_API_KEY is a repo secret: unavailable on fork PRs (GitHub policy).
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: https://api.openai.com/v1
       OPENAI_MODEL: gpt-4o-mini
@@ -86,5 +86,12 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Run Jest (unit + integration) with coverage
+      # Fork PRs: no access to repo secrets → exclude only the suite that calls a real LLM (still run unit + other integration).
+      - name: Run Jest (fork PR — without real-deps LLM file)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: >-
+          pnpm exec jest --ci --coverage --runInBand --coverageReporters=text-summary
+          --testPathIgnorePatterns tests/integration/chat/real-deps.e2e.test.ts
+      - name: Run Jest (full suite — same-repo PR / push / merge queue)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: pnpm exec jest --ci --coverage --runInBand --coverageReporters=text-summary

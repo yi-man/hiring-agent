@@ -17,15 +17,7 @@ import { streamChatReply } from '@/lib/chat/chain';
 import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 
-/**
- * Fork PRs and repos without Actions secrets have no OPENAI_API_KEY; skipping avoids a hard fail.
- * Local and same-repo CI with the secret still run the full suite.
- */
-const skipChatLlmIntegration =
-  process.env.GITHUB_ACTIONS === 'true' && !process.env.OPENAI_API_KEY?.trim();
-const describeChatWithRealLlm = skipChatLlmIntegration ? describe.skip : describe;
-
-describeChatWithRealLlm('chat integration with real deps', () => {
+describe('chat integration with real deps', () => {
   beforeAll(async () => {
     requireIntegrationEnv('OPENAI_API_KEY');
     requireIntegrationEnv('MYSQL_HOST');
