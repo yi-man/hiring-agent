@@ -26,8 +26,8 @@ export default defineConfig({
   webServer: {
     command: 'PORT=3100 pnpm dev',
     url: 'http://127.0.0.1:3100',
-    /** 强制拉起当前 worktree 的服务，避免复用到其他目录中的旧实例 */
-    reuseExistingServer: false,
+    /** 本地若已有 PORT=3100 的 dev（或 .next 锁被占用），复用实例；CI 始终自拉起 */
+    reuseExistingServer: !isGithubActions,
     timeout: 120_000,
     env: {
       ...process.env,
