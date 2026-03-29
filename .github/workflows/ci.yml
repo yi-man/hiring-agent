@@ -71,12 +71,12 @@ jobs:
       REDIS_URL: redis://redis:6379
       NEXTAUTH_SECRET: ci-nextauth-secret-not-for-production
       NEXTAUTH_URL: http://localhost:3000
-      # MySQL/Redis come from job services above. OPENAI_API_KEY is a repo secret: unavailable on fork PRs (GitHub policy).
+      # MySQL/Redis: job services. LLM: same env contract as .env.local — only OPENAI_API_KEY in secrets is not enough if you use Doubao etc.
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_BASE_URL: https://api.openai.com/v1
-      OPENAI_MODEL: gpt-4o-mini
-      OPENAI_EMBEDDING_MODEL: text-embedding-3-small
-      OPENAI_EMBEDDING_USE_MULTIMODAL: 'false'
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL || 'https://api.openai.com/v1' }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || vars.OPENAI_MODEL || 'gpt-4o-mini' }}
+      OPENAI_EMBEDDING_MODEL: ${{ secrets.OPENAI_EMBEDDING_MODEL || vars.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small' }}
+      OPENAI_EMBEDDING_USE_MULTIMODAL: ${{ secrets.OPENAI_EMBEDDING_USE_MULTIMODAL || vars.OPENAI_EMBEDDING_USE_MULTIMODAL || 'auto' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
