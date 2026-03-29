@@ -36,7 +36,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
-  OPENAI_EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
+  OPENAI_EMBEDDING_MODEL: z.string().default('doubao-embedding-vision-250615'),
   /**
    * auto: 当 OPENAI_EMBEDDING_MODEL 名含 embedding-vision 时走 /embeddings/multimodal（如豆包视觉向量）。
    * true / false 可强制开关；multimodal 请求体为 input: [{ type: "text", text }]，每段文本单独请求以得到独立向量。

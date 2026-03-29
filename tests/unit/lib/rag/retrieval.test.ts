@@ -15,6 +15,7 @@ describe('RAG env defaults', () => {
     expect(parsed.RAG_MIN_SCORE).toBe(0);
     expect(parsed.RAG_CONTEXT_MAX_CHARS).toBe(6000);
     expect(parsed.OPENAI_EMBEDDING_USE_MULTIMODAL).toBe('auto');
+    expect(parsed.OPENAI_EMBEDDING_MODEL).toBe('doubao-embedding-vision-250615');
   });
 
   it('coerces number-based rag fields from strings', () => {
