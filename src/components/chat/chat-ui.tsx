@@ -226,7 +226,12 @@ export function ChatUI() {
     const text = input.trim();
     if (!text || isLoading || !activeConversationId) return;
 
-    const docForSend = focusedDocumentId;
+    const focusedRow = focusedDocumentId
+      ? documents.find((d) => d.id === focusedDocumentId)
+      : undefined;
+    const docForSend =
+      focusedDocumentId && focusedRow?.status === 'ready' ? focusedDocumentId : undefined;
+
     setMessages((prev) => [
       ...prev,
       { role: 'user', content: text, documentId: docForSend ?? null },
@@ -331,8 +336,10 @@ export function ChatUI() {
     setFocusedDocumentId(null);
   };
 
-  const focusedDocumentLabel =
-    focusedDocumentId && documents.find((d) => d.id === focusedDocumentId)?.filename;
+  const focusedDocumentRow = focusedDocumentId
+    ? documents.find((d) => d.id === focusedDocumentId)
+    : undefined;
+  const focusedDocumentLabel = focusedDocumentRow?.filename;
 
   return (
     <div className="mx-auto grid w-full grid-cols-1 gap-4 pb-12 md:h-[70vh] md:grid-cols-[240px_minmax(0,1fr)]">
@@ -508,15 +515,22 @@ export function ChatUI() {
               </div>
             )}
             {activeConversation && focusedDocumentId ? (
-              <div className="bg-secondary/40 mb-2 flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs">
-                <span className="truncate">上下文文档：{focusedDocumentLabel ?? '文档'}</span>
-                <button
-                  type="button"
-                  className="text-secondary-foreground shrink-0 underline"
-                  onClick={() => void dismissComposerDocument()}
-                >
-                  {messages.length === 0 ? '移除上传' : '不作为上下文'}
-                </button>
+              <div className="bg-secondary/40 mb-2 space-y-1 rounded-lg border px-3 py-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate">上下文文档：{focusedDocumentLabel ?? '文档'}</span>
+                  <button
+                    type="button"
+                    className="text-secondary-foreground shrink-0 underline"
+                    onClick={() => void dismissComposerDocument()}
+                  >
+                    {messages.length === 0 ? '移除上传' : '不作为上下文'}
+                  </button>
+                </div>
+                {focusedDocumentRow && focusedDocumentRow.status !== 'ready' ? (
+                  <p className="text-secondary-foreground opacity-80">
+                    索引未完成，本条消息暂按全会话检索；就绪后发送将只检索该文档。
+                  </p>
+                ) : null}
               </div>
             ) : null}
             <div className="flex gap-3">

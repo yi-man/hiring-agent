@@ -153,6 +153,33 @@ describe('chat stream route', () => {
     expect(retrieveConversationContextMock).not.toHaveBeenCalled();
   });
 
+  it('ignores documentId for RAG when document is still processing', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'processing' });
+    async function* gen() {
+      yield 'x';
+    }
+    streamChatReplyMock.mockResolvedValueOnce({
+      chunks: gen(),
+      collect: async () => 'x',
+    });
+    const req = { json: async () => ({ content: 'hi', documentId: 'd1' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(200);
+    expect(createMessageMock).toHaveBeenNthCalledWith(1, {
+      conversationId: 'c1',
+      role: 'user',
+      content: 'hi',
+      documentId: null,
+    });
+    expect(retrieveConversationContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'c1',
+        query: 'hi',
+        documentId: null,
+      }),
+    );
+  });
+
   it('scopes retrieval to document when documentId is valid and ready', async () => {
     conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'ready' });
     async function* gen() {

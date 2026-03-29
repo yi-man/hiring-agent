@@ -43,10 +43,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       if (!doc) {
         return NextResponse.json({ error: 'document not found' }, { status: 400 });
       }
-      if (doc.status !== 'ready') {
-        return NextResponse.json({ error: 'document is not ready for retrieval' }, { status: 409 });
+      if (doc.status === 'ready') {
+        ragDocumentId = doc.id;
       }
-      ragDocumentId = doc.id;
     }
 
     await createMessage({
