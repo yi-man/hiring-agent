@@ -314,17 +314,23 @@ describe('conversation documents routes', () => {
     expect(qdrantCallOrder).toBeLessThan(dbCallOrder);
   });
 
-  it('returns signal when vector cleanup fails after delete', async () => {
-    requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
-    conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });
-    deleteDocumentPointsMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
+  it('still deletes document when vector cleanup fails', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    try {
+      requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
+      conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });
+      deleteDocumentPointsMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
+      deleteConversationDocumentMock.mockResolvedValueOnce(true);
 
-    const res = await deleteDocument({} as Request, {
-      params: Promise.resolve({ id: 'c1', documentId: 'd1' }),
-    });
-    const body = await res.json();
-    expect(res.status).toBe(502);
-    expect(body.error).toContain('vector cleanup failed');
-    expect(deleteConversationDocumentMock).not.toHaveBeenCalled();
+      const res = await deleteDocument({} as Request, {
+        params: Promise.resolve({ id: 'c1', documentId: 'd1' }),
+      });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.deleted).toBe(true);
+      expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
