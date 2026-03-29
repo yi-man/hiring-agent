@@ -27,16 +27,33 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!conversation) {
       return NextResponse.json({ error: 'conversation not found' }, { status: 404 });
     }
-    const { content } = (await request.json()) as { content?: string };
-    const input = content?.trim();
+    const body = (await request.json()) as { content?: string; documentId?: string | null };
+    const input = body.content?.trim();
     if (!input) {
       return NextResponse.json({ error: 'content is required' }, { status: 400 });
+    }
+
+    let ragDocumentId: string | null = null;
+    const rawDocId = typeof body.documentId === 'string' ? body.documentId.trim() : '';
+    if (rawDocId) {
+      const doc = await prisma.conversationDocument.findFirst({
+        where: { id: rawDocId, conversationId: id },
+        select: { id: true, status: true },
+      });
+      if (!doc) {
+        return NextResponse.json({ error: 'document not found' }, { status: 400 });
+      }
+      if (doc.status !== 'ready') {
+        return NextResponse.json({ error: 'document is not ready for retrieval' }, { status: 409 });
+      }
+      ragDocumentId = doc.id;
     }
 
     await createMessage({
       conversationId: id,
       role: 'user',
       content: input,
+      documentId: ragDocumentId,
     });
     await touchConversation(id);
 
@@ -46,6 +63,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         conversationId: id,
         query: input,
         topK: env.RAG_TOP_K,
+        documentId: ragDocumentId,
       });
       retrievedContext = retrieval.contextText;
     } catch (error) {

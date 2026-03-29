@@ -352,6 +352,53 @@ describe('retrieveConversationContext', () => {
     expect(result.matches).toHaveLength(1);
   });
 
+  it('adds documentId to qdrant filter when scoped', async () => {
+    const searchMock = jest.fn().mockResolvedValue([]);
+    jest.doMock('@/lib/env', () => ({
+      env: {
+        RAG_TOP_K: 6,
+        RAG_MIN_SCORE: 0.6,
+        RAG_CONTEXT_MAX_CHARS: 1000,
+      },
+    }));
+    jest.doMock('@/lib/rag/embed', () => ({
+      embedQuery: jest.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+    }));
+    jest.doMock('@/lib/rag/qdrant', () => ({
+      qdrantCollectionName: 'conversation_markdown_chunks',
+      getQdrantClient: () => ({
+        search: searchMock,
+      }),
+    }));
+    jest.doMock('@/lib/prisma', () => ({
+      prisma: {
+        conversationDocumentChunk: {
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      },
+    }));
+
+    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
+    await retrieveConversationContext({
+      conversationId: 'conv-1',
+      query: 'q',
+      topK: 3,
+      documentId: 'doc-x',
+    });
+
+    expect(searchMock).toHaveBeenCalledWith(
+      'conversation_markdown_chunks',
+      expect.objectContaining({
+        filter: {
+          must: [
+            { key: 'conversationId', match: { value: 'conv-1' } },
+            { key: 'documentId', match: { value: 'doc-x' } },
+          ],
+        },
+      }),
+    );
+  });
+
   it('enforces minScore and context max chars when building output', async () => {
     const searchMock = jest.fn().mockResolvedValue([
       {

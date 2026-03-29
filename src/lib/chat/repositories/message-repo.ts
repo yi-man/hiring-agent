@@ -6,6 +6,7 @@ type MessageRow = {
   conversationId: string;
   role: string;
   content: string;
+  documentId: string | null;
   seq: number;
   tokenCount: number | null;
   createdAt: Date;
@@ -17,6 +18,7 @@ function mapRow(row: MessageRow): Message {
     conversationId: row.conversationId,
     role: row.role as ChatRole,
     content: row.content,
+    documentId: row.documentId,
     seq: row.seq,
     tokenCount: row.tokenCount,
     createdAt: row.createdAt.toISOString(),
@@ -27,6 +29,7 @@ export async function createMessage(params: {
   conversationId: string;
   role: ChatRole;
   content: string;
+  documentId?: string | null;
   tokenCount?: number | null;
 }): Promise<Message> {
   return prisma.$transaction(async (tx) => {
@@ -41,6 +44,7 @@ export async function createMessage(params: {
         conversationId: params.conversationId,
         role: params.role,
         content: params.content,
+        documentId: params.documentId ?? null,
         seq: nextSeq,
         tokenCount: params.tokenCount ?? null,
       },

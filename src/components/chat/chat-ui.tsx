@@ -17,6 +17,7 @@ type ChatMessage = {
   id?: string;
   role: 'user' | 'assistant';
   content: string;
+  documentId?: string | null;
 };
 
 type Conversation = {
@@ -38,6 +39,8 @@ export function ChatUI() {
   const [documents, setDocuments] = useState<ConversationDocumentDto[]>([]);
   const [isRefreshingDocuments, setIsRefreshingDocuments] = useState(false);
   const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  /** When set, the next message scopes RAG to this document; X clears selection (or deletes upload if the thread is still empty). */
+  const [focusedDocumentId, setFocusedDocumentId] = useState<string | null>(null);
   const conversationListRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const documentPollTimerRef = useRef<number | null>(null);
@@ -129,6 +132,7 @@ export function ChatUI() {
     setConversations((prev) => [conversation, ...prev]);
     setActiveConversationId(conversation.id);
     setMessages([]);
+    setFocusedDocumentId(null);
   };
 
   const loadMoreConversations = async () => {
@@ -152,8 +156,15 @@ export function ChatUI() {
     const rows = await fetchConversationMessages(conversationId);
     const filtered = rows
       .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content }));
+      .map((m) => ({
+        id: m.id,
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        documentId: m.documentId ?? null,
+      }));
     setMessages(filtered);
+    const lastUserWithDoc = [...filtered].reverse().find((m) => m.role === 'user' && m.documentId);
+    setFocusedDocumentId(lastUserWithDoc?.documentId ?? null);
   };
 
   const loadDocuments = async (conversationId: string, options?: { silent?: boolean }) => {
@@ -193,6 +204,7 @@ export function ChatUI() {
     if (!activeConversationId) return;
     clearDocumentPollTimer();
     setDocuments([]);
+    setFocusedDocumentId(null);
     void (async () => {
       try {
         await loadMessages(activeConversationId);
@@ -214,14 +226,20 @@ export function ChatUI() {
     const text = input.trim();
     if (!text || isLoading || !activeConversationId) return;
 
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
+    const docForSend = focusedDocumentId;
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: text, documentId: docForSend ?? null },
+    ]);
     setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
     setInput('');
     setError(null);
     setIsLoading(true);
 
     try {
-      const body = await streamConversationMessage(activeConversationId, text);
+      const body = docForSend
+        ? await streamConversationMessage(activeConversationId, text, { documentId: docForSend })
+        : await streamConversationMessage(activeConversationId, text);
 
       const reader = body.getReader();
       const decoder = new TextDecoder();
@@ -256,6 +274,7 @@ export function ChatUI() {
     setIsUploadingDocument(true);
     try {
       const uploaded = await uploadConversationDocument(activeConversationId, file);
+      setFocusedDocumentId(uploaded.id);
       const rows = await loadDocuments(activeConversationId);
       if (uploaded.status === 'failed' && uploaded.errorMessage) {
         setError(uploaded.errorMessage);
@@ -289,6 +308,9 @@ export function ChatUI() {
     setError(null);
     try {
       await deleteConversationDocument(activeConversationId, documentId);
+      if (focusedDocumentId === documentId) {
+        setFocusedDocumentId(null);
+      }
       const rows = await loadDocuments(activeConversationId);
       if (rows.some((doc) => doc.status === 'processing')) {
         startDocumentPolling();
@@ -299,6 +321,18 @@ export function ChatUI() {
       setError(e instanceof Error ? e.message : '删除文档失败');
     }
   };
+
+  const dismissComposerDocument = async () => {
+    if (!focusedDocumentId || !activeConversationId) return;
+    if (messages.length === 0) {
+      await onDeleteDocument(focusedDocumentId);
+      return;
+    }
+    setFocusedDocumentId(null);
+  };
+
+  const focusedDocumentLabel =
+    focusedDocumentId && documents.find((d) => d.id === focusedDocumentId)?.filename;
 
   return (
     <div className="mx-auto grid w-full grid-cols-1 gap-4 pb-12 md:h-[70vh] md:grid-cols-[240px_minmax(0,1fr)]">
@@ -359,18 +393,41 @@ export function ChatUI() {
             ) : (
               <div className="h-full overflow-y-auto pr-1">
                 <div className="space-y-3">
-                  {messages.map((msg, idx) => (
-                    <div
-                      key={`${msg.role}-${idx}`}
-                      className={`max-w-[92%] rounded-xl px-4 py-3 text-sm leading-relaxed ${
-                        msg.role === 'user'
-                          ? 'bg-primary text-primary-foreground ml-auto'
-                          : 'bg-secondary text-secondary-foreground'
-                      }`}
-                    >
-                      {msg.content}
-                    </div>
-                  ))}
+                  {messages.map((msg, idx) => {
+                    const docLabel =
+                      msg.role === 'user' && msg.documentId
+                        ? (documents.find((d) => d.id === msg.documentId)?.filename ?? '已引用文档')
+                        : null;
+                    return (
+                      <div
+                        key={msg.id ?? `${msg.role}-${idx}`}
+                        className={msg.role === 'user' ? 'ml-auto max-w-[92%]' : 'max-w-[92%]'}
+                      >
+                        {docLabel ? (
+                          <button
+                            type="button"
+                            aria-label={`将 ${docLabel} 作为下文上下文`}
+                            className="bg-secondary text-secondary-foreground mb-1 flex w-full max-w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left text-xs"
+                            onClick={() => setFocusedDocumentId(msg.documentId!)}
+                          >
+                            <span className="truncate font-medium">{docLabel}</span>
+                            <span className="text-secondary-foreground shrink-0 opacity-70">
+                              Markdown · 点击作为下文上下文
+                            </span>
+                          </button>
+                        ) : null}
+                        <div
+                          className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
+                            msg.role === 'user'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-secondary text-secondary-foreground'
+                          }`}
+                        >
+                          {msg.content}
+                        </div>
+                      </div>
+                    );
+                  })}
                   {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
                     <div className="bg-secondary text-secondary-foreground max-w-[92%] rounded-xl px-4 py-3 text-sm">
                       正在思考...
@@ -450,6 +507,18 @@ export function ChatUI() {
                 </div>
               </div>
             )}
+            {activeConversation && focusedDocumentId ? (
+              <div className="bg-secondary/40 mb-2 flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs">
+                <span className="truncate">上下文文档：{focusedDocumentLabel ?? '文档'}</span>
+                <button
+                  type="button"
+                  className="text-secondary-foreground shrink-0 underline"
+                  onClick={() => void dismissComposerDocument()}
+                >
+                  {messages.length === 0 ? '移除上传' : '不作为上下文'}
+                </button>
+              </div>
+            ) : null}
             <div className="flex gap-3">
               <Input
                 value={input}

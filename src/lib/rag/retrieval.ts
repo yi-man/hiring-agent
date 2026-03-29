@@ -31,6 +31,7 @@ export async function retrieveConversationContext(params: {
   conversationId: string;
   query: string;
   topK?: number;
+  documentId?: string | null;
 }): Promise<{ contextText: string; matches: RetrievedContextMatch[] }> {
   const topK = params.topK ?? env.RAG_TOP_K;
   const query = params.query.trim();
@@ -38,14 +39,26 @@ export async function retrieveConversationContext(params: {
     return { contextText: '', matches: [] };
   }
 
+  const scopedDocumentId =
+    typeof params.documentId === 'string' && params.documentId.trim().length > 0
+      ? params.documentId.trim()
+      : null;
+
   const queryVector = await embedQuery(query);
+  const must: Array<{ key: string; match: { value: string } }> = [
+    { key: 'conversationId', match: { value: params.conversationId } },
+  ];
+  if (scopedDocumentId) {
+    must.push({ key: 'documentId', match: { value: scopedDocumentId } });
+  }
+
   const rawHits = (await getQdrantClient().search(qdrantCollectionName, {
     vector: queryVector,
     limit: topK,
     score_threshold: env.RAG_MIN_SCORE,
     with_payload: true,
     filter: {
-      must: [{ key: 'conversationId', match: { value: params.conversationId } }],
+      must,
     },
   })) as RetrievalHit[];
 

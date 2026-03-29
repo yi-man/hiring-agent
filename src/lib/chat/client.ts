@@ -7,6 +7,7 @@ export type MessageDto = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  documentId?: string | null;
 };
 
 export type ConversationPageDto = {
@@ -60,11 +61,16 @@ export async function fetchConversationMessages(conversationId: string): Promise
 export async function streamConversationMessage(
   conversationId: string,
   content: string,
+  options?: { documentId?: string | null },
 ): Promise<ReadableStream<Uint8Array>> {
+  const payload: { content: string; documentId?: string } = { content };
+  if (options?.documentId) {
+    payload.documentId = options.documentId;
+  }
   const res = await fetch(`/api/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok || !res.body) {
     const data = (await res.json().catch(() => ({}))) as { error?: string };

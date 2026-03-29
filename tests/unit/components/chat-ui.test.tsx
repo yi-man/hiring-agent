@@ -200,6 +200,70 @@ describe('ChatUI', () => {
     await waitFor(() =>
       expect(uploadConversationDocumentMock).toHaveBeenCalledWith('c1', expect.any(File)),
     );
+    expect(await screen.findByText(/上下文文档：/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '移除上传' })).toBeInTheDocument();
+  });
+
+  it('removes upload via composer when thread is empty (calls delete API)', async () => {
+    fetchConversationsMock.mockResolvedValue({
+      conversations: [{ id: 'c1', title: 'one' }],
+      total: 1,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+    });
+    fetchConversationMessagesMock.mockResolvedValue([]);
+    fetchConversationDocumentsMock.mockResolvedValue([]);
+    uploadConversationDocumentMock.mockResolvedValue({
+      id: 'd1',
+      filename: 'notes.md',
+      status: 'ready',
+    });
+    deleteConversationDocumentMock.mockResolvedValue(undefined);
+
+    render(<ChatUI />);
+    await screen.findByText('one');
+
+    const uploadInput = await screen.findByLabelText('上传 Markdown');
+    const file = new File(['# Hello'], 'notes.md', { type: 'text/markdown' });
+    fireEvent.change(uploadInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(uploadConversationDocumentMock).toHaveBeenCalled());
+    await screen.findByText(/上下文文档：/);
+
+    fireEvent.click(screen.getByRole('button', { name: '移除上传' }));
+    await waitFor(() => expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1'));
+  });
+
+  it('clears document context without delete when thread has messages', async () => {
+    fetchConversationsMock.mockResolvedValue({
+      conversations: [{ id: 'c1', title: 'one' }],
+      total: 1,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+    });
+    fetchConversationMessagesMock.mockResolvedValue([
+      { id: 'm1', role: 'user', content: 'hi', documentId: 'd1' },
+      { id: 'm2', role: 'assistant', content: 'hello' },
+    ]);
+    fetchConversationDocumentsMock.mockResolvedValue([
+      { id: 'd1', filename: 'notes.md', status: 'ready' },
+    ]);
+    streamConversationMessageMock.mockResolvedValue(makeStream(['a']));
+
+    render(<ChatUI />);
+    await screen.findByText('one');
+    await screen.findByText(/上下文文档：notes\.md/);
+
+    fireEvent.click(screen.getByRole('button', { name: '不作为上下文' }));
+    expect(deleteConversationDocumentMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByText(/上下文文档：notes\.md/)).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '将 notes.md 作为下文上下文' }));
+    expect(await screen.findByText(/上下文文档：notes\.md/)).toBeInTheDocument();
   });
 
   it('renders document status and supports refresh/delete actions', async () => {

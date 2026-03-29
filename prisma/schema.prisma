@@ -83,6 +83,7 @@ model Message {
   conversationId String       @map("conversation_id") @db.VarChar(36)
   role           String       @db.VarChar(16)
   content        String       @db.LongText
+  documentId     String?      @map("document_id") @db.VarChar(36)
   seq            Int
   tokenCount     Int?         @map("token_count")
   createdAt      DateTime     @default(now()) @map("created_at") @db.DateTime(3)

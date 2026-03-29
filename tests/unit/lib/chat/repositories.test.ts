@@ -102,6 +102,7 @@ describe('chat repositories', () => {
             conversationId: 'c1',
             role: 'user',
             content: 'hello',
+            documentId: null,
             seq: 3,
             tokenCount: null,
             createdAt: new Date('2026-03-26T01:00:00.000Z'),
