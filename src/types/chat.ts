@@ -17,6 +17,7 @@ export interface Message {
   conversationId: string;
   role: ChatRole;
   content: string;
+  documentId?: string | null;
   seq: number;
   tokenCount?: number | null;
   createdAt: string;
@@ -38,4 +39,5 @@ export interface ListMessagesResponse {
 
 export interface StreamMessageRequest {
   content: string;
+  documentId?: string | null;
 }

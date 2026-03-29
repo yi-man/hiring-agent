@@ -5,6 +5,7 @@ const createMessageMock = jest.fn();
 const touchConversationMock = jest.fn();
 const requireAuthMock = jest.fn();
 const conversationFindFirstMock = jest.fn();
+const retrieveConversationContextMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -19,6 +20,10 @@ const originalResponse = global.Response;
 
 jest.mock('@/lib/chat/chain', () => ({
   streamChatReply: (...args: unknown[]) => streamChatReplyMock(...args),
+}));
+
+jest.mock('@/lib/rag/retrieval', () => ({
+  retrieveConversationContext: (...args: unknown[]) => retrieveConversationContextMock(...args),
 }));
 
 jest.mock('@/lib/chat/repositories/message-repo', () => ({
@@ -39,10 +44,15 @@ jest.mock('@/lib/auth/session', () => ({
   },
 }));
 
+const conversationDocumentFindFirstMock = jest.fn();
+
 jest.mock('@/lib/prisma', () => ({
   prisma: {
     conversation: {
       findFirst: (...args: unknown[]) => conversationFindFirstMock(...args),
+    },
+    conversationDocument: {
+      findFirst: (...args: unknown[]) => conversationDocumentFindFirstMock(...args),
     },
   },
 }));
@@ -67,8 +77,11 @@ describe('chat stream route', () => {
     touchConversationMock.mockReset();
     requireAuthMock.mockReset();
     conversationFindFirstMock.mockReset();
+    conversationDocumentFindFirstMock.mockReset();
+    retrieveConversationContextMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
     conversationFindFirstMock.mockResolvedValue({ id: 'c1' });
+    retrieveConversationContextMock.mockResolvedValue({ contextText: '', matches: [] });
   });
 
   afterAll(() => {
@@ -109,6 +122,7 @@ describe('chat stream route', () => {
       conversationId: 'c1',
       role: 'user',
       content: 'hello?',
+      documentId: null,
     });
     expect(createMessageMock).toHaveBeenNthCalledWith(2, {
       conversationId: 'c1',
@@ -116,6 +130,76 @@ describe('chat stream route', () => {
       content: 'hello',
     });
     expect(touchConversationMock).toHaveBeenCalledTimes(2);
-    expect(streamChatReplyMock).toHaveBeenCalledWith('c1', 'hello?');
+    expect(retrieveConversationContextMock).not.toHaveBeenCalled();
+    expect(streamChatReplyMock).toHaveBeenCalledWith('c1', 'hello?', { retrievedContext: '' });
+  });
+
+  it('returns 502 when RAG retrieval fails for a scoped ready document', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'ready' });
+    retrieveConversationContextMock.mockRejectedValueOnce(new Error('embedding API timeout'));
+    const req = { json: async () => ({ content: 'hi', documentId: 'd1' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.code).toBe('RAG_RETRIEVAL_FAILED');
+    expect(body.error).toContain('embedding API timeout');
+    expect(streamChatReplyMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when documentId does not belong to conversation', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce(null);
+    const req = { json: async () => ({ content: 'hi', documentId: 'missing' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(400);
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(retrieveConversationContextMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores documentId for RAG when document is still processing', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'processing' });
+    async function* gen() {
+      yield 'x';
+    }
+    streamChatReplyMock.mockResolvedValueOnce({
+      chunks: gen(),
+      collect: async () => 'x',
+    });
+    const req = { json: async () => ({ content: 'hi', documentId: 'd1' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(200);
+    expect(createMessageMock).toHaveBeenNthCalledWith(1, {
+      conversationId: 'c1',
+      role: 'user',
+      content: 'hi',
+      documentId: null,
+    });
+    expect(retrieveConversationContextMock).not.toHaveBeenCalled();
+  });
+
+  it('scopes retrieval to document when documentId is valid and ready', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'ready' });
+    async function* gen() {
+      yield 'ok';
+    }
+    streamChatReplyMock.mockResolvedValueOnce({
+      chunks: gen(),
+      collect: async () => 'ok',
+    });
+    const req = { json: async () => ({ content: 'hi', documentId: 'd1' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(200);
+    expect(createMessageMock).toHaveBeenNthCalledWith(1, {
+      conversationId: 'c1',
+      role: 'user',
+      content: 'hi',
+      documentId: 'd1',
+    });
+    expect(retrieveConversationContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'c1',
+        query: 'hi',
+        documentId: 'd1',
+      }),
+    );
   });
 });

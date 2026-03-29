@@ -36,6 +36,12 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  OPENAI_EMBEDDING_MODEL: z.string().default('doubao-embedding-vision-250615'),
+  /**
+   * auto: 当 OPENAI_EMBEDDING_MODEL 名含 embedding-vision 时走 /embeddings/multimodal（如豆包视觉向量）。
+   * true / false 可强制开关；multimodal 请求体为 input: [{ type: "text", text }]，每段文本单独请求以得到独立向量。
+   */
+  OPENAI_EMBEDDING_USE_MULTIMODAL: z.enum(['auto', 'true', 'false']).default('auto'),
   /** 为 true 时强制走本地 mock，不调用外部模型 */
   JD_LLM_MOCK: z.coerce.boolean().default(false),
   /** 部分兼容接口不支持 json_object，可设为 false */
@@ -64,23 +70,60 @@ const envSchema = z.object({
   CHAT_REDIS_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
   CHAT_HISTORY_REHYDRATE_LIMIT: z.coerce.number().int().positive().default(50),
   CHAT_TEST_REDIS_PREFIX: z.string().default('chat:test'),
+
+  // RAG / Qdrant
+  QDRANT_URL: z.string().url().default('http://127.0.0.1:6333'),
+  QDRANT_API_KEY: z.string().optional(),
+  QDRANT_COLLECTION_NAME: z.string().default('conversation_markdown_chunks'),
+  RAG_TOP_K: z.coerce.number().int().positive().default(6),
+  RAG_MIN_SCORE: z.coerce.number().default(0),
+  RAG_CONTEXT_MAX_CHARS: z.coerce.number().int().positive().default(6000),
+  RAG_INGEST_LEASE_MS: z.coerce.number().int().positive().default(1800000),
 });
 
 type Env = z.infer<typeof envSchema>;
+
+const defaultEnv = envSchema.parse({});
+
+function getInputValue(input: Partial<NodeJS.ProcessEnv>, key: string): string | undefined {
+  try {
+    return input[key];
+  } catch (error) {
+    console.error(`❌ Failed reading environment variable "${key}":`, error);
+    return undefined;
+  }
+}
+
+function parseEnvSafely(input: Partial<NodeJS.ProcessEnv>): Env {
+  const parsed: Record<string, unknown> = { ...defaultEnv };
+  const schemaShape = envSchema.shape as Record<string, z.ZodTypeAny>;
+
+  for (const key of Object.keys(defaultEnv)) {
+    const keySchema = schemaShape[key];
+    const value = getInputValue(input, key);
+    const result = keySchema.safeParse(value);
+    if (result.success) {
+      parsed[key] = result.data;
+      continue;
+    }
+
+    console.error(`❌ Invalid environment variable "${key}":`, result.error.issues);
+    parsed[key] = defaultEnv[key as keyof Env];
+  }
+
+  return envSchema.parse(parsed);
+}
 
 // 解析环境变量的函数
 export function parseEnv(input: Partial<NodeJS.ProcessEnv> = process.env): Env {
   try {
     return envSchema.parse(input);
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      console.error('❌ Invalid environment variables:', error.issues);
-    } else {
+    // Degrade gracefully: keep valid values and only default invalid keys.
+    if (!(error instanceof z.ZodError)) {
       console.error('❌ Failed to parse environment variables:', error);
     }
-
-    // 使用默认值
-    return envSchema.parse({});
+    return parseEnvSafely(input);
   }
 }
 

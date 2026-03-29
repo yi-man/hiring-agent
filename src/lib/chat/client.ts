@@ -7,6 +7,7 @@ export type MessageDto = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  documentId?: string | null;
 };
 
 export type ConversationPageDto = {
@@ -15,6 +16,20 @@ export type ConversationPageDto = {
   page: number;
   limit: number;
   hasMore: boolean;
+};
+
+export type ConversationDocumentStatus = 'processing' | 'ready' | 'failed';
+
+export type ConversationDocumentDto = {
+  id: string;
+  conversationId: string;
+  filename: string;
+  contentMarkdown: string;
+  status: ConversationDocumentStatus;
+  errorMessage: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export async function fetchConversations(params?: {
@@ -46,15 +61,84 @@ export async function fetchConversationMessages(conversationId: string): Promise
 export async function streamConversationMessage(
   conversationId: string,
   content: string,
+  options?: { documentId?: string | null },
 ): Promise<ReadableStream<Uint8Array>> {
+  const payload: { content: string; documentId?: string } = { content };
+  if (options?.documentId) {
+    payload.documentId = options.documentId;
+  }
   const res = await fetch(`/api/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok || !res.body) {
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || 'Chat request failed');
+    const text = await res.text().catch(() => '');
+    let message = 'Chat request failed';
+    try {
+      const data = JSON.parse(text) as { error?: string };
+      if (typeof data.error === 'string' && data.error.trim()) {
+        message = data.error;
+      }
+    } catch {
+      if (text.trim()) {
+        message = text.trim().slice(0, 500);
+      }
+    }
+    throw new Error(message);
   }
   return res.body;
+}
+
+export async function uploadConversationDocument(
+  conversationId: string,
+  file: File,
+): Promise<ConversationDocumentDto> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`/api/conversations/${conversationId}/documents`, {
+    method: 'POST',
+    body: form,
+  });
+  const data = (await res.json()) as { document?: ConversationDocumentDto; error?: string };
+  if (!res.ok || !data.document) {
+    throw new Error(data.error || '上传文档失败');
+  }
+  return data.document;
+}
+
+export async function fetchConversationDocuments(
+  conversationId: string,
+): Promise<ConversationDocumentDto[]> {
+  const res = await fetch(`/api/conversations/${conversationId}/documents`);
+  const data = (await res.json()) as { documents?: ConversationDocumentDto[]; error?: string };
+  if (!res.ok || !data.documents) {
+    throw new Error(data.error || '加载文档列表失败');
+  }
+  return data.documents;
+}
+
+export async function fetchConversationDocumentDetail(
+  conversationId: string,
+  documentId: string,
+): Promise<ConversationDocumentDto> {
+  const res = await fetch(`/api/conversations/${conversationId}/documents/${documentId}`);
+  const data = (await res.json()) as { document?: ConversationDocumentDto; error?: string };
+  if (!res.ok || !data.document) {
+    throw new Error(data.error || '加载文档详情失败');
+  }
+  return data.document;
+}
+
+export async function deleteConversationDocument(
+  conversationId: string,
+  documentId: string,
+): Promise<void> {
+  const res = await fetch(`/api/conversations/${conversationId}/documents/${documentId}`, {
+    method: 'DELETE',
+  });
+  const data = (await res.json()) as { deleted?: boolean; error?: string };
+  if (!res.ok || !data.deleted) {
+    throw new Error(data.error || '删除文档失败');
+  }
 }

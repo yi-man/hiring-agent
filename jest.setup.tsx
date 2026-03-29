@@ -48,6 +48,9 @@ jest.mock('next-themes', () => ({
 }));
 
 jest.mock('lucide-react', () => ({
+  ArrowUp: () => <div data-testid="arrow-up-icon" />,
+  FileCode: () => <div data-testid="file-code-icon" />,
+  Paperclip: () => <div data-testid="paperclip-icon" />,
   Menu: () => <div data-testid="menu-icon" />,
   X: () => <div data-testid="x-icon" />,
   Sun: () => <div data-testid="sun-icon" />,

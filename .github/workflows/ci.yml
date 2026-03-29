@@ -40,58 +40,44 @@ jobs:
   test:
     name: Jest Test
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Run unit/API Jest suite with coverage
-        run: pnpm exec jest --coverage --testPathIgnorePatterns tests/integration
-
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
     services:
       mysql:
         image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: app_test
-          MYSQL_USER: app
-          MYSQL_PASSWORD: app
+          MYSQL_DATABASE: hiring
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
       redis:
-        image: redis:7
+        image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
-      CI: true
+      # VM runner (no job container): service ports map to localhost — not the Docker service hostnames.
       MYSQL_HOST: 127.0.0.1
-      MYSQL_PORT: 3306
+      MYSQL_PORT: '3306'
       MYSQL_USER: root
       MYSQL_PASS: root
-      MYSQL_DATABASE: app_test
+      MYSQL_DATABASE: hiring
       REDIS_URL: redis://127.0.0.1:6379
-      NEXTAUTH_SECRET: ci-nextauth-secret
+      NEXTAUTH_SECRET: ci-nextauth-secret-not-for-production
+      NEXTAUTH_URL: http://localhost:3000
+      # MySQL/Redis: job services. LLM: same env contract as .env.local — only OPENAI_API_KEY in secrets is not enough if you use Doubao etc.
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL || 'https://api.openai.com/v1' }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || vars.OPENAI_MODEL || 'gpt-4o-mini' }}
+      OPENAI_EMBEDDING_MODEL: ${{ secrets.OPENAI_EMBEDDING_MODEL || vars.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small' }}
+      OPENAI_EMBEDDING_USE_MULTIMODAL: ${{ secrets.OPENAI_EMBEDDING_USE_MULTIMODAL || vars.OPENAI_EMBEDDING_USE_MULTIMODAL || 'auto' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -101,11 +87,12 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Run auth integration tests
-        run: pnpm test:integration:auth
-      - name: Run chat integration tests
-        if: ${{ env.OPENAI_API_KEY != '' }}
-        run: pnpm test:integration:chat
-      - name: Skip chat integration tests when OPENAI_API_KEY is missing
-        if: ${{ env.OPENAI_API_KEY == '' }}
-        run: echo "Skipping chat integration tests because OPENAI_API_KEY is not configured."
+      # Fork PRs: no access to repo secrets → exclude only the suite that calls a real LLM (still run unit + other integration).
+      - name: Run Jest (fork PR — without real-deps LLM file)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: >-
+          pnpm exec jest --ci --coverage --runInBand --coverageReporters=text-summary
+          --testPathIgnorePatterns tests/integration/chat/real-deps.e2e.test.ts
+      - name: Run Jest (full suite — same-repo PR / push / merge queue)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: pnpm exec jest --ci --coverage --runInBand --coverageReporters=text-summary

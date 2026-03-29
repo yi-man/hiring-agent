@@ -5,6 +5,8 @@ import { createMessage } from '@/lib/chat/repositories/message-repo';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { DEPENDENCY_OUTAGE_MESSAGE, isDependencyOutageError } from '@/lib/errors/dependency-outage';
 import { prisma } from '@/lib/prisma';
+import { env } from '@/lib/env';
+import { retrieveConversationContext } from '@/lib/rag/retrieval';
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -25,20 +27,52 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!conversation) {
       return NextResponse.json({ error: 'conversation not found' }, { status: 404 });
     }
-    const { content } = (await request.json()) as { content?: string };
-    const input = content?.trim();
+    const body = (await request.json()) as { content?: string; documentId?: string | null };
+    const input = body.content?.trim();
     if (!input) {
       return NextResponse.json({ error: 'content is required' }, { status: 400 });
+    }
+
+    let ragDocumentId: string | null = null;
+    const rawDocId = typeof body.documentId === 'string' ? body.documentId.trim() : '';
+    if (rawDocId) {
+      const doc = await prisma.conversationDocument.findFirst({
+        where: { id: rawDocId, conversationId: id },
+        select: { id: true, status: true },
+      });
+      if (!doc) {
+        return NextResponse.json({ error: 'document not found' }, { status: 400 });
+      }
+      if (doc.status === 'ready') {
+        ragDocumentId = doc.id;
+      }
     }
 
     await createMessage({
       conversationId: id,
       role: 'user',
       content: input,
+      documentId: ragDocumentId,
     });
     await touchConversation(id);
 
-    const { chunks, collect } = await streamChatReply(id, input);
+    let retrievedContext = '';
+    if (ragDocumentId) {
+      try {
+        const retrieval = await retrieveConversationContext({
+          conversationId: id,
+          query: input,
+          topK: env.RAG_TOP_K,
+          documentId: ragDocumentId,
+        });
+        retrievedContext = retrieval.contextText;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'RAG retrieval failed';
+        return NextResponse.json({ error: message, code: 'RAG_RETRIEVAL_FAILED' }, { status: 502 });
+      }
+    }
+
+    const { chunks, collect } = await streamChatReply(id, input, { retrievedContext });
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({

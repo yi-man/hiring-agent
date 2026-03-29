@@ -277,13 +277,13 @@ Copy `.env.example` to `.env`, `.env.development`, `.env.local`, and `.env.test`
 
 ### Running checks
 
-| Check | Command | Notes |
-|---|---|---|
-| Lint | `pnpm lint` | 1 pre-existing warning in `postcss.config.js` |
-| Type check | `pnpm type-check` | May have pre-existing Prisma-related type issues |
-| Unit tests | `pnpm test:ci` | 59/60 suites pass; `tests/integration/chat/real-deps.e2e.test.ts` fails without a real `OPENAI_API_KEY` |
-| Build | `pnpm build` | Uses Turbopack |
-| E2E (Cypress) | `pnpm test:e2e` | Requires dev server; Cypress binary must be installed |
+| Check         | Command           | Notes                                                                                                   |
+| ------------- | ----------------- | ------------------------------------------------------------------------------------------------------- |
+| Lint          | `pnpm lint`       | 1 pre-existing warning in `postcss.config.js`                                                           |
+| Type check    | `pnpm type-check` | May have pre-existing Prisma-related type issues                                                        |
+| Unit tests    | `pnpm test:ci`    | 59/60 suites pass; `tests/integration/chat/real-deps.e2e.test.ts` fails without a real `OPENAI_API_KEY` |
+| Build         | `pnpm build`      | Uses Turbopack                                                                                          |
+| E2E (Cypress) | `pnpm test:e2e`   | Requires dev server; Cypress binary must be installed                                                   |
 
 ### Gotchas
 
