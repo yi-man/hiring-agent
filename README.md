@@ -11,7 +11,7 @@
 - **shadcn/ui 3.8.5** - 现代化的 UI 组件库
 - **pnpm 10.9.2** - 快速、节省空间的包管理器
 - **Jest** - JavaScript 测试框架
-- **Cypress** - 端到端测试工具
+- **Playwright** - 端到端测试工具
 - **ESLint 9.15.0** - 代码规范检查工具
 - **Prettier** - 代码格式化工具
 - **Husky 9.1.7** - Git 钩子工具
@@ -94,11 +94,8 @@ pnpm test:watch
 # 运行 Jest 测试并生成覆盖率报告
 pnpm test:coverage
 
-# 运行 Cypress 端到端测试
-pnpm cypress
-
-# 运行 Cypress 端到端测试 (无头模式)
-pnpm cypress:headless
+# 运行 Playwright 端到端测试（会自动在 3100 端口拉起 dev，见 playwright.config.ts）
+pnpm test:e2e
 ```
 
 ### 代码规范检查
