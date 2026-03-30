@@ -6,7 +6,12 @@ import {
   WORKFLOW_AGENT_MAX_STEPS,
   WORKFLOW_TOOL_RESULT_MAX_CHARS,
 } from '@/lib/workflow-learning/constants';
+import { getBrowserSessionManager } from '@/lib/workflow-learning/browser-session-manager';
+import { createBrowserClickTool } from '@/lib/workflow-learning/tools/browser-click-tool';
+import { createBrowserCloseTool } from '@/lib/workflow-learning/tools/browser-close-tool';
 import { createBrowserSnapshotTool } from '@/lib/workflow-learning/tools/browser-snapshot-tool';
+import { createBrowserTypeTool } from '@/lib/workflow-learning/tools/browser-type-tool';
+import type { ToolContext } from '@/lib/workflow-learning/tools/tool-context';
 import type { WorkflowSseEvent } from '@/lib/workflow-learning/types';
 
 function requireEnv(name: string): string {
@@ -80,14 +85,27 @@ const WORKFLOW_SYSTEM_PROMPT = `You are a workflow learning assistant. When the 
 export async function* runWorkflowAgentWithEvents(options: {
   runId: string;
   userText: string;
+  userId: string;
 }): AsyncGenerator<WorkflowSseEvent> {
-  const { runId, userText } = options;
+  const { runId, userText, userId } = options;
   const ts = () => new Date().toISOString();
 
   yield { type: 'run_start', runId, timestamp: ts() };
 
   const model = buildModel();
-  const tools = [createBrowserSnapshotTool()];
+  const sessionManager = getBrowserSessionManager();
+  const toolCtx: ToolContext = {
+    sessionManager,
+    userId,
+    emitEvent: () => {},
+    runId,
+  };
+  const tools = [
+    createBrowserSnapshotTool(toolCtx),
+    createBrowserClickTool(toolCtx),
+    createBrowserTypeTool(toolCtx),
+    createBrowserCloseTool(toolCtx),
+  ];
   const agent = createReactAgent({
     llm: model,
     tools,

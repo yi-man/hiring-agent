@@ -9,7 +9,7 @@ export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
   try {
-    await requireAuth();
+    const { user } = await requireAuth();
     const body = (await request.json()) as { message?: string };
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     if (!message) {
@@ -22,7 +22,11 @@ export async function POST(request: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          for await (const event of runWorkflowAgentWithEvents({ runId, userText: message })) {
+          for await (const event of runWorkflowAgentWithEvents({
+            runId,
+            userText: message,
+            userId: user.id,
+          })) {
             controller.enqueue(encoder.encode(formatSseData(event)));
           }
           controller.close();
