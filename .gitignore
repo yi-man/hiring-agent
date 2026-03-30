@@ -62,3 +62,6 @@ tsconfig.tsbuildinfo
 
 # Git worktrees
 .worktrees/
+
+# Workflow Learning plan files (local only)
+data/workflow-plans/
