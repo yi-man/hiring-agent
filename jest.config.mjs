@@ -48,12 +48,7 @@ const config = {
 
   setupFilesAfterEnv: ['<rootDir>/jest.setup.tsx'],
 
-  testPathIgnorePatterns: [
-    '<rootDir>/.next/',
-    '<rootDir>/out/',
-    '<rootDir>/coverage/',
-    '<rootDir>/cypress/',
-  ],
+  testPathIgnorePatterns: ['<rootDir>/.next/', '<rootDir>/out/', '<rootDir>/coverage/'],
   transformIgnorePatterns: ['node_modules/(?!(lucide-react)/)'],
 
   clearMocks: true,

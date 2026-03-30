@@ -108,7 +108,7 @@ export default function Home() {
               {
                 title: '工程化配置',
                 description: '生产就绪的配置，包含测试、构建和部署流程',
-                features: ['Jest 测试', 'Cypress E2E', 'CI/CD 配置', '性能优化'],
+                features: ['Jest 测试', 'Playwright E2E', 'CI/CD 配置', '性能优化'],
                 icon: '🔧',
               },
               {
@@ -218,7 +218,7 @@ export default function Home() {
                       { name: 'TypeScript', description: '类型安全' },
                       { name: 'Tailwind CSS', description: '响应式设计' },
                       { name: 'HeroUI', description: '精美组件' },
-                      { name: 'Jest + Cypress', description: '完整测试' },
+                      { name: 'Jest + Playwright', description: '完整测试' },
                     ].map((item, index) => (
                       <div
                         key={index}
