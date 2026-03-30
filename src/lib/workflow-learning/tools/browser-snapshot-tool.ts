@@ -1,56 +1,36 @@
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
-import {
-  WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
-  WORKFLOW_TOOL_RESULT_MAX_CHARS,
-} from '@/lib/workflow-learning/constants';
-import { assertUrlAllowed } from '@/lib/workflow-learning/url-allowlist';
+import { WORKFLOW_TOOL_RESULT_MAX_CHARS } from '../constants';
+import type { ToolContext } from './tool-context';
 
-const schema = z.object({
-  url: z
-    .string()
-    .url()
-    .describe(
-      'Full http(s) URL (must include scheme). By default hosts are not restricted; if WORKFLOW_TOOL_URL_ALLOWLIST_MODE=allowlisted, only allowlisted hosts are accepted.',
-    ),
-});
+const schema = z.object({});
 
-export async function runBrowserSnapshot(url: string): Promise<{ title: string; excerpt: string }> {
-  assertUrlAllowed(url);
-  const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await page.goto(url, {
-      timeout: WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
-      waitUntil: 'domcontentloaded',
-    });
-    const title = await page.title();
-    const body = await page
-      .locator('body')
-      .innerText()
-      .catch(() => '');
-    const excerpt = body.slice(0, WORKFLOW_TOOL_RESULT_MAX_CHARS);
-    return { title, excerpt };
-  } finally {
-    await browser.close();
-  }
-}
-
-/**
- * LangChain tool: opens URLs and returns title + text excerpt for the agent.
- */
-export function createBrowserSnapshotTool() {
+export function createBrowserSnapshotTool(ctx: ToolContext) {
   return tool(
-    async (input: z.infer<typeof schema>) => {
-      const result = await runBrowserSnapshot(input.url);
-      return JSON.stringify(result);
+    async () => {
+      ctx.sessionManager.touch(ctx.userId);
+      try {
+        const session = await ctx.sessionManager.getOrCreate(ctx.userId);
+        if (!session.browser.isConnected()) {
+          return JSON.stringify({ error: 'Browser session is disconnected. Consider replanning.' });
+        }
+        const title = await session.page.title();
+        const url = session.page.url();
+        const body = await session.page
+          .locator('body')
+          .innerText()
+          .catch(() => '');
+        const excerpt = body.slice(0, WORKFLOW_TOOL_RESULT_MAX_CHARS);
+        return JSON.stringify({ title, url, excerpt });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return JSON.stringify({ error: message });
+      }
     },
     {
       name: 'browser_snapshot',
       description:
-        'Open a web page in a headless browser and return JSON with title and visible text excerpt. Use when the user asks to fetch or inspect a page.',
+        'Read the current page title, URL, and visible text excerpt. No input needed — reads from the active browser session.',
       schema,
     },
   );
