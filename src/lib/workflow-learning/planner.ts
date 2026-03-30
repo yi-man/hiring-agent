@@ -19,7 +19,9 @@ const TaskStepSchema = z.object({
   id: z.string(),
   description: z.string(),
   type: z.enum(['browser_action', 'analysis', 'report']),
-  browserSubSteps: z.array(BrowserSubStepSchema).optional(),
+  // OpenAI structured outputs does not support `.optional()` fields unless marked `.nullable()`.
+  // We require the field but allow it to be null, then normalize null -> undefined for our TS types.
+  browserSubSteps: z.array(BrowserSubStepSchema).nullable(),
   onFailure: z.enum(['replan', 'skip', 'abort']),
   status: z.enum(['pending', 'running', 'completed', 'failed', 'waiting_user']).default('pending'),
 });
@@ -86,6 +88,7 @@ export async function generatePlan(options: GeneratePlanOptions): Promise<TaskPl
     steps: parsed.steps.map((step) => ({
       ...step,
       status: step.status ?? 'pending',
+      browserSubSteps: step.browserSubSteps ?? undefined,
     })),
   };
 
