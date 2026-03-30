@@ -7,8 +7,13 @@ const schema = z.object({});
 export function createBrowserCloseTool(ctx: ToolContext) {
   return tool(
     async () => {
-      await ctx.sessionManager.close(ctx.userId);
-      return JSON.stringify({ closed: true });
+      try {
+        await ctx.sessionManager.close(ctx.userId);
+        return JSON.stringify({ closed: true });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return JSON.stringify({ closed: false, error: message });
+      }
     },
     {
       name: 'browser_close',

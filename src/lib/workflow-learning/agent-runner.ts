@@ -13,9 +13,13 @@ import { createBrowserNavigateTool } from '@/lib/workflow-learning/tools/browser
 import { createBrowserSnapshotTool } from '@/lib/workflow-learning/tools/browser-snapshot-tool';
 import { createBrowserTypeTool } from '@/lib/workflow-learning/tools/browser-type-tool';
 import { createBrowserWaitForUserTool } from '@/lib/workflow-learning/tools/browser-wait-for-user-tool';
-import { generatePlan, savePlanMarkdown } from '@/lib/workflow-learning/planner';
+import {
+  generatePlan,
+  savePlanMarkdown,
+  updatePlanStepMarkdown,
+} from '@/lib/workflow-learning/planner';
 import type { ToolContext } from '@/lib/workflow-learning/tools/tool-context';
-import type { TaskPlan, WorkflowSseEvent } from '@/lib/workflow-learning/types';
+import type { TaskPlan, StepStatus, WorkflowSseEvent } from '@/lib/workflow-learning/types';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -110,6 +114,10 @@ RULES:
  *
  * Phase 1 — Planner: generates a structured TaskPlan via LLM.
  * Phase 2 — Executor: runs a ReAct agent with plan-aware system prompt and all 6 browser tools.
+ *
+ * TODO(phase-2): Implement replan — when a step fails with onFailure='replan',
+ * re-invoke generatePlan with replanContext and continue execution. Functions
+ * appendReplanMarkdown and plan_update SSE are already wired for this.
  */
 export async function* runWorkflowAgentWithEvents(options: {
   runId: string;
@@ -142,7 +150,9 @@ export async function* runWorkflowAgentWithEvents(options: {
 
     yield { type: 'plan', plan, runId, timestamp: ts() };
 
-    savePlanMarkdown(plan, runId).catch(() => {});
+    savePlanMarkdown(plan, runId).catch((e) => {
+      console.error(`[workflow-learning] Failed to save plan markdown for ${runId}:`, e);
+    });
 
     // ── Phase 2: Executor ──
     const tools = [
@@ -163,6 +173,22 @@ export async function* runWorkflowAgentWithEvents(options: {
     const toolStartMs = new Map<string, number>();
     let lastAssistantText = '';
 
+    const browserSteps = plan.steps.filter((s) => s.type === 'browser_action');
+    let currentStepIdx = 0;
+    let stepMarkedRunning = false;
+
+    const emitStepUpdate = (stepId: string, status: StepStatus, summary?: string) => {
+      emitEvent({
+        type: 'plan_step_update',
+        runId,
+        timestamp: ts(),
+        stepId,
+        status,
+        summary,
+      });
+      updatePlanStepMarkdown(runId, stepId, status, summary).catch(() => {});
+    };
+
     const stream = agent.streamEvents(
       { messages: [new HumanMessage(userText.trim())] },
       {
@@ -174,6 +200,12 @@ export async function* runWorkflowAgentWithEvents(options: {
     for await (const ev of stream as AsyncIterable<StreamEvent>) {
       if (ev.event === 'on_tool_start') {
         toolStartMs.set(ev.run_id, Date.now());
+
+        if (!stepMarkedRunning && currentStepIdx < browserSteps.length) {
+          emitStepUpdate(browserSteps[currentStepIdx].id, 'running');
+          stepMarkedRunning = true;
+        }
+
         yield {
           type: 'tool_call_start',
           runId,
@@ -186,6 +218,14 @@ export async function* runWorkflowAgentWithEvents(options: {
         const start = toolStartMs.get(ev.run_id);
         const durationMs = start !== undefined ? Date.now() - start : undefined;
         const err = ev.data?.error;
+
+        if (err && stepMarkedRunning && currentStepIdx < browserSteps.length) {
+          const step = browserSteps[currentStepIdx];
+          emitStepUpdate(step.id, 'failed', String(err));
+          stepMarkedRunning = false;
+          currentStepIdx++;
+        }
+
         yield {
           type: 'tool_call_result',
           runId,
@@ -199,12 +239,27 @@ export async function* runWorkflowAgentWithEvents(options: {
         const text = extractTextFromMessageContent(ev.data?.output);
         if (text.trim()) {
           lastAssistantText = text;
+          if (stepMarkedRunning && currentStepIdx < browserSteps.length) {
+            emitStepUpdate(browserSteps[currentStepIdx].id, 'completed', text.trim().slice(0, 200));
+            stepMarkedRunning = false;
+            currentStepIdx++;
+          }
         }
       }
 
       while (pendingEvents.length > 0) {
         yield pendingEvents.shift()!;
       }
+    }
+
+    for (const step of plan.steps) {
+      if (step.type !== 'browser_action') {
+        emitStepUpdate(step.id, 'completed');
+      }
+    }
+
+    while (pendingEvents.length > 0) {
+      yield pendingEvents.shift()!;
     }
 
     yield {

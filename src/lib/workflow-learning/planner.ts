@@ -7,7 +7,7 @@ import {
   renderPlanToMarkdown,
   updateStepInMarkdown,
 } from './plan-markdown';
-import type { TaskPlan } from './types';
+import type { StepStatus, TaskPlan } from './types';
 
 const BrowserSubStepSchema = z.object({
   action: z.enum(['navigate', 'snapshot', 'click', 'type', 'close']),
@@ -105,21 +105,18 @@ export async function savePlanMarkdown(plan: TaskPlan, runId: string): Promise<s
 export async function updatePlanStepMarkdown(
   runId: string,
   stepId: string,
-  status: string,
+  status: StepStatus,
   summary?: string,
 ): Promise<void> {
   const filePath = join(PLANS_DIR, `${runId}.md`);
   try {
     const content = await readFile(filePath, 'utf-8');
-    const updated = updateStepInMarkdown(
-      content,
-      stepId,
-      status as TaskPlan['steps'][0]['status'],
-      summary,
-    );
+    const updated = updateStepInMarkdown(content, stepId, status, summary);
     await writeFile(filePath, updated, 'utf-8');
-  } catch {
-    // file may not exist in test environments
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && (e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw e;
+    }
   }
 }
 

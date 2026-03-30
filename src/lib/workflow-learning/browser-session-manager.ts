@@ -13,6 +13,7 @@ export interface BrowserSession {
 export class BrowserSessionManager {
   private sessions = new Map<string, BrowserSession>();
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pending = new Map<string, Promise<BrowserSession>>();
 
   async getOrCreate(userId: string): Promise<BrowserSession> {
     const existing = this.sessions.get(userId);
@@ -22,6 +23,20 @@ export class BrowserSessionManager {
       return existing;
     }
 
+    const inflight = this.pending.get(userId);
+    if (inflight) return inflight;
+
+    const promise = this.launchSession(userId);
+    this.pending.set(userId, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pending.delete(userId);
+    }
+  }
+
+  private async launchSession(userId: string): Promise<BrowserSession> {
+    const existing = this.sessions.get(userId);
     if (existing) {
       this.sessions.delete(userId);
       this.clearIdleTimer(userId);
