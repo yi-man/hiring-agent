@@ -15,7 +15,9 @@ const BrowserSubStepSchema = z.object({
   description: z.string(),
 });
 
-const TaskStepSchema = z.object({
+// OpenAI structured outputs ("json_schema") require all fields to be present.
+// We therefore define a schema that keeps `browserSubSteps` required but nullable.
+const TaskStepSchemaForStructuredOutput = z.object({
   id: z.string(),
   description: z.string(),
   type: z.enum(['browser_action', 'analysis', 'report']),
@@ -26,9 +28,26 @@ const TaskStepSchema = z.object({
   status: z.enum(['pending', 'running', 'completed', 'failed', 'waiting_user']).default('pending'),
 });
 
-const TaskPlanSchema = z.object({
+const TaskPlanSchemaForStructuredOutput = z.object({
   goal: z.string(),
-  steps: z.array(TaskStepSchema),
+  steps: z.array(TaskStepSchemaForStructuredOutput),
+  fallbackStrategy: z.string(),
+});
+
+// Fallback parsing schema for when the provider rejects json_schema.
+// Unlike structured output, here we can be more permissive and allow `browserSubSteps` to be missing.
+const TaskStepSchemaForParse = z.object({
+  id: z.string(),
+  description: z.string(),
+  type: z.enum(['browser_action', 'analysis', 'report']),
+  browserSubSteps: z.array(BrowserSubStepSchema).nullable().optional(),
+  onFailure: z.enum(['replan', 'skip', 'abort']),
+  status: z.enum(['pending', 'running', 'completed', 'failed', 'waiting_user']).default('pending'),
+});
+
+const TaskPlanSchemaForParse = z.object({
+  goal: z.string(),
+  steps: z.array(TaskStepSchemaForParse),
   fallbackStrategy: z.string(),
 });
 
@@ -65,9 +84,23 @@ export interface GeneratePlanOptions {
   replanContext?: { previousPlan: TaskPlan; error: string; completedStepIds: string[] };
 }
 
+function extractJsonObject(raw: string): string {
+  const trimmed = raw.trim();
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) return fence[1].trim();
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start !== -1 && end > start) return trimmed.slice(start, end + 1);
+  return trimmed;
+}
+
+function isJsonSchemaUnsupportedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /json_schema/i.test(message) && /not supported/i.test(message);
+}
+
 export async function generatePlan(options: GeneratePlanOptions): Promise<TaskPlan> {
   const model = buildPlannerModel();
-  const structured = model.withStructuredOutput(TaskPlanSchema);
 
   let userPrompt = options.userMessage;
   if (options.browserStatus) {
@@ -78,21 +111,74 @@ export async function generatePlan(options: GeneratePlanOptions): Promise<TaskPl
     userPrompt += `\n\n[REPLAN NEEDED]\nPrevious goal: ${previousPlan.goal}\nCompleted steps: ${completedStepIds.join(', ')}\nError: ${error}\nPlease create a revised plan for the remaining work.`;
   }
 
-  const parsed = await structured.invoke([
-    { role: 'system', content: PLANNER_SYSTEM_PROMPT },
-    { role: 'user', content: userPrompt },
-  ]);
+  try {
+    const structured = model.withStructuredOutput(TaskPlanSchemaForStructuredOutput);
+    const parsed = await structured.invoke([
+      { role: 'system', content: PLANNER_SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ]);
 
-  const plan: TaskPlan = {
-    ...parsed,
-    steps: parsed.steps.map((step) => ({
+    return {
+      ...parsed,
+      steps: parsed.steps.map((step) => ({
+        ...step,
+        status: step.status ?? 'pending',
+        browserSubSteps: step.browserSubSteps ?? undefined,
+      })),
+    };
+  } catch (e) {
+    if (!isJsonSchemaUnsupportedError(e)) throw e;
+  }
+
+  // Fallback: retry using json_object and parse+validate locally.
+  const OPENAI_API_KEY = requireEnv('OPENAI_API_KEY');
+  const baseURL = requireEnv('OPENAI_BASE_URL').replace(/\/$/, '');
+  const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+  const system = `${PLANNER_SYSTEM_PROMPT}\n\nReturn ONLY a valid JSON object matching the schema. Do not wrap in markdown.`;
+  const res = await fetch(`${baseURL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: userPrompt },
+      ],
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  const data: unknown = await res.json();
+  if (!res.ok) {
+    const msg = data instanceof Error ? data.message : JSON.stringify(data);
+    throw new Error(`Planner fallback LLM request failed: ${res.status} ${msg}`);
+  }
+
+  const content =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (data as any)?.choices?.[0]?.message?.content ?? '';
+
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('Planner fallback LLM returned empty content');
+  }
+
+  const jsonText = extractJsonObject(content);
+  const raw = JSON.parse(jsonText) as unknown;
+  const validated = TaskPlanSchemaForParse.parse(raw);
+
+  return {
+    ...validated,
+    steps: validated.steps.map((step) => ({
       ...step,
       status: step.status ?? 'pending',
       browserSubSteps: step.browserSubSteps ?? undefined,
     })),
   };
-
-  return plan;
 }
 
 const PLANS_DIR = join(process.cwd(), 'data', 'workflow-plans');
