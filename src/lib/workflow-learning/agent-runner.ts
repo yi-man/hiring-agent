@@ -9,10 +9,13 @@ import {
 import { getBrowserSessionManager } from '@/lib/workflow-learning/browser-session-manager';
 import { createBrowserClickTool } from '@/lib/workflow-learning/tools/browser-click-tool';
 import { createBrowserCloseTool } from '@/lib/workflow-learning/tools/browser-close-tool';
+import { createBrowserNavigateTool } from '@/lib/workflow-learning/tools/browser-navigate-tool';
 import { createBrowserSnapshotTool } from '@/lib/workflow-learning/tools/browser-snapshot-tool';
 import { createBrowserTypeTool } from '@/lib/workflow-learning/tools/browser-type-tool';
+import { createBrowserWaitForUserTool } from '@/lib/workflow-learning/tools/browser-wait-for-user-tool';
+import { generatePlan, savePlanMarkdown } from '@/lib/workflow-learning/planner';
 import type { ToolContext } from '@/lib/workflow-learning/tools/tool-context';
-import type { WorkflowSseEvent } from '@/lib/workflow-learning/types';
+import type { TaskPlan, WorkflowSseEvent } from '@/lib/workflow-learning/types';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -76,11 +79,37 @@ function resultPreviewFromToolOutput(output: unknown): string {
     : text;
 }
 
-const WORKFLOW_SYSTEM_PROMPT = `You are a workflow learning assistant. When the user asks to open, fetch, or inspect a web page, you MUST call the browser_snapshot tool with a full URL (include http(s)://). In allowlisted mode, the URL must target localhost/127.0.0.1 or the app origin. Summarize tool results clearly.`;
+function buildExecutorSystemPrompt(plan: TaskPlan): string {
+  const stepsText = plan.steps
+    .map(
+      (s, i) => `${i + 1}. [${s.id}] ${s.description} (type: ${s.type}, onFailure: ${s.onFailure})`,
+    )
+    .join('\n');
+
+  return `You are executing a workflow plan. Follow the steps in order.
+
+PLAN:
+Goal: ${plan.goal}
+Fallback: ${plan.fallbackStrategy}
+
+Steps:
+${stepsText}
+
+RULES:
+- Use browser_navigate to open URLs. Use browser_snapshot to read the current page content.
+- When you detect a login/auth page (page content has login forms, "sign in", "登录", etc.), call browser_wait_for_user with a clear reason explaining what the user needs to do.
+- Do NOT try to fill in passwords or bypass authentication yourself.
+- Use browser_click and browser_type for interacting with page elements.
+- Only call browser_close when the plan is fully complete or explicitly requires closing the browser.
+- After completing each plan step, summarize what you accomplished.
+- If a step fails and its onFailure is "replan", describe what went wrong clearly.`;
+}
 
 /**
- * Streams LangGraph ReAct execution as workflow SSE events (run_start … run_end).
- * `thought` events are not emitted here — LangGraph stream does not expose chain-of-thought reliably; see design spec §5.3.
+ * Streams the Planner → Executor pipeline as workflow SSE events.
+ *
+ * Phase 1 — Planner: generates a structured TaskPlan via LLM.
+ * Phase 2 — Executor: runs a ReAct agent with plan-aware system prompt and all 6 browser tools.
  */
 export async function* runWorkflowAgentWithEvents(options: {
   runId: string;
@@ -92,30 +121,48 @@ export async function* runWorkflowAgentWithEvents(options: {
 
   yield { type: 'run_start', runId, timestamp: ts() };
 
+  const pendingEvents: WorkflowSseEvent[] = [];
+  const emitEvent = (event: WorkflowSseEvent) => {
+    pendingEvents.push(event);
+  };
+
   const model = buildModel();
   const sessionManager = getBrowserSessionManager();
   const toolCtx: ToolContext = {
     sessionManager,
     userId,
-    emitEvent: () => {},
+    emitEvent,
     runId,
   };
-  const tools = [
-    createBrowserSnapshotTool(toolCtx),
-    createBrowserClickTool(toolCtx),
-    createBrowserTypeTool(toolCtx),
-    createBrowserCloseTool(toolCtx),
-  ];
-  const agent = createReactAgent({
-    llm: model,
-    tools,
-    prompt: WORKFLOW_SYSTEM_PROMPT,
-  });
-
-  const toolStartMs = new Map<string, number>();
-  let lastAssistantText = '';
 
   try {
+    // ── Phase 1: Planner ──
+    const browserStatus = sessionManager.getStatus(userId);
+    const plan = await generatePlan({ userMessage: userText, browserStatus, runId });
+
+    yield { type: 'plan', plan, runId, timestamp: ts() };
+
+    savePlanMarkdown(plan, runId).catch(() => {});
+
+    // ── Phase 2: Executor ──
+    const tools = [
+      createBrowserNavigateTool(toolCtx),
+      createBrowserSnapshotTool(toolCtx),
+      createBrowserClickTool(toolCtx),
+      createBrowserTypeTool(toolCtx),
+      createBrowserCloseTool(toolCtx),
+      createBrowserWaitForUserTool(toolCtx),
+    ];
+
+    const agent = createReactAgent({
+      llm: model,
+      tools,
+      prompt: buildExecutorSystemPrompt(plan),
+    });
+
+    const toolStartMs = new Map<string, number>();
+    let lastAssistantText = '';
+
     const stream = agent.streamEvents(
       { messages: [new HumanMessage(userText.trim())] },
       {
@@ -153,6 +200,10 @@ export async function* runWorkflowAgentWithEvents(options: {
         if (text.trim()) {
           lastAssistantText = text;
         }
+      }
+
+      while (pendingEvents.length > 0) {
+        yield pendingEvents.shift()!;
       }
     }
 
