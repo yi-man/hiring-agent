@@ -10,7 +10,9 @@ const schema = z.object({
   url: z
     .string()
     .url()
-    .describe('Full http(s) URL on allowlisted host (localhost, 127.0.0.1, or app origin).'),
+    .describe(
+      'Full http(s) URL (must include scheme). By default hosts are not restricted; if WORKFLOW_TOOL_URL_ALLOWLIST_MODE=allowlisted, only allowlisted hosts are accepted.',
+    ),
 });
 
 export async function runBrowserSnapshot(url: string): Promise<{ title: string; excerpt: string }> {
@@ -37,7 +39,7 @@ export async function runBrowserSnapshot(url: string): Promise<{ title: string; 
 }
 
 /**
- * LangChain tool: opens allowlisted URLs and returns title + text excerpt for the agent.
+ * LangChain tool: opens URLs and returns title + text excerpt for the agent.
  */
 export function createBrowserSnapshotTool() {
   return tool(
@@ -48,7 +50,7 @@ export function createBrowserSnapshotTool() {
     {
       name: 'browser_snapshot',
       description:
-        'Open a web page in a headless browser (allowlisted hosts only) and return JSON with title and visible text excerpt. Use when the user asks to fetch or inspect a page.',
+        'Open a web page in a headless browser and return JSON with title and visible text excerpt. Use when the user asks to fetch or inspect a page.',
       schema,
     },
   );

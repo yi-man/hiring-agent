@@ -71,7 +71,7 @@ function resultPreviewFromToolOutput(output: unknown): string {
     : text;
 }
 
-const WORKFLOW_SYSTEM_PROMPT = `You are a workflow learning assistant. When the user asks to open, fetch, or inspect a web page, you MUST call the browser_snapshot tool with a full allowlisted URL (http://127.0.0.1:PORT/... or http://localhost:PORT/... or the app origin). Summarize tool results clearly.`;
+const WORKFLOW_SYSTEM_PROMPT = `You are a workflow learning assistant. When the user asks to open, fetch, or inspect a web page, you MUST call the browser_snapshot tool with a full URL (include http(s)://). In allowlisted mode, the URL must target localhost/127.0.0.1 or the app origin. Summarize tool results clearly.`;
 
 /**
  * Streams LangGraph ReAct execution as workflow SSE events (run_start … run_end).
