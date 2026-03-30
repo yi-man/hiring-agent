@@ -18,6 +18,7 @@ Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；
 
 - `pnpm install`：安装依赖（post-install 会执行 `prisma generate`）。
 - `pnpm dev`：开发服务器，**Turbopack**，默认 **http://localhost:3000**（勿随意改端口；Playwright 见下）。
+- **Workflow Learning**（`/workflow-learning`）：Phase 1 在服务端用 **`playwright`** 包起 Chromium；本机首次需安装浏览器，例如 `pnpm exec playwright install chromium`（与 E2E 的 `@playwright/test` 不同端口/用途，可共用已下载的浏览器缓存）。
 - `pnpm build` / `pnpm start`：生产构建与启动。
 - `pnpm lint` / `pnpm lint:fix` / `pnpm format` / `pnpm type-check`：规范与类型检查。
 - `pnpm test`：Jest 单测 + 覆盖率；`pnpm test:watch`：监听；`pnpm test:ci`：CI 用单测。
