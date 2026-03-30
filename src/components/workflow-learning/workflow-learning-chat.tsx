@@ -141,7 +141,8 @@ export function WorkflowLearningChat() {
         <Input
           value={input}
           onValueChange={setInput}
-          placeholder="描述任务，例如：打开 http://127.0.0.1:3000/api/health 并总结可见内容"
+          aria-label="Workflow Learning 任务输入"
+          placeholder="描述任务，例如：打开 http://127.0.0.1:3100/api/health 并总结可见内容"
           isDisabled={isRunning}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -151,7 +152,12 @@ export function WorkflowLearningChat() {
           }}
           className="flex-1"
         />
-        <Button color="primary" isDisabled={isRunning || !input.trim()} onPress={() => void send()}>
+        <Button
+          color="primary"
+          aria-label="发送"
+          isDisabled={isRunning || !input.trim()}
+          onPress={() => void send()}
+        >
           {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         </Button>
       </div>

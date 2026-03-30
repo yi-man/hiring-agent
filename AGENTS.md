@@ -23,6 +23,7 @@ Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；
 - `pnpm lint` / `pnpm lint:fix` / `pnpm format` / `pnpm type-check`：规范与类型检查。
 - `pnpm test`：Jest 单测 + 覆盖率；`pnpm test:watch`：监听；`pnpm test:ci`：CI 用单测。
 - `pnpm test:e2e` / `pnpm test:e2e:playwright` / `pnpm test:e2e:playwright:jd`：Playwright E2E（`playwright.config.ts` 默认在 **3100** 拉起 `next dev`，与日常 `pnpm dev` 的 3000 不同）。
+- `pnpm test:e2e:playwright:workflow`：**Workflow Learning** 真实链路 E2E（需 **MySQL** 会话种子、`OPENAI_API_KEY`、本机已 `playwright install`；与 chat 文档流用例同为 **无 mock**）。根目录 `.npmrc` 对 `playwright` 做了 **public-hoist**，避免 pnpm 双份包导致 Playwright 报 `test.describe()` 上下文错误。
 - `pnpm test:integration:chat` / `pnpm test:integration:auth`：真实 MySQL/Redis 等依赖的集成测试。
 - `pnpm exec prisma migrate deploy`：部署迁移；`pnpm prisma:generate`：仅生成客户端。
 - `pnpm obs:run` / `pnpm obs:realtime` / `pnpm obs:retention`：LLM 可观测性运维脚本。
