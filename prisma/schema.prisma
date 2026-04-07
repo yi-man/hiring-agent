@@ -34,6 +34,8 @@ model User {
   accounts      Account[]
   sessions      Session[]
   conversations Conversation[]
+  workflowLearningWorkflows WorkflowLearningWorkflow[]
+  workflowLearningRuns      WorkflowLearningRun[]
 
   @@map("users")
 }
@@ -243,4 +245,74 @@ model LlmUsageStatsTotal {
 
   @@unique([provider, model, endpoint], map: "llm_usage_stats_total_provider_model_endpoint_key")
   @@map("llm_usage_stats_total")
+}
+
+model WorkflowLearningWorkflow {
+  id          String                        @id @default(uuid()) @db.VarChar(36)
+  userId      String                        @map("user_id") @db.VarChar(128)
+  name        String                        @db.VarChar(191)
+  goal        String                        @db.Text
+  version     Int                           @default(1)
+  steps       Json
+  createdAt   DateTime                      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime                      @updatedAt @map("updated_at") @db.DateTime(3)
+  user        User                          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  versions    WorkflowLearningWorkflowVersion[]
+  runs        WorkflowLearningRun[]
+
+  @@index([userId], map: "idx_workflow_learning_workflows_user_id")
+  @@index([userId, updatedAt(sort: Desc)], map: "idx_workflow_learning_workflows_user_updated_at")
+  @@map("workflow_learning_workflows")
+}
+
+model WorkflowLearningWorkflowVersion {
+  id         String                   @id @default(uuid()) @db.VarChar(36)
+  workflowId String                   @map("workflow_id") @db.VarChar(36)
+  version    Int
+  reason     String                   @db.VarChar(255)
+  steps      Json
+  createdAt  DateTime                 @default(now()) @map("created_at") @db.DateTime(3)
+  workflow   WorkflowLearningWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([workflowId], map: "idx_workflow_learning_workflow_versions_workflow_id")
+  @@index([workflowId, version], map: "idx_workflow_learning_workflow_versions_workflow_version")
+  @@unique([workflowId, version], map: "workflow_learning_workflow_versions_workflow_id_version_key")
+  @@map("workflow_learning_workflow_versions")
+}
+
+model WorkflowLearningRun {
+  id            String                     @id @default(uuid()) @db.VarChar(36)
+  workflowId    String                     @map("workflow_id") @db.VarChar(36)
+  userId        String                     @map("user_id") @db.VarChar(128)
+  status        String                     @db.VarChar(32)
+  errorMessage  String?                    @map("error_message") @db.Text
+  recovered     Boolean                    @default(false)
+  createdAt     DateTime                   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime                   @updatedAt @map("updated_at") @db.DateTime(3)
+  workflow      WorkflowLearningWorkflow   @relation(fields: [workflowId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  steps         WorkflowLearningRunStep[]
+
+  @@index([workflowId], map: "idx_workflow_learning_runs_workflow_id")
+  @@index([userId], map: "idx_workflow_learning_runs_user_id")
+  @@index([status], map: "idx_workflow_learning_runs_status")
+  @@map("workflow_learning_runs")
+}
+
+model WorkflowLearningRunStep {
+  id          String                @id @default(uuid()) @db.VarChar(36)
+  runId       String                @map("run_id") @db.VarChar(36)
+  stepId      String                @map("step_id") @db.VarChar(128)
+  tool        String                @db.VarChar(64)
+  status      String                @db.VarChar(32)
+  args        Json
+  result      String?               @db.LongText
+  error       String?               @db.Text
+  durationMs  Int?                  @map("duration_ms")
+  createdAt   DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+  run         WorkflowLearningRun   @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([runId], map: "idx_workflow_learning_run_steps_run_id")
+  @@index([runId, createdAt], map: "idx_workflow_learning_run_steps_run_created_at")
+  @@map("workflow_learning_run_steps")
 }
