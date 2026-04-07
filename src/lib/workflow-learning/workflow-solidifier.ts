@@ -9,7 +9,7 @@ const workflowStepSchema = z.object({
   args: z.record(z.unknown()),
   description: z.string().min(1),
   canBatch: z.boolean(),
-  successCondition: z.string().optional(),
+  successCondition: z.string().nullable().optional(),
 });
 
 const outputSchema = z.object({
@@ -53,6 +53,30 @@ export function extractEventLines(events: WorkflowSseEvent[]): string[] {
   return lines;
 }
 
+function extractJsonBlock(text: string): string {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) {
+    throw new Error('Model did not return JSON object for workflow steps');
+  }
+  return text.slice(start, end + 1);
+}
+
+function parseStepsFromText(text: string): WorkflowStep[] {
+  const jsonBlock = extractJsonBlock(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonBlock);
+  } catch {
+    throw new Error('Failed to parse workflow JSON from model output');
+  }
+  const validated = outputSchema.safeParse(parsed);
+  if (!validated.success) {
+    throw new Error('Model output does not match workflow schema');
+  }
+  return validated.data.steps as WorkflowStep[];
+}
+
 export async function solidifyWorkflowFromEvents(
   goal: string,
   events: WorkflowSseEvent[],
@@ -63,8 +87,43 @@ export async function solidifyWorkflowFromEvents(
     temperature: 0,
     configuration: { baseURL: process.env.OPENAI_BASE_URL },
   });
-  const chain = model.withStructuredOutput(outputSchema);
   const lines = extractEventLines(events);
-  const output = await chain.invoke(buildSolidifyPrompt(goal, lines));
-  return output.steps as WorkflowStep[];
+  const prompt = buildSolidifyPrompt(goal, lines);
+  try {
+    const chain = model.withStructuredOutput(outputSchema);
+    const output = await chain.invoke(prompt);
+    return output.steps as WorkflowStep[];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    const unsupportedStructuredOutput =
+      message.includes('json_schema') || message.includes('response_format.type');
+    if (!unsupportedStructuredOutput) throw error;
+
+    const fallbackPrompt = `${prompt}
+
+请仅输出 JSON 对象，格式必须是：
+{"steps":[{"id":"step_1","tool":"browser_snapshot","args":{"url":"https://example.com"},"description":"说明","canBatch":false,"successCondition":null}]}
+不要输出 markdown 代码块。`;
+    const raw = await model.invoke(fallbackPrompt);
+    const text =
+      typeof raw.content === 'string'
+        ? raw.content
+        : Array.isArray(raw.content)
+          ? raw.content
+              .map((item) =>
+                typeof item === 'string'
+                  ? item
+                  : item && typeof item === 'object' && 'text' in item
+                    ? String((item as { text?: unknown }).text ?? '')
+                    : '',
+              )
+              .join('')
+          : '';
+    return parseStepsFromText(text);
+  }
 }
+
+export const _workflowSolidifierTestOnly = {
+  parseStepsFromText,
+  extractJsonBlock,
+};

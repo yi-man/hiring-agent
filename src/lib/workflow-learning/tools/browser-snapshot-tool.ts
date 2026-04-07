@@ -18,7 +18,8 @@ const schema = z.object({
 export async function runBrowserSnapshot(url: string): Promise<{ title: string; excerpt: string }> {
   assertUrlAllowed(url);
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
+  const headless = process.env.WORKFLOW_PLAYWRIGHT_HEADLESS === 'true';
+  const browser = await chromium.launch({ headless });
   try {
     const context = await browser.newContext();
     const page = await context.newPage();

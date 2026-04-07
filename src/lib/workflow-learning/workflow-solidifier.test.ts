@@ -1,4 +1,5 @@
 import {
+  _workflowSolidifierTestOnly,
   buildSolidifyPrompt,
   extractEventLines,
 } from '@/lib/workflow-learning/workflow-solidifier';
@@ -48,5 +49,13 @@ describe('workflow-solidifier helpers', () => {
     expect(prompt).toContain('检查健康接口');
     expect(prompt).toContain('[start] browser_snapshot');
     expect(prompt).toContain('Workflow JSON');
+  });
+
+  it('parses steps from plain JSON text fallback', () => {
+    const text =
+      '{"steps":[{"id":"step_1","tool":"browser_snapshot","args":{"url":"https://example.com"},"description":"desc","canBatch":false,"successCondition":null}]}';
+    const steps = _workflowSolidifierTestOnly.parseStepsFromText(text);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].tool).toBe('browser_snapshot');
   });
 });
