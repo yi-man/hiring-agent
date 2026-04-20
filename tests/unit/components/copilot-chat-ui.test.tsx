@@ -52,7 +52,6 @@ jest.mock('@/components/ui', () => ({
 const fetchConversationsMock = jest.fn();
 const fetchConversationMessagesMock = jest.fn();
 const fetchConversationDocumentsMock = jest.fn();
-const streamConversationMessageMock = jest.fn();
 const streamPatternRunMock = jest.fn();
 const approvePatternRunMock = jest.fn();
 const createConversationApiMock = jest.fn();
@@ -63,26 +62,12 @@ jest.mock('@/lib/chat/client', () => ({
   fetchConversations: () => fetchConversationsMock(),
   fetchConversationMessages: (...args: unknown[]) => fetchConversationMessagesMock(...args),
   fetchConversationDocuments: (...args: unknown[]) => fetchConversationDocumentsMock(...args),
-  streamConversationMessage: (...args: unknown[]) => streamConversationMessageMock(...args),
   streamPatternRun: (...args: unknown[]) => streamPatternRunMock(...args),
   approvePatternRun: (...args: unknown[]) => approvePatternRunMock(...args),
   createConversationApi: (...args: unknown[]) => createConversationApiMock(...args),
   uploadConversationDocument: (...args: unknown[]) => uploadConversationDocumentMock(...args),
   deleteConversationDocument: (...args: unknown[]) => deleteConversationDocumentMock(...args),
 }));
-
-function makeStream(chunks: string[]) {
-  let idx = 0;
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (idx >= chunks.length) {
-        controller.close();
-        return;
-      }
-      controller.enqueue(new TextEncoder().encode(chunks[idx++]));
-    },
-  });
-}
 
 function makeSseStream(events: Array<Record<string, unknown>>) {
   let idx = 0;
@@ -102,7 +87,6 @@ describe('CopilotChatUI', () => {
     fetchConversationsMock.mockReset();
     fetchConversationMessagesMock.mockReset();
     fetchConversationDocumentsMock.mockReset();
-    streamConversationMessageMock.mockReset();
     streamPatternRunMock.mockReset();
     approvePatternRunMock.mockReset();
     createConversationApiMock.mockReset();
@@ -128,7 +112,20 @@ describe('CopilotChatUI', () => {
         hasMore: false,
       });
     fetchConversationMessagesMock.mockResolvedValue([]);
-    streamConversationMessageMock.mockResolvedValue(makeStream(['## 标题']));
+    streamPatternRunMock.mockResolvedValue(
+      makeSseStream([
+        {
+          type: 'run_start',
+          runId: 'r1',
+          patternId: 'basic_streaming_chat',
+          startedAt: new Date().toISOString(),
+          seq: 0,
+        },
+        { type: 'assistant_delta', runId: 'r1', text: '## 标题', seq: 1 },
+        { type: 'assistant_final', runId: 'r1', text: '## 标题', seq: 2 },
+        { type: 'run_end', runId: 'r1', seq: 3 },
+      ]),
+    );
 
     render(<CopilotChatUI />);
     await screen.findByText('one');
@@ -137,7 +134,7 @@ describe('CopilotChatUI', () => {
     fireEvent.change(screen.getByPlaceholderText('发消息…'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
-    expect(await screen.findByText(/标题/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/标题/)).length).toBeGreaterThan(0);
   });
 
   it('shows inline assistant error module when stream request fails', async () => {
@@ -149,7 +146,18 @@ describe('CopilotChatUI', () => {
       hasMore: false,
     });
     fetchConversationMessagesMock.mockResolvedValue([]);
-    streamConversationMessageMock.mockRejectedValue(new Error('network down'));
+    streamPatternRunMock.mockResolvedValue(
+      makeSseStream([
+        {
+          type: 'run_start',
+          runId: 'r2',
+          patternId: 'basic_streaming_chat',
+          startedAt: new Date().toISOString(),
+          seq: 0,
+        },
+        { type: 'error', runId: 'r2', message: 'network down', seq: 1 },
+      ]),
+    );
 
     render(<CopilotChatUI />);
     await screen.findByText('one');

@@ -13,7 +13,6 @@ import {
   type ConversationDocumentDto,
   type PatternRunEvent,
   streamPatternRun,
-  streamConversationMessage,
   uploadConversationDocument,
 } from '@/lib/chat/client';
 import { AssistantMarkdown } from './message-renderers/assistant-markdown';
@@ -431,29 +430,7 @@ export function CopilotChatUI() {
           return next;
         });
         setIsLoading(true);
-        const body = docForSend
-          ? await streamConversationMessage(activeConversationId, text, { documentId: docForSend })
-          : await streamConversationMessage(activeConversationId, text);
-        const reader = body.getReader();
-        const decoder = new TextDecoder();
-        let done = false;
-        while (!done) {
-          const result = await reader.read();
-          done = result.done;
-          if (result.value) {
-            const chunk = decoder.decode(result.value, { stream: true });
-            if (chunk) {
-              setMessages((prev) => {
-                const next = [...prev];
-                const target = next[assistantIndex];
-                if (!target || target.role !== 'assistant') return prev;
-                next[assistantIndex] = { ...target, content: `${target.content}${chunk}` };
-                return next;
-              });
-            }
-          }
-        }
-        await loadConversations({ reset: true });
+        await runPatternMode(text, { assistantIndex });
       } else {
         const assistantIndex = enqueuePatternMessage(text);
         setIsLoading(true);
