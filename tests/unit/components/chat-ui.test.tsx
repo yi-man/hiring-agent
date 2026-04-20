@@ -305,7 +305,7 @@ describe('ChatUI', () => {
     await screen.findByText('one');
     expect(screen.queryByRole('button', { name: '不作为上下文' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '将 notes.md 作为下文上下文' }));
+    fireEvent.click(await screen.findByRole('button', { name: '将 notes.md 作为下文上下文' }));
     expect(await screen.findByRole('button', { name: '不作为上下文' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '不作为上下文' }));
@@ -314,7 +314,7 @@ describe('ChatUI', () => {
       expect(screen.queryByRole('button', { name: '不作为上下文' })).not.toBeInTheDocument(),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '将 notes.md 作为下文上下文' }));
+    fireEvent.click(await screen.findByRole('button', { name: '将 notes.md 作为下文上下文' }));
     expect(await screen.findByRole('button', { name: '不作为上下文' })).toBeInTheDocument();
   });
 
