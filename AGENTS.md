@@ -42,7 +42,7 @@ Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；
 │   │   ├── chat/              # 对话页
 │   │   ├── jd-generator/      # JD 生成工作台
 │   │   ├── llm-observability/ # LLM 可观测性看板
-│   │   └── …                  # 首页、博客、关于、联系、登录等
+│   │   └── …                  # 首页、登录等（无独立营销站页面）
 │   ├── components/            # 可复用 UI（含 ui/、auth/、chat/、jd-generator/、llm-observability/）
 │   ├── hooks/                 # 自定义 Hooks
 │   ├── lib/                   # 工具与领域逻辑（prisma、chat、jd-agent、llm-observability、rag、auth、env）

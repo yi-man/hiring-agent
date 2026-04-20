@@ -7,10 +7,10 @@ config({ path: path.resolve(process.cwd(), '.env.development') });
 
 const envSchema = z.object({
   // 应用配置
-  NEXT_PUBLIC_APP_NAME: z.string().default('Next.js 16 SSR Template'),
+  NEXT_PUBLIC_APP_NAME: z.string().default('Hiring Agent'),
   NEXT_PUBLIC_APP_DESCRIPTION: z
     .string()
-    .default('A modern Next.js 16 SSR template for content websites'),
+    .default('AI-powered hiring assistant: chat, JD, workflow learning, LLM observability'),
   NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
 
   // API 配置

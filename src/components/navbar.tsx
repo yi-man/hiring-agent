@@ -25,14 +25,10 @@ export function Navbar() {
 
   const navigation = [
     { name: '首页', href: '/' },
-    { name: 'Chat', href: '/chat' },
+    { name: '对话', href: '/chat' },
     { name: 'Workflow', href: '/workflow-learning' },
-    { name: 'JD生成', href: '/jd-generator' },
-    { name: 'LLM 观测', href: '/llm-observability' },
-    { name: '关于', href: '/about' },
-    { name: '服务', href: '/services' },
-    { name: '博客', href: '/blog' },
-    { name: '联系', href: '/contact' },
+    { name: 'JD 工作台', href: '/jd-generator' },
+    { name: 'LLM 可观测', href: '/llm-observability' },
   ];
 
   return (
@@ -45,17 +41,13 @@ export function Navbar() {
     >
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex h-14 items-center justify-between">
-          {/* Logo */}
           <Link href="/" className="flex items-center space-x-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-500 text-white">
-              <span className="text-sm font-bold">N</span>
+              <span className="text-sm font-bold">招</span>
             </div>
-            <span className="text-foreground text-base font-semibold tracking-tight">
-              Next.js 16
-            </span>
+            <span className="text-foreground text-base font-semibold tracking-tight">招聘助手</span>
           </Link>
 
-          {/* Desktop Navigation */}
           <div className="hidden items-center space-x-5 md:flex">
             {navigation.map((item) => (
               <Link
@@ -77,7 +69,6 @@ export function Navbar() {
             <ThemeToggle />
           </div>
 
-          {/* Mobile Menu Button */}
           <div className="flex items-center md:hidden">
             <ThemeToggle />
             <Button
@@ -93,7 +84,6 @@ export function Navbar() {
         </div>
       </div>
 
-      {/* Mobile Navigation */}
       {isMenuOpen && (
         <div className="animate-in slide-in-from-top-10 border-border bg-background/90 border-b backdrop-blur-lg duration-300 md:hidden">
           <div className="space-y-1 px-2 pt-2 pb-3 sm:px-3">

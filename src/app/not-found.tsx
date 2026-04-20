@@ -24,7 +24,7 @@ export default function NotFound() {
             </Link>
           </Button>
           <Button variant="light" size="lg">
-            <Link href="/contact">联系我们</Link>
+            <Link href="/chat">进入对话</Link>
           </Button>
         </div>
 

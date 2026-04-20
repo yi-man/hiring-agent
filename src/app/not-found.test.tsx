@@ -20,7 +20,7 @@ describe('NotFound page', () => {
   it('renders navigation buttons', () => {
     render(<NotFound />);
     expect(screen.getByRole('link', { name: /返回首页/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /联系我们/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /进入对话/i })).toBeInTheDocument();
   });
 
   it('renders possible causes list', () => {

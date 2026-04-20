@@ -1,9 +1,8 @@
 {
-  "name": "nextjs16-ssr-template",
+  "name": "hiring-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "A modern Next.js 16 SSR template for content websites",
-  "author": "Your Name <your.email@example.com>",
+  "description": "Hiring Agent — recruitment assistant with chat, JD generation, workflow learning, and LLM observability",
   "license": "MIT",
   "type": "module",
   "scripts": {
