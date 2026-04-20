@@ -120,4 +120,24 @@ describe('CopilotChatUI', () => {
 
     expect(await screen.findByText(/标题/)).toBeInTheDocument();
   });
+
+  it('shows inline assistant error module when stream request fails', async () => {
+    fetchConversationsMock.mockResolvedValue({
+      conversations: [{ id: 'c1', title: 'one' }],
+      total: 1,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+    });
+    fetchConversationMessagesMock.mockResolvedValue([]);
+    streamConversationMessageMock.mockRejectedValue(new Error('network down'));
+
+    render(<CopilotChatUI />);
+    await screen.findByText('one');
+    fireEvent.change(screen.getByPlaceholderText('发消息…'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByText('回复中断')).toBeInTheDocument();
+    expect((await screen.findAllByText('network down')).length).toBeGreaterThan(0);
+  });
 });

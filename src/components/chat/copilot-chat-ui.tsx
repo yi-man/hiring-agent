@@ -28,6 +28,18 @@ type Conversation = {
   title?: string | null;
 };
 
+function StreamingIndicator() {
+  return (
+    <div className="text-secondary-foreground inline-flex items-center gap-2 text-xs">
+      <span className="relative inline-flex size-2">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+        <span className="relative inline-flex size-2 rounded-full bg-sky-500" />
+      </span>
+      AI 正在整理回答...
+    </div>
+  );
+}
+
 export function CopilotChatUI() {
   const CONVERSATION_PAGE_SIZE = 20;
   const [input, setInput] = useState('');
@@ -406,7 +418,7 @@ export function CopilotChatUI() {
                             msg.content ? (
                               <AssistantMarkdown>{msg.content}</AssistantMarkdown>
                             ) : (
-                              <span className="text-secondary-foreground">正在思考...</span>
+                              <StreamingIndicator />
                             )
                           ) : (
                             msg.content
@@ -417,7 +429,9 @@ export function CopilotChatUI() {
                   })}
                   {lastAssistantError ? (
                     <div className="max-w-[92%] rounded-2xl border border-rose-300/70 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-700/70 dark:bg-rose-950/30 dark:text-rose-200">
-                      回复中断：{lastAssistantError}
+                      <p className="font-medium">回复中断</p>
+                      <p className="mt-1 opacity-90">{lastAssistantError}</p>
+                      <p className="mt-2 text-xs opacity-80">你可以直接再次发送消息继续会话。</p>
                     </div>
                   ) : null}
                 </div>

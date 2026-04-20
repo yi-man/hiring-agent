@@ -19,4 +19,9 @@ describe('AssistantMarkdown', () => {
     expect(content).toHaveTextContent('项目A');
     expect(content).toHaveTextContent('const n = 1;');
   });
+
+  it('keeps markdown container class for styling hooks', () => {
+    const { container } = render(<AssistantMarkdown>{'plain text'}</AssistantMarkdown>);
+    expect(container.querySelector('.chat-markdown')).toBeInTheDocument();
+  });
 });
