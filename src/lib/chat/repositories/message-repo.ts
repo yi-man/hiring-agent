@@ -12,6 +12,138 @@ type MessageRow = {
   createdAt: Date;
 };
 
+const CONVERSATION_TITLE_MAX_LENGTH = 10;
+const LONG_INPUT_THRESHOLD = 50;
+const TRAILING_REQUEST_PATTERN =
+  /(请|并|然后|再)\s*(给|列|提供|说明|补充)?\s*(我)?\s*(\d+|几)?\s*(个|条|点)?\s*(理由|原因|步骤|方案|建议).*/u;
+const STOPWORDS = new Set([
+  '请问',
+  '请',
+  '帮我',
+  '麻烦',
+  '一下',
+  '给我',
+  '一个',
+  '一些',
+  '这个',
+  '那个',
+  '是否',
+  '为什么',
+  '为何',
+  '怎么',
+  '如何',
+  '怎样',
+  '能否',
+  '可以',
+  '吗',
+  '呢',
+  '我们',
+  '你们',
+  '他们',
+  '进行',
+  '需要',
+  '以及',
+  '还有',
+  '如果',
+  '但是',
+  '并且',
+  '然后',
+  '目前',
+  '现在',
+  '就是',
+]);
+
+function stripPunctuation(input: string): string {
+  return input.replace(/[，。！？、；：,.!?;:"'“”‘’（）()【】\[\]<>《》]/g, '');
+}
+
+function compactTitle(input: string): string {
+  return input.replace(/\s+/g, '');
+}
+
+function truncateTitle(input: string): string {
+  const chars = Array.from(compactTitle(input).trim());
+  if (chars.length <= CONVERSATION_TITLE_MAX_LENGTH) {
+    return chars.join('');
+  }
+  return chars.slice(0, CONVERSATION_TITLE_MAX_LENGTH).join('');
+}
+
+function extractKeywordTitle(text: string): string {
+  const asciiTokens = Array.from(
+    text.matchAll(/\b[A-Za-z][A-Za-z0-9+#.-]{1,20}\b/g),
+    (m) => m[0],
+  ).filter((token) => !STOPWORDS.has(token.toLowerCase()));
+  if (asciiTokens.length > 0) {
+    const uniqueAscii = Array.from(new Set(asciiTokens));
+    const joinedAscii = uniqueAscii.slice(0, 2).join('');
+    if (joinedAscii) return truncateTitle(joinedAscii);
+  }
+
+  const chineseTokens = Array.from(text.matchAll(/[\u4e00-\u9fa5]{2,8}/g), (m) => m[0]).filter(
+    (token) => !STOPWORDS.has(token),
+  );
+  if (chineseTokens.length > 0) {
+    const freq = new Map<string, number>();
+    for (const token of chineseTokens) {
+      freq.set(token, (freq.get(token) ?? 0) + 1);
+    }
+    const ranked = Array.from(freq.entries())
+      .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+      .map(([token]) => token);
+    const combined = ranked.slice(0, 2).join('');
+    if (combined) return truncateTitle(combined);
+  }
+
+  return '';
+}
+
+function summarizeQuestion(raw: string): string {
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '新会话';
+  }
+
+  const whyMatch = normalized.match(/^(为什么|为何)\s*(.+?)(?:[？?。!！]|$)/u);
+  if (whyMatch) {
+    let topic = whyMatch[2].replace(TRAILING_REQUEST_PATTERN, '').trim();
+    topic = topic
+      .replace(/^(这个|这|该)?(岗位|职位)\s*(为什么|为何)?\s*(需要|要)\s*/u, '')
+      .replace(/^(这个|这|该)?\s*/u, '')
+      .replace(/^(要|需要)\s*/u, '');
+    const compact = compactTitle(stripPunctuation(topic)).trim();
+    if (compact) return truncateTitle(compact);
+  }
+
+  const howMatch = normalized.match(/^(怎么|如何|怎样)\s*(.+?)(?:[？?。!！]|$)/u);
+  if (howMatch) {
+    const topic = compactTitle(stripPunctuation(howMatch[2])).trim();
+    if (topic) return truncateTitle(`${topic}方法`);
+  }
+
+  const whatIsMatch = normalized.match(/^(什么是)\s*(.+?)(?:[？?。!！]|$)/u);
+  if (whatIsMatch) {
+    const topic = compactTitle(stripPunctuation(whatIsMatch[2])).trim();
+    if (topic) return truncateTitle(`${topic}定义`);
+  }
+
+  const compact = compactTitle(
+    stripPunctuation(
+      normalized.replace(
+        /(请问|请|帮我|麻烦|一下|给我|一个|一些|这个|那个|是否|为什么|为何|怎么|如何|怎样|能否|可以|吗|呢|我们|你们|他们|进行|需要|以及|还有|如果|但是|并且|然后|目前|现在|就是)/gu,
+        '',
+      ),
+    ),
+  ).trim();
+  if (Array.from(compact).length > LONG_INPUT_THRESHOLD) {
+    const keywordTitle = extractKeywordTitle(compact);
+    if (keywordTitle) return keywordTitle;
+  }
+  if (compact) return truncateTitle(compact);
+
+  return truncateTitle(stripPunctuation(normalized)) || '新会话';
+}
+
 function mapRow(row: MessageRow): Message {
   return {
     id: row.id,
@@ -39,6 +171,7 @@ export async function createMessage(params: {
       select: { seq: true },
     });
     const nextSeq = (top?.seq ?? 0) + 1;
+    const shouldSetConversationTitle = params.role === 'user' && nextSeq === 1;
     const created = await tx.message.create({
       data: {
         conversationId: params.conversationId,
@@ -52,6 +185,7 @@ export async function createMessage(params: {
     await tx.conversation.update({
       where: { id: params.conversationId },
       data: {
+        ...(shouldSetConversationTitle ? { title: summarizeQuestion(params.content) } : {}),
         lastActiveAt: new Date(),
         updatedAt: new Date(),
       },

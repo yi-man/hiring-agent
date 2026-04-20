@@ -123,6 +123,148 @@ describe('chat repositories', () => {
     });
   });
 
+  it('summarizes first user message into short title', async () => {
+    const conversationUpdateMock = jest.fn();
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        conversation: {
+          update: conversationUpdateMock,
+        },
+        message: {
+          findFirst: async () => null,
+          create: async () => ({
+            id: 'm1',
+            conversationId: 'c1',
+            role: 'user',
+            content: '为什么这个岗位需要 GraphQL 经验？请给三个理由',
+            documentId: null,
+            seq: 1,
+            tokenCount: null,
+            createdAt: new Date('2026-03-26T01:00:00.000Z'),
+          }),
+        },
+      }),
+    );
+
+    await createMessage({
+      conversationId: 'c1',
+      role: 'user',
+      content: '为什么这个岗位需要 GraphQL 经验？请给三个理由',
+    });
+
+    expect(conversationUpdateMock).toHaveBeenCalledWith({
+      data: {
+        title: 'GraphQL经验',
+        lastActiveAt: expect.any(Date),
+        updatedAt: expect.any(Date),
+      },
+      where: { id: 'c1' },
+    });
+  });
+
+  it('limits summarized title to <= 10 characters', async () => {
+    const conversationUpdateMock = jest.fn();
+    const longQuestion = '如何系统化提升招聘流程自动化效率并降低误判率';
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        conversation: {
+          update: conversationUpdateMock,
+        },
+        message: {
+          findFirst: async () => null,
+          create: async () => ({
+            id: 'm1',
+            conversationId: 'c1',
+            role: 'user',
+            content: longQuestion,
+            documentId: null,
+            seq: 1,
+            tokenCount: null,
+            createdAt: new Date('2026-03-26T01:00:00.000Z'),
+          }),
+        },
+      }),
+    );
+
+    await createMessage({
+      conversationId: 'c1',
+      role: 'user',
+      content: longQuestion,
+    });
+
+    const updateArg = conversationUpdateMock.mock.calls[0][0] as { data: { title: string } };
+    expect(Array.from(updateArg.data.title).length).toBeLessThanOrEqual(10);
+  });
+
+  it('extracts keyword title from very long mixed-language input', async () => {
+    const conversationUpdateMock = jest.fn();
+    const longQuestion =
+      '我们正在设计一个跨国招聘平台，请从架构角度分析如何同时优化 GraphQL 查询性能、PostgreSQL 成本、以及候选人匹配准确率，并给出分阶段落地方案与风险控制建议';
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        conversation: {
+          update: conversationUpdateMock,
+        },
+        message: {
+          findFirst: async () => null,
+          create: async () => ({
+            id: 'm1',
+            conversationId: 'c1',
+            role: 'user',
+            content: longQuestion,
+            documentId: null,
+            seq: 1,
+            tokenCount: null,
+            createdAt: new Date('2026-03-26T01:00:00.000Z'),
+          }),
+        },
+      }),
+    );
+
+    await createMessage({
+      conversationId: 'c1',
+      role: 'user',
+      content: longQuestion,
+    });
+
+    const updateArg = conversationUpdateMock.mock.calls[0][0] as { data: { title: string } };
+    expect(updateArg.data.title).toContain('GraphQL');
+    expect(Array.from(updateArg.data.title).length).toBeLessThanOrEqual(10);
+  });
+
+  it('does not overwrite title for non-first message', async () => {
+    const conversationUpdateMock = jest.fn();
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (tx: unknown) => unknown) =>
+      fn({
+        conversation: {
+          update: conversationUpdateMock,
+        },
+        message: {
+          findFirst: async () => ({ seq: 1 }),
+          create: async () => ({
+            id: 'm2',
+            conversationId: 'c1',
+            role: 'user',
+            content: '第二条追问',
+            documentId: null,
+            seq: 2,
+            tokenCount: null,
+            createdAt: new Date('2026-03-26T01:00:00.000Z'),
+          }),
+        },
+      }),
+    );
+
+    await createMessage({
+      conversationId: 'c1',
+      role: 'user',
+      content: '第二条追问',
+    });
+
+    const updateArg = conversationUpdateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updateArg.data.title).toBeUndefined();
+  });
+
   it('lists messages ordered by seq asc', async () => {
     prismaMock.message.findMany.mockResolvedValueOnce([
       {
