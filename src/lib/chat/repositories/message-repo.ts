@@ -13,8 +13,45 @@ type MessageRow = {
 };
 
 const CONVERSATION_TITLE_MAX_LENGTH = 10;
+const LONG_INPUT_THRESHOLD = 50;
 const TRAILING_REQUEST_PATTERN =
   /(请|并|然后|再)\s*(给|列|提供|说明|补充)?\s*(我)?\s*(\d+|几)?\s*(个|条|点)?\s*(理由|原因|步骤|方案|建议).*/u;
+const STOPWORDS = new Set([
+  '请问',
+  '请',
+  '帮我',
+  '麻烦',
+  '一下',
+  '给我',
+  '一个',
+  '一些',
+  '这个',
+  '那个',
+  '是否',
+  '为什么',
+  '为何',
+  '怎么',
+  '如何',
+  '怎样',
+  '能否',
+  '可以',
+  '吗',
+  '呢',
+  '我们',
+  '你们',
+  '他们',
+  '进行',
+  '需要',
+  '以及',
+  '还有',
+  '如果',
+  '但是',
+  '并且',
+  '然后',
+  '目前',
+  '现在',
+  '就是',
+]);
 
 function stripPunctuation(input: string): string {
   return input.replace(/[，。！？、；：,.!?;:"'“”‘’（）()【】\[\]<>《》]/g, '');
@@ -30,6 +67,35 @@ function truncateTitle(input: string): string {
     return chars.join('');
   }
   return chars.slice(0, CONVERSATION_TITLE_MAX_LENGTH).join('');
+}
+
+function extractKeywordTitle(text: string): string {
+  const asciiTokens = Array.from(
+    text.matchAll(/\b[A-Za-z][A-Za-z0-9+#.-]{1,20}\b/g),
+    (m) => m[0],
+  ).filter((token) => !STOPWORDS.has(token.toLowerCase()));
+  if (asciiTokens.length > 0) {
+    const uniqueAscii = Array.from(new Set(asciiTokens));
+    const joinedAscii = uniqueAscii.slice(0, 2).join('');
+    if (joinedAscii) return truncateTitle(joinedAscii);
+  }
+
+  const chineseTokens = Array.from(text.matchAll(/[\u4e00-\u9fa5]{2,8}/g), (m) => m[0]).filter(
+    (token) => !STOPWORDS.has(token),
+  );
+  if (chineseTokens.length > 0) {
+    const freq = new Map<string, number>();
+    for (const token of chineseTokens) {
+      freq.set(token, (freq.get(token) ?? 0) + 1);
+    }
+    const ranked = Array.from(freq.entries())
+      .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+      .map(([token]) => token);
+    const combined = ranked.slice(0, 2).join('');
+    if (combined) return truncateTitle(combined);
+  }
+
+  return '';
 }
 
 function summarizeQuestion(raw: string): string {
@@ -64,11 +130,15 @@ function summarizeQuestion(raw: string): string {
   const compact = compactTitle(
     stripPunctuation(
       normalized.replace(
-        /(请问|请|帮我|麻烦|一下|给我|一个|一些|这个|那个|是否|为什么|为何|怎么|如何|怎样|能否|可以|吗|呢)/gu,
+        /(请问|请|帮我|麻烦|一下|给我|一个|一些|这个|那个|是否|为什么|为何|怎么|如何|怎样|能否|可以|吗|呢|我们|你们|他们|进行|需要|以及|还有|如果|但是|并且|然后|目前|现在|就是)/gu,
         '',
       ),
     ),
   ).trim();
+  if (Array.from(compact).length > LONG_INPUT_THRESHOLD) {
+    const keywordTitle = extractKeywordTitle(compact);
+    if (keywordTitle) return keywordTitle;
+  }
   if (compact) return truncateTitle(compact);
 
   return truncateTitle(stripPunctuation(normalized)) || '新会话';
