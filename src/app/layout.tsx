@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import './globals.css';
 import { Navbar } from '@/components/navbar';
 import { HeroUIProvider } from '@heroui/system';
@@ -6,9 +7,18 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { AuthSessionProvider } from '@/components/auth/session-provider';
 
 export const metadata: Metadata = {
-  title: 'Next.js 16 SSR 模板',
-  description: '生产就绪的 Next.js 16 SSR 模板',
+  title: '招聘助手 · Hiring Agent',
+  description: 'AI 驱动的招聘协作：对话、JD 生成、工作流学习与 LLM 可观测',
 };
+
+const footerLinks = [
+  { name: '首页', href: '/' },
+  { name: '对话', href: '/chat' },
+  { name: 'JD 工作台', href: '/jd-generator' },
+  { name: 'Workflow 学习', href: '/workflow-learning' },
+  { name: 'LLM 可观测', href: '/llm-observability' },
+  { name: '登录', href: '/auth/signin' },
+];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -27,87 +37,54 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <footer className="bg-secondary/30 border-t py-16">
                 <div className="container mx-auto px-4">
                   <div className="grid grid-cols-1 gap-12 lg:grid-cols-4">
-                    <div className="lg:col-span-1">
+                    <div className="lg:col-span-2">
                       <div className="mb-6 flex items-center space-x-2">
                         <div className="hero-gradient flex h-10 w-10 items-center justify-center rounded-lg text-white">
-                          <span className="text-lg font-bold">N</span>
+                          <span className="text-lg font-bold">招</span>
                         </div>
                         <span className="text-foreground text-xl font-semibold tracking-tight">
-                          Next.js 16
+                          招聘助手
                         </span>
                       </div>
-                      <p className="text-muted-foreground text-sm">
-                        生产就绪的 Next.js 16 SSR 模板，集成完整的技术栈和工程化配置，
-                        让您快速启动高质量项目。
+                      <p className="text-muted-foreground max-w-md text-sm">
+                        Hiring Agent：面向招聘与 HR 场景的 Next.js 应用，集成对话、JD
+                        生成、工作流学习与 LLM 可观测性。
                       </p>
                     </div>
 
                     <div>
-                      <h3 className="text-foreground mb-6 text-lg font-semibold">快速链接</h3>
-                      <ul className="space-y-4">
-                        {[
-                          { name: '首页', href: '/' },
-                          { name: 'Chat', href: '/chat' },
-                          { name: '关于', href: '/about' },
-                          { name: '服务', href: '/services' },
-                          { name: '博客', href: '/blog' },
-                          { name: '联系', href: '/contact' },
-                        ].map((item, index) => (
-                          <li key={index}>
-                            <a
+                      <h3 className="text-foreground mb-6 text-lg font-semibold">功能</h3>
+                      <ul className="space-y-3">
+                        {footerLinks.map((item) => (
+                          <li key={item.href}>
+                            <Link
                               href={item.href}
                               className="text-muted-foreground hover:text-primary text-sm font-medium transition-colors"
                             >
                               {item.name}
-                            </a>
+                            </Link>
                           </li>
                         ))}
                       </ul>
                     </div>
 
                     <div>
-                      <h3 className="text-foreground mb-6 text-lg font-semibold">资源</h3>
-                      <ul className="space-y-4">
-                        {[
-                          { name: '文档', href: '/docs' },
-                          { name: 'API', href: '/api' },
-                          { name: '教程', href: '/tutorials' },
-                          { name: '示例', href: '/examples' },
-                          { name: 'GitHub', href: 'https://github.com' },
-                        ].map((item, index) => (
-                          <li key={index}>
-                            <a
-                              href={item.href}
-                              className="text-muted-foreground hover:text-primary text-sm font-medium transition-colors"
-                            >
-                              {item.name}
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <div>
-                      <h3 className="text-foreground mb-6 text-lg font-semibold">联系我们</h3>
-                      <ul className="space-y-4">
-                        <li className="text-muted-foreground flex items-center gap-2 text-sm">
-                          <span>📧</span>
-                          <span>contact@example.com</span>
-                        </li>
-                        <li className="text-muted-foreground flex items-center gap-2 text-sm">
-                          <span>📱</span>
-                          <span>+86 123 4567 8900</span>
-                        </li>
-                        <li className="text-muted-foreground flex items-center gap-2 text-sm">
-                          <span>📍</span>
-                          <span>中国，北京</span>
+                      <h3 className="text-foreground mb-6 text-lg font-semibold">开发</h3>
+                      <ul className="space-y-3">
+                        <li>
+                          <Link
+                            href="/api/health"
+                            className="text-muted-foreground hover:text-primary text-sm font-medium transition-colors"
+                          >
+                            健康检查
+                          </Link>
                         </li>
                       </ul>
                     </div>
                   </div>
 
                   <div className="text-muted-foreground border-border mt-12 border-t pt-8 text-center text-sm">
-                    <p>© 2026 Next.js 16 SSR Template. All rights reserved.</p>
+                    <p>© {new Date().getFullYear()} Hiring Agent. All rights reserved.</p>
                   </div>
                 </div>
               </footer>
