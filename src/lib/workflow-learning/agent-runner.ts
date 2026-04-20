@@ -6,7 +6,12 @@ import {
   WORKFLOW_AGENT_MAX_STEPS,
   WORKFLOW_TOOL_RESULT_MAX_CHARS,
 } from '@/lib/workflow-learning/constants';
-import { createBrowserSnapshotTool } from '@/lib/workflow-learning/tools/browser-snapshot-tool';
+import {
+  createBrowserInspectSessionTool,
+  createBrowserObserveCurrentTool,
+  createBrowserProbeAuthTool,
+  createBrowserSnapshotTool,
+} from '@/lib/workflow-learning/tools/browser-snapshot-tool';
 import type { WorkflowSseEvent } from '@/lib/workflow-learning/types';
 
 function requireEnv(name: string): string {
@@ -71,7 +76,27 @@ function resultPreviewFromToolOutput(output: unknown): string {
     : text;
 }
 
-const WORKFLOW_SYSTEM_PROMPT = `You are a workflow learning assistant. When the user asks to open, fetch, or inspect a web page, you MUST call the browser_snapshot tool with a full URL (include http(s)://). In allowlisted mode, the URL must target localhost/127.0.0.1 or the app origin. Summarize tool results clearly.`;
+const WORKFLOW_SYSTEM_PROMPT = `You are a workflow learning assistant using ReAct.
+You have browser tools:
+- browser_inspect_session(targetUrl, loginUrl): inspect current browser session facts for a site without navigating.
+- browser_probe_auth(targetUrl, loginUrl): navigate to the protected target page once and return factual auth results.
+- browser_snapshot(url): navigate to a full http(s) URL and report facts.
+- browser_observe_current(): inspect the currently open page without navigating.
+
+In allowlisted mode, any URL you navigate to must target localhost/127.0.0.1 or the app origin.
+
+Decision rules (LLM decides, tools only execute and report facts):
+1) Read tool output as facts only: requestedUrl, currentUrl, title, excerpt, documentResponse, signals, navigationAttempted, redirected, navigationError.
+2) Before opening an external website, first call browser_inspect_session with the task's targetUrl and loginUrl.
+3) If browser_inspect_session already says pageKind=login, do not navigate away. Ask the user to complete login first.
+4) If browser_inspect_session already says pageKind=target, continue the task on the target page without visiting the login page.
+5) If login state is unknown, call browser_probe_auth exactly once. Use requiresLogin, accessGranted, currentUrl, pageKind, documentResponse.status, and documentResponse.redirectChain before relying on page text.
+6) If browser_probe_auth says requiresLogin=true, stop and ask the user to log in. Do not alternate between login URL and target URL in the same turn.
+7) After the user may have logged in, first call browser_inspect_session again. If it now says pageKind=target, continue the task. If it still says pageKind=login, ask the user to finish login.
+8) Never call browser_probe_auth or browser_snapshot repeatedly on the same target URL in one turn unless the user explicitly asks you to retry.
+9) For BOSS Zhipin tasks, treat https://www.zhipin.com/web/geek/chat as the target page and https://www.zhipin.com/web/user/ as the login page.
+10) Always summarize the observed browser facts before the final answer.
+`;
 
 /**
  * Streams LangGraph ReAct execution as workflow SSE events (run_start … run_end).
@@ -87,7 +112,13 @@ export async function* runWorkflowAgentWithEvents(options: {
   yield { type: 'run_start', runId, timestamp: ts() };
 
   const model = buildModel();
-  const tools = [createBrowserSnapshotTool()];
+  const turnGuard: { blockedOrigin?: string; reason?: string } = {};
+  const tools = [
+    createBrowserInspectSessionTool(),
+    createBrowserProbeAuthTool({ guard: turnGuard }),
+    createBrowserSnapshotTool({ guard: turnGuard }),
+    createBrowserObserveCurrentTool(),
+  ];
   const agent = createReactAgent({
     llm: model,
     tools,
