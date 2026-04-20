@@ -32,6 +32,12 @@ export type ConversationDocumentDto = {
   updatedAt: string;
 };
 
+export type PatternRunEvent = Record<string, unknown> & {
+  type: string;
+  seq: number;
+  runId: string;
+};
+
 export async function fetchConversations(params?: {
   page?: number;
   limit?: number;
@@ -140,5 +146,54 @@ export async function deleteConversationDocument(
   const data = (await res.json()) as { deleted?: boolean; error?: string };
   if (!res.ok || !data.deleted) {
     throw new Error(data.error || '删除文档失败');
+  }
+}
+
+export async function streamPatternRun(
+  conversationId: string,
+  payload: {
+    content: string;
+    patternId: string;
+    runId?: string;
+    fromSeq?: number;
+    approvalToken?: string;
+    replayOnly?: boolean;
+  },
+): Promise<ReadableStream<Uint8Array>> {
+  const res = await fetch(`/api/conversations/${conversationId}/runs/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    let message = 'Pattern run failed';
+    try {
+      const data = JSON.parse(text) as { error?: string };
+      if (typeof data.error === 'string' && data.error.trim()) {
+        message = data.error;
+      }
+    } catch {
+      if (text.trim()) {
+        message = text.trim().slice(0, 500);
+      }
+    }
+    throw new Error(message);
+  }
+  return res.body;
+}
+
+export async function approvePatternRun(
+  conversationId: string,
+  payload: { runId: string; approvalToken: string; approved: boolean },
+): Promise<void> {
+  const res = await fetch(`/api/conversations/${conversationId}/runs/approval`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error || '审批失败');
   }
 }

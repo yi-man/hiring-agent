@@ -4,12 +4,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, FileCode, Paperclip, RefreshCw, X } from 'lucide-react';
 import { Button, Card, CardBody, Input } from '@/components/ui';
 import {
+  approvePatternRun,
   createConversationApi,
   deleteConversationDocument,
   fetchConversationDocuments,
   fetchConversationMessages,
   fetchConversations,
   type ConversationDocumentDto,
+  type PatternRunEvent,
+  streamPatternRun,
   streamConversationMessage,
   uploadConversationDocument,
 } from '@/lib/chat/client';
@@ -27,6 +30,26 @@ type Conversation = {
   id: string;
   title?: string | null;
 };
+
+type PatternMeta = { id: string; label: string };
+type BranchSnapshot = {
+  id: string;
+  label: string;
+  sourceMessageIndex: number;
+  messages: ChatMessage[];
+};
+
+const PATTERNS: PatternMeta[] = [
+  { id: 'basic_streaming_chat', label: 'Basic Streaming Chat' },
+  { id: 'memory_persistence', label: 'Memory Persistence' },
+  { id: 'rag_over_uploaded_doc', label: 'RAG over Uploaded Doc' },
+  { id: 'source_grounding', label: 'Source Grounding' },
+  { id: 'tool_calling', label: 'Tool Calling' },
+  { id: 'agent_trace_stream', label: 'Agent Trace Stream' },
+  { id: 'structured_output', label: 'Structured Output' },
+  { id: 'human_approval_gate', label: 'Human Approval Gate' },
+  { id: 'error_recovery_retry', label: 'Error Recovery Retry' },
+];
 
 function StreamingIndicator() {
   return (
@@ -56,12 +79,24 @@ export function CopilotChatUI() {
   const [isUploadingDocument, setIsUploadingDocument] = useState(false);
   const [focusedDocumentId, setFocusedDocumentId] = useState<string | null>(null);
   const [lastAssistantError, setLastAssistantError] = useState<string | null>(null);
+  const [selectedPatternId, setSelectedPatternId] = useState<string>('basic_streaming_chat');
+  const [runEvents, setRunEvents] = useState<PatternRunEvent[]>([]);
+  const [latestRunId, setLatestRunId] = useState<string | null>(null);
+  const [latestApprovalToken, setLatestApprovalToken] = useState<string | null>(null);
+  const [lastRetryInput, setLastRetryInput] = useState<string | null>(null);
+  const [checkpoints, setCheckpoints] = useState<
+    { id: string; label: string; messages: ChatMessage[] }[]
+  >([]);
+  const [branches, setBranches] = useState<BranchSnapshot[]>([]);
+  const [queuePending, setQueuePending] = useState(0);
   const conversationListRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const documentPollTimerRef = useRef<number | null>(null);
   const documentPollSessionIdRef = useRef(0);
   const latestDocumentRequestIdRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isQueueRunningRef = useRef(false);
+  const queueRef = useRef<{ text: string; assistantIndex: number }[]>([]);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -204,6 +239,13 @@ export function CopilotChatUI() {
     setDocuments([]);
     setFocusedDocumentId(null);
     setLastAssistantError(null);
+    setRunEvents([]);
+    setLatestRunId(null);
+    setLatestApprovalToken(null);
+    setCheckpoints([]);
+    setBranches([]);
+    setQueuePending(0);
+    queueRef.current = [];
     void (async () => {
       try {
         await loadMessages(activeConversationId);
@@ -217,6 +259,144 @@ export function CopilotChatUI() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConversationId]);
 
+  const pushCheckpoint = (label: string) => {
+    setCheckpoints((prev) => [
+      ...prev,
+      {
+        id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        label,
+        messages,
+      },
+    ]);
+  };
+
+  const runPatternMode = async (
+    text: string,
+    options?: {
+      runId?: string;
+      fromSeq?: number;
+      approvalToken?: string;
+      replayOnly?: boolean;
+      assistantIndex?: number;
+    },
+  ) => {
+    if (!activeConversationId) return;
+    const stream = await streamPatternRun(activeConversationId, {
+      content: text,
+      patternId: selectedPatternId,
+      runId: options?.runId,
+      fromSeq: options?.fromSeq,
+      approvalToken: options?.approvalToken,
+      replayOnly: options?.replayOnly,
+    });
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let assistantAccumulated = '';
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() ?? '';
+      for (const block of blocks) {
+        if (!block.startsWith('data:')) continue;
+        const line = block.slice(5).trim();
+        if (!line) continue;
+        const event = JSON.parse(line) as PatternRunEvent;
+        setRunEvents((prev) => [...prev, event]);
+        if (event.type === 'run_start' && typeof event.runId === 'string') {
+          setLatestRunId(event.runId);
+        }
+        if (event.type === 'approval_required' && typeof event.approvalToken === 'string') {
+          setLatestApprovalToken(event.approvalToken);
+        }
+        if (event.type === 'queue_state' && typeof event.pending === 'number') {
+          setQueuePending(event.pending);
+        }
+        if (event.type === 'assistant_delta' && typeof event.text === 'string') {
+          assistantAccumulated += event.text;
+          setMessages((prev) => {
+            const next = [...prev];
+            const targetIndex =
+              typeof options?.assistantIndex === 'number'
+                ? options.assistantIndex
+                : next.length - 1;
+            const target = next[targetIndex];
+            if (!target || target.role !== 'assistant') return prev;
+            next[targetIndex] = { ...target, content: assistantAccumulated };
+            return next;
+          });
+        }
+        if (event.type === 'assistant_final' && typeof event.text === 'string') {
+          const finalText = event.text;
+          setMessages((prev) => {
+            const next = [...prev];
+            const targetIndex =
+              typeof options?.assistantIndex === 'number'
+                ? options.assistantIndex
+                : next.length - 1;
+            const target = next[targetIndex];
+            if (!target || target.role !== 'assistant') return prev;
+            next[targetIndex] = { ...target, content: finalText };
+            return next;
+          });
+          if (selectedPatternId === 'memory_persistence') {
+            pushCheckpoint(`快照 ${new Date().toLocaleTimeString()}`);
+          }
+        }
+        if (event.type === 'error' && typeof event.message === 'string') {
+          if (selectedPatternId === 'error_recovery_retry') {
+            setLastRetryInput(text);
+          }
+          throw new Error(event.message);
+        }
+      }
+    }
+    await loadConversations({ reset: true });
+  };
+
+  const enqueuePatternMessage = (text: string) => {
+    let assistantIndex = -1;
+    setMessages((prev) => {
+      const next: ChatMessage[] = [
+        ...prev,
+        { role: 'user', content: text, documentId: null },
+        { role: 'assistant', content: '' },
+      ];
+      assistantIndex = next.length - 1;
+      return next;
+    });
+    return assistantIndex;
+  };
+
+  const pumpQueue = async () => {
+    if (isQueueRunningRef.current || !queueRef.current.length) return;
+    isQueueRunningRef.current = true;
+    try {
+      while (queueRef.current.length) {
+        const item = queueRef.current.shift();
+        setQueuePending(queueRef.current.length);
+        if (!item) break;
+        await runPatternMode(item.text, { assistantIndex: item.assistantIndex });
+      }
+    } finally {
+      isQueueRunningRef.current = false;
+      setQueuePending(queueRef.current.length);
+    }
+  };
+
+  const createBranchSnapshot = (sourceMessageIndex: number) => {
+    const baseMessages = messages.slice(0, sourceMessageIndex + 1);
+    const branch: BranchSnapshot = {
+      id: `br-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: `分支 ${branches.length + 1}`,
+      sourceMessageIndex,
+      messages: baseMessages,
+    };
+    setBranches((prev) => [...prev, branch]);
+  };
+
   const onSend = async () => {
     const text = input.trim();
     if (!text || isLoading || !activeConversationId) return;
@@ -227,43 +407,99 @@ export function CopilotChatUI() {
     const docForSend =
       focusedDocumentId && focusedRow?.status === 'ready' ? focusedDocumentId : undefined;
 
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: text, documentId: docForSend ?? null },
-    ]);
-    setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
     setInput('');
     setError(null);
-    setIsLoading(true);
 
     try {
-      const body = docForSend
-        ? await streamConversationMessage(activeConversationId, text, { documentId: docForSend })
-        : await streamConversationMessage(activeConversationId, text);
-      const reader = body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-      while (!done) {
-        const result = await reader.read();
-        done = result.done;
-        if (result.value) {
-          const chunk = decoder.decode(result.value, { stream: true });
-          if (chunk) {
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (!last || last.role !== 'assistant') return prev;
-              next[next.length - 1] = { ...last, content: `${last.content}${chunk}` };
-              return next;
-            });
+      if (selectedPatternId === 'memory_persistence') {
+        const assistantIndex = enqueuePatternMessage(text);
+        queueRef.current.push({ text, assistantIndex });
+        setQueuePending(queueRef.current.length);
+        void pumpQueue();
+      } else if (
+        selectedPatternId === 'basic_streaming_chat' ||
+        selectedPatternId === 'rag_over_uploaded_doc'
+      ) {
+        let assistantIndex = -1;
+        setMessages((prev) => {
+          const next: ChatMessage[] = [
+            ...prev,
+            { role: 'user', content: text, documentId: docForSend ?? null },
+            { role: 'assistant', content: '' },
+          ];
+          assistantIndex = next.length - 1;
+          return next;
+        });
+        setIsLoading(true);
+        const body = docForSend
+          ? await streamConversationMessage(activeConversationId, text, { documentId: docForSend })
+          : await streamConversationMessage(activeConversationId, text);
+        const reader = body.getReader();
+        const decoder = new TextDecoder();
+        let done = false;
+        while (!done) {
+          const result = await reader.read();
+          done = result.done;
+          if (result.value) {
+            const chunk = decoder.decode(result.value, { stream: true });
+            if (chunk) {
+              setMessages((prev) => {
+                const next = [...prev];
+                const target = next[assistantIndex];
+                if (!target || target.role !== 'assistant') return prev;
+                next[assistantIndex] = { ...target, content: `${target.content}${chunk}` };
+                return next;
+              });
+            }
           }
         }
+        await loadConversations({ reset: true });
+      } else {
+        const assistantIndex = enqueuePatternMessage(text);
+        setIsLoading(true);
+        await runPatternMode(text, { assistantIndex });
       }
-      await loadConversations({ reset: true });
     } catch (e) {
       const message = e instanceof Error ? e.message : '请求失败';
       setError(message);
       setLastAssistantError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const onApproveLatest = async () => {
+    if (!activeConversationId || !latestRunId || !latestApprovalToken || isLoading) return;
+    setIsLoading(true);
+    try {
+      await approvePatternRun(activeConversationId, {
+        runId: latestRunId,
+        approvalToken: latestApprovalToken,
+        approved: true,
+      });
+      await runPatternMode(input.trim() || '继续执行审批后的任务', {
+        runId: latestRunId,
+        approvalToken: latestApprovalToken,
+      });
+      setLatestApprovalToken(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '审批失败');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const onRetryPattern = async () => {
+    if (!lastRetryInput || !activeConversationId || isLoading) return;
+    setIsLoading(true);
+    setLastAssistantError(null);
+    try {
+      const assistantIndex = enqueuePatternMessage(lastRetryInput.replace('fail', 'recover'));
+      await runPatternMode(lastRetryInput.replace('fail', 'recover'), { assistantIndex });
+      setLastRetryInput(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '重试失败');
+      setLastAssistantError(e instanceof Error ? e.message : '重试失败');
     } finally {
       setIsLoading(false);
     }
@@ -382,6 +618,22 @@ export function CopilotChatUI() {
           <div className="text-secondary-foreground mb-2 text-xs">
             CopilotKit-style UI (frontend compatible)
           </div>
+          <div className="mb-2 flex flex-wrap gap-2">
+            {PATTERNS.map((pattern) => (
+              <button
+                key={pattern.id}
+                type="button"
+                className={`rounded-full border px-2.5 py-1 text-xs transition ${
+                  selectedPatternId === pattern.id
+                    ? 'border-sky-300 bg-sky-100 text-sky-900 dark:border-sky-700 dark:bg-sky-950/60 dark:text-sky-100'
+                    : 'border-border/80 bg-background hover:bg-secondary/70'
+                }`}
+                onClick={() => setSelectedPatternId(pattern.id)}
+              >
+                {pattern.label}
+              </button>
+            ))}
+          </div>
           <div className="min-h-0 flex-1">
             {!activeConversation ? (
               <div className="text-secondary-foreground flex h-full items-center justify-center text-center text-sm">
@@ -413,6 +665,15 @@ export function CopilotChatUI() {
                             </span>
                           </button>
                         ) : null}
+                        {selectedPatternId === 'memory_persistence' && msg.role === 'user' ? (
+                          <button
+                            type="button"
+                            className="mb-1 rounded-lg border border-dashed border-violet-300/80 bg-violet-50/70 px-2 py-1 text-[11px] text-violet-900 hover:opacity-90 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-100"
+                            onClick={() => createBranchSnapshot(idx)}
+                          >
+                            以这条消息创建分支
+                          </button>
+                        ) : null}
                         <MessageBubble role={msg.role}>
                           {msg.role === 'assistant' ? (
                             msg.content ? (
@@ -432,6 +693,101 @@ export function CopilotChatUI() {
                       <p className="font-medium">回复中断</p>
                       <p className="mt-1 opacity-90">{lastAssistantError}</p>
                       <p className="mt-2 text-xs opacity-80">你可以直接再次发送消息继续会话。</p>
+                    </div>
+                  ) : null}
+                  {runEvents.length > 0 ? (
+                    <div className="border-border/70 rounded-2xl border bg-slate-50/65 p-3 text-xs dark:bg-slate-950/30">
+                      <p className="mb-2 font-medium">运行轨迹</p>
+                      <div className="space-y-1.5">
+                        {runEvents.slice(-10).map((event) => (
+                          <div
+                            key={`${event.runId}-${event.seq}`}
+                            className="text-secondary-foreground"
+                          >
+                            <span className="font-mono text-[11px] text-sky-700 dark:text-sky-300">
+                              {String(event.type)}
+                            </span>
+                            {' · '}
+                            <span className="truncate">
+                              {JSON.stringify(event).slice(0, 100)}
+                              {JSON.stringify(event).length > 100 ? '...' : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {selectedPatternId === 'structured_output' ? (
+                    <div className="bg-background/70 border-border/70 rounded-2xl border p-3 text-xs">
+                      <p className="mb-2 font-medium">Structured Output</p>
+                      {runEvents
+                        .filter((event) => event.type === 'structured_output')
+                        .slice(-1)
+                        .map((event) => (
+                          <pre
+                            key={`${event.runId}-${event.seq}`}
+                            className="overflow-x-auto rounded-lg bg-slate-900 p-2 text-[11px] text-slate-100"
+                          >
+                            {JSON.stringify(event, null, 2)}
+                          </pre>
+                        ))}
+                    </div>
+                  ) : null}
+                  {selectedPatternId === 'source_grounding' ? (
+                    <div className="bg-background/70 border-border/70 rounded-2xl border p-3 text-xs">
+                      <p className="mb-2 font-medium">Source Grounding</p>
+                      {runEvents
+                        .filter((event) => event.type === 'checkpoint_created')
+                        .slice(-2)
+                        .map((event) => (
+                          <p
+                            key={`${event.runId}-${event.seq}`}
+                            className="text-secondary-foreground truncate"
+                          >
+                            {JSON.stringify(event)}
+                          </p>
+                        ))}
+                    </div>
+                  ) : null}
+                  {selectedPatternId === 'memory_persistence' ? (
+                    <div className="bg-background/70 border-border/70 rounded-2xl border p-3 text-xs">
+                      <p className="mb-2 font-medium">Branching</p>
+                      <p className="text-secondary-foreground mb-2">
+                        选择任意用户消息创建分支快照，再点击快照可切回该上下文。
+                      </p>
+                      {branches.length ? (
+                        <div className="flex flex-wrap gap-2">
+                          {branches.map((branch) => (
+                            <button
+                              key={branch.id}
+                              type="button"
+                              className="rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 hover:opacity-90 dark:border-violet-800 dark:bg-violet-950/35"
+                              onClick={() => setMessages(branch.messages)}
+                            >
+                              {branch.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-secondary-foreground">暂无分支快照</p>
+                      )}
+                    </div>
+                  ) : null}
+                  {selectedPatternId === 'memory_persistence' && checkpoints.length ? (
+                    <div className="bg-background/70 border-border/70 rounded-2xl border p-3 text-xs">
+                      <p className="mb-2 font-medium">Memory 快照</p>
+                      <div className="flex flex-wrap gap-2">
+                        {checkpoints.map((cp) => (
+                          <button
+                            key={cp.id}
+                            type="button"
+                            className="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 hover:opacity-90 dark:border-sky-800 dark:bg-sky-950/40"
+                            onClick={() => setMessages(cp.messages)}
+                          >
+                            {cp.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -547,6 +903,44 @@ export function CopilotChatUI() {
                     />
                   </button>
                   <div className="flex-1" />
+                  {selectedPatternId === 'memory_persistence' ? (
+                    <span className="text-secondary-foreground rounded-md border border-sky-200/70 bg-sky-50 px-2 py-1 text-[11px] dark:border-sky-800 dark:bg-sky-950/35">
+                      队列待处理: {queuePending}
+                    </span>
+                  ) : null}
+                  {latestApprovalToken && selectedPatternId === 'human_approval_gate' ? (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 hover:opacity-90 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+                      onClick={() => void onApproveLatest()}
+                    >
+                      批准继续
+                    </button>
+                  ) : null}
+                  {selectedPatternId === 'error_recovery_retry' && lastRetryInput ? (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-900 hover:opacity-90 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-100"
+                      onClick={() => void onRetryPattern()}
+                    >
+                      一键重试
+                    </button>
+                  ) : null}
+                  {selectedPatternId === 'agent_trace_stream' && latestRunId ? (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs hover:opacity-90 dark:border-slate-700 dark:bg-slate-900"
+                      onClick={() =>
+                        void runPatternMode(input.trim() || '重连拉取事件', {
+                          runId: latestRunId,
+                          fromSeq: Math.max(0, runEvents.length - 3),
+                          replayOnly: true,
+                        })
+                      }
+                    >
+                      断线重连
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-sky-600 text-white hover:opacity-90 disabled:opacity-40"
