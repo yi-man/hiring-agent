@@ -1,23 +1,17 @@
-import { ChatUI } from '@/components/chat/chat-ui';
 import { SignInButton } from '@/components/auth/sign-in-button';
+import { CopilotChatUI } from '@/components/chat/copilot-chat-ui';
 import { getServerAuthSession } from '@/lib/auth/session';
 
-export default async function ChatPage() {
+export default async function CopilotChatPage() {
   const session = await getServerAuthSession();
 
   return (
     <section className="container mx-auto px-4 py-8">
       <div className="mb-6">
-        <h1 className="text-foreground text-3xl font-bold">招聘 AI Chat</h1>
+        <h1 className="text-foreground text-3xl font-bold">招聘 AI Chat (Copilot UI)</h1>
         <p className="text-muted-foreground mt-2 text-sm">
-          基于 LangChain + OpenAI 兼容接口，先打通最小可用对话链路。
+          前端兼容 CopilotKit 风格，复用现有会话与消息链路。
         </p>
-        <a
-          className="text-primary mt-2 inline-block text-sm hover:underline"
-          href="/chat-copilotkit"
-        >
-          试用 Copilot 风格版本
-        </a>
       </div>
       {!session?.user ? (
         <div className="border-border bg-background/60 rounded-xl border p-8 text-center backdrop-blur">
@@ -30,7 +24,7 @@ export default async function ChatPage() {
           </div>
         </div>
       ) : (
-        <ChatUI />
+        <CopilotChatUI />
       )}
     </section>
   );
