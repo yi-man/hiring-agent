@@ -10,6 +10,7 @@ type PageLike = {
   goto(url: string, options?: { timeout: number; waitUntil: 'domcontentloaded' }): Promise<unknown>;
   title(): Promise<string>;
   url(): string;
+  bringToFront?(): Promise<unknown>;
   locator(selector: string): {
     innerText(): Promise<string>;
     first?(): { innerText(): Promise<string> };
@@ -87,6 +88,7 @@ export class BrowserSessionManager {
       timeout: WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
       waitUntil: 'domcontentloaded',
     });
+    await session.page.bringToFront?.();
     const title = await session.page.title();
     const body = await this.readBodyText(session.page);
     return {
@@ -108,6 +110,7 @@ export class BrowserSessionManager {
       timeout: WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
       waitUntil: 'domcontentloaded',
     });
+    await session.page.bringToFront?.();
     return { sessionId: input.sessionId, loginUrl: input.loginUrl };
   }
 
@@ -189,6 +192,7 @@ export class BrowserSessionManager {
       timeout: WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
       waitUntil: 'domcontentloaded',
     });
+    await session.page.bringToFront?.();
     const title = await session.page.title();
     const body = await this.readBodyText(session.page);
     return {
@@ -288,7 +292,8 @@ export class BrowserSessionManager {
       }
 
       const context = await chromium.launchPersistentContext(this.getUserDataDir(), { headless });
-      const page = context.pages?.()[0] ?? (await context.newPage());
+      const page = await context.newPage();
+      await page.bringToFront?.();
       const session = { context, page, headless, persistent: true };
       this.persistentSession = session;
       this.sessions.set(sessionId, session);

@@ -16,6 +16,7 @@ function createFakeChromium(
     goto: jest.fn(async (url: string) => {
       pageState.url = pageState.redirectTo ?? url;
     }),
+    bringToFront: jest.fn(),
     title: jest.fn(async () => pageState.title),
     url: jest.fn(() => pageState.url),
     locator: jest.fn((selector: string) => ({
@@ -123,8 +124,24 @@ describe('BrowserSessionManager', () => {
       '/tmp/workflow-learning-browser-profile',
       { headless: false },
     );
+    expect(fake.context.newPage).toHaveBeenCalledTimes(1);
+    expect(fake.page.bringToFront).toHaveBeenCalled();
     expect(fake.chromium.launch).not.toHaveBeenCalled();
     expect(fake.browser.newContext).not.toHaveBeenCalled();
+    await manager.close('s1');
+  });
+
+  it('brings the workflow page to front after visible navigation', async () => {
+    const fake = createFakeChromium({
+      url: 'https://example.com',
+      title: 'Example',
+      body: 'Hello from the page',
+    });
+    const manager = new BrowserSessionManager({ chromium: fake.chromium });
+
+    await manager.navigate({ sessionId: 's1', url: 'https://example.com/messages' });
+
+    expect(fake.page.bringToFront).toHaveBeenCalledTimes(1);
     await manager.close('s1');
   });
 
