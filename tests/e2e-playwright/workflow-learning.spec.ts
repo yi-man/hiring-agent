@@ -130,3 +130,92 @@ test.describe('Workflow Learning（真实 LLM + 服务端 Playwright）', () => 
     }
   });
 });
+
+test.describe('Workflow Learning（模拟登录与 DSL 事件）', () => {
+  test.beforeEach(async ({ context }) => {
+    await context.clearCookies();
+    test.skip(
+      !HAS_DB_ENV,
+      '需要 .env 中配置 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASS/MYSQL_DATABASE（与本地真实库一致）。',
+    );
+  });
+
+  test('渲染登录等待、登录完成与 DSL artifact', async ({ context, page }, testInfo) => {
+    const seeded = await seedSessionToken();
+
+    const rawBaseURL = testInfo.project.use.baseURL;
+    if (!rawBaseURL || typeof rawBaseURL !== 'string') {
+      throw new Error('Playwright baseURL is required.');
+    }
+    const cookieUrl = new URL('/', rawBaseURL).toString();
+    await context.addCookies([
+      {
+        name: SESSION_COOKIE_NAME,
+        value: seeded.sessionToken,
+        url: cookieUrl,
+        httpOnly: true,
+        sameSite: 'Lax',
+      },
+    ]);
+
+    await page.route('**/api/workflow-learning/chat', async (route) => {
+      const runId = 'simulated-run';
+      const timestamp = '2026-01-01T00:00:00.000Z';
+      const frames = [
+        { type: 'run_start', runId, timestamp },
+        {
+          type: 'awaiting_login',
+          runId,
+          timestamp,
+          sessionId: 'simulated-session',
+          loginUrl: 'https://example.com/login',
+          message: '请扫码登录',
+        },
+        { type: 'login_verified', runId, timestamp, sessionId: 'simulated-session' },
+        { type: 'dsl_validation_result', runId, timestamp, ok: true },
+        {
+          type: 'workflow_dsl',
+          runId,
+          timestamp,
+          workflow: {
+            schemaVersion: '1.0',
+            metadata: {
+              name: 'Read first message',
+              description: 'Read the first recruiting message.',
+              domain: 'recruiting',
+            },
+            steps: [
+              {
+                id: 'open',
+                type: 'browser_action',
+                action: 'navigate',
+                target: { url: 'https://example.com/messages' },
+              },
+            ],
+          },
+        },
+        { type: 'assistant_final', runId, timestamp, text: '已生成 Workflow DSL。' },
+        { type: 'run_end', runId, timestamp },
+      ];
+      await route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+        body: frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(''),
+      });
+    });
+
+    try {
+      await page.goto('/workflow-learning', { waitUntil: 'domcontentloaded', timeout: 300_000 });
+      await page.getByLabel('Workflow Learning 任务输入').fill('打开消息页并读取第一条消息');
+      await page.getByRole('button', { name: '发送' }).click();
+
+      await expect(page.getByText('等待登录')).toBeVisible();
+      await expect(page.getByText('登录完成')).toBeVisible();
+      await expect(page.getByText('DSL 校验通过')).toBeVisible();
+      await expect(page.getByText('Workflow DSL', { exact: true })).toBeVisible();
+      await expect(page.locator('pre').filter({ hasText: '"schemaVersion": "1.0"' })).toBeVisible();
+    } finally {
+      await cleanupSeededUser(seeded.userId);
+    }
+  });
+});

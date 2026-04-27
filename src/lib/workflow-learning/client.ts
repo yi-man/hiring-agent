@@ -3,11 +3,12 @@
  */
 export async function streamWorkflowLearningMessage(
   message: string,
+  options: { sessionId?: string; conversationId?: string } = {},
 ): Promise<ReadableStream<Uint8Array>> {
   const res = await fetch('/api/workflow-learning/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, ...options }),
     credentials: 'same-origin',
   });
   if (!res.ok) {

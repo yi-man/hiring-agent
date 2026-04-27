@@ -1,4 +1,5 @@
 import { WorkflowSseBuffer } from './parse-sse';
+import { isWorkflowSseEvent } from './types';
 
 function encode(s: string): Uint8Array {
   return new TextEncoder().encode(s);
@@ -28,5 +29,34 @@ describe('WorkflowSseBuffer', () => {
     expect(e1).toHaveLength(0);
     const e2 = buf.push(encode(b));
     expect(e2.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('parses login and workflow DSL artifact events', () => {
+    const buf = new WorkflowSseBuffer();
+    const chunk =
+      'data: {"type":"awaiting_login","runId":"r1","timestamp":"t","sessionId":"s1","loginUrl":"https://example.com/login","message":"Please login"}\n\n' +
+      'data: {"type":"login_verified","runId":"r1","timestamp":"t","sessionId":"s1"}\n\n' +
+      'data: {"type":"workflow_dsl","runId":"r1","timestamp":"t","workflow":{"schemaVersion":"1.0","metadata":{"name":"Read first message","description":"Read the first message","domain":"recruiting"},"steps":[{"id":"open","type":"browser_action","action":"navigate","target":{"url":"https://example.com"}}]}}\n\n' +
+      'data: {"type":"dsl_validation_result","runId":"r1","timestamp":"t","ok":true}\n\n';
+
+    const events = buf.push(encode(chunk));
+
+    expect(events.map((event) => event.type)).toEqual([
+      'awaiting_login',
+      'login_verified',
+      'workflow_dsl',
+      'dsl_validation_result',
+    ]);
+  });
+
+  it('rejects malformed structured workflow events', () => {
+    expect(
+      isWorkflowSseEvent({
+        type: 'awaiting_login',
+        runId: 'r1',
+        timestamp: 't',
+        loginUrl: 'https://example.com/login',
+      }),
+    ).toBe(false);
   });
 });

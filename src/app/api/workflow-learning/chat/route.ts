@@ -10,11 +10,16 @@ export const runtime = 'nodejs';
 export async function POST(request: Request) {
   try {
     await requireAuth();
-    const body = (await request.json()) as { message?: string };
+    const body = (await request.json()) as {
+      message?: string;
+      sessionId?: string;
+      conversationId?: string;
+    };
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     if (!message) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 });
     }
+    const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : undefined;
 
     const runId = randomUUID();
     const encoder = new TextEncoder();
@@ -22,7 +27,11 @@ export async function POST(request: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          for await (const event of runWorkflowAgentWithEvents({ runId, userText: message })) {
+          for await (const event of runWorkflowAgentWithEvents({
+            runId,
+            userText: message,
+            sessionId,
+          })) {
             controller.enqueue(encoder.encode(formatSseData(event)));
           }
           controller.close();

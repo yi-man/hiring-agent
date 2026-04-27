@@ -1,10 +1,11 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { Loader2, Send } from 'lucide-react';
+import { CheckCircle2, Copy, Loader2, Send } from 'lucide-react';
 import { Button, Card, CardBody, Input } from '@/components/ui';
 import { streamWorkflowLearningMessage } from '@/lib/workflow-learning/client';
 import { WorkflowSseBuffer } from '@/lib/workflow-learning/parse-sse';
+import type { WorkflowDsl } from '@/lib/workflow-learning/dsl';
 import type { WorkflowSseEvent } from '@/lib/workflow-learning/types';
 
 type UserRow = { id: string; role: 'user'; content: string };
@@ -14,6 +15,9 @@ type AssistantRow = {
   trace: WorkflowSseEvent[];
   finalText?: string;
   error?: string;
+  workflow?: WorkflowDsl;
+  validation?: { ok: boolean; error?: string };
+  login?: { status: 'waiting' | 'verified'; message: string; loginUrl?: string };
 };
 
 type Row = UserRow | AssistantRow;
@@ -24,6 +28,7 @@ export function WorkflowLearningChat() {
   const [isRunning, setIsRunning] = useState(false);
   const [clientError, setClientError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const sessionIdRef = useRef<string>(crypto.randomUUID());
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -41,7 +46,9 @@ export function WorkflowLearningChat() {
     setIsRunning(true);
 
     try {
-      const stream = await streamWorkflowLearningMessage(text);
+      const stream = await streamWorkflowLearningMessage(text, {
+        sessionId: sessionIdRef.current,
+      });
       const reader = stream.getReader();
       const buf = new WorkflowSseBuffer();
 
@@ -54,6 +61,9 @@ export function WorkflowLearningChat() {
           if (a.role !== 'assistant') return prev;
           let finalText = a.finalText;
           let error = a.error;
+          let workflow = a.workflow;
+          let validation = a.validation;
+          let login = a.login;
           const trace = [...a.trace];
           for (const ev of events) {
             trace.push(ev);
@@ -63,8 +73,27 @@ export function WorkflowLearningChat() {
             if (ev.type === 'error') {
               error = ev.message;
             }
+            if (ev.type === 'workflow_dsl') {
+              workflow = ev.workflow;
+            }
+            if (ev.type === 'dsl_validation_result') {
+              validation = { ok: ev.ok, error: ev.error };
+            }
+            if (ev.type === 'awaiting_login') {
+              login = {
+                status: 'waiting',
+                message: ev.message,
+                loginUrl: ev.loginUrl,
+              };
+            }
+            if (ev.type === 'login_verified') {
+              login = {
+                status: 'verified',
+                message: '登录已验证，正在继续执行工作流。',
+              };
+            }
           }
-          next[idx] = { ...a, trace, finalText, error };
+          next[idx] = { ...a, trace, finalText, error, workflow, validation, login };
           return next;
         });
         queueMicrotask(scrollToBottom);
@@ -116,6 +145,9 @@ export function WorkflowLearningChat() {
               <Card className="border-border bg-card/80 max-w-[95%] border">
                 <CardBody className="gap-3 text-sm">
                   <ExecutionTrace events={row.trace} />
+                  {row.login ? <LoginStatus login={row.login} /> : null}
+                  {row.validation ? <ValidationStatus validation={row.validation} /> : null}
+                  {row.workflow ? <WorkflowDslArtifact workflow={row.workflow} /> : null}
                   {row.error ? <div className="text-destructive text-sm">{row.error}</div> : null}
                   {row.finalText ? (
                     <div className="border-border mt-1 border-t pt-2">
@@ -206,9 +238,98 @@ function ExecutionTrace({ events }: { events: WorkflowSseEvent[] }) {
               </li>
             );
           }
+          if (ev.type === 'awaiting_login') {
+            return (
+              <li
+                key={`${ev.runId}-login-${i}`}
+                className="rounded-md bg-amber-500/10 px-3 py-2 text-xs"
+              >
+                <div className="font-medium">等待登录</div>
+                <div className="mt-1 break-all opacity-90">{ev.loginUrl}</div>
+              </li>
+            );
+          }
+          if (ev.type === 'login_verified') {
+            return (
+              <li
+                key={`${ev.runId}-login-ok-${i}`}
+                className="rounded-md bg-emerald-500/10 px-3 py-2 text-xs"
+              >
+                <div className="font-medium">登录已验证</div>
+              </li>
+            );
+          }
           return null;
         })}
       </ul>
+    </div>
+  );
+}
+
+function LoginStatus({
+  login,
+}: {
+  login: { status: 'waiting' | 'verified'; message: string; loginUrl?: string };
+}) {
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2 text-sm ${
+        login.status === 'verified'
+          ? 'border-emerald-500/30 bg-emerald-500/10'
+          : 'border-amber-500/30 bg-amber-500/10'
+      }`}
+    >
+      <div className="flex items-center gap-2 font-medium">
+        {login.status === 'verified' ? (
+          <CheckCircle2 className="h-4 w-4" />
+        ) : (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        )}
+        {login.status === 'verified' ? '登录完成' : '等待你完成登录'}
+      </div>
+      <div className="mt-1 text-xs opacity-90">{login.message}</div>
+      {login.loginUrl ? (
+        <div className="mt-1 text-xs break-all opacity-80">{login.loginUrl}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ValidationStatus({ validation }: { validation: { ok: boolean; error?: string } }) {
+  return (
+    <div
+      className={`rounded-md px-3 py-2 text-xs ${
+        validation.ok ? 'bg-emerald-500/10' : 'bg-destructive/10 text-destructive'
+      }`}
+    >
+      {validation.ok ? 'DSL 校验通过' : `DSL 校验失败：${validation.error ?? '未知错误'}`}
+    </div>
+  );
+}
+
+function WorkflowDslArtifact({ workflow }: { workflow: WorkflowDsl }) {
+  const json = JSON.stringify(workflow, null, 2);
+  return (
+    <div className="border-border mt-1 rounded-lg border">
+      <div className="border-border flex items-center justify-between border-b px-3 py-2">
+        <div>
+          <div className="text-xs font-medium">Workflow DSL</div>
+          <div className="text-muted-foreground text-xs">{workflow.metadata.name}</div>
+        </div>
+        <Button
+          size="sm"
+          variant="flat"
+          onPress={() => {
+            void navigator.clipboard.writeText(json);
+          }}
+        >
+          <Copy className="h-3 w-3" />
+          复制 JSON
+        </Button>
+      </div>
+      <pre className="bg-muted/30 max-h-96 overflow-auto p-3 text-xs whitespace-pre-wrap">
+        {json}
+      </pre>
     </div>
   );
 }
