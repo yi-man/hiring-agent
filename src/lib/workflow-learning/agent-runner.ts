@@ -6,9 +6,15 @@ import {
   WORKFLOW_AGENT_MAX_STEPS,
   WORKFLOW_TOOL_RESULT_MAX_CHARS,
 } from '@/lib/workflow-learning/constants';
+import { runBossWorkflowIntent } from '@/lib/workflow-learning/boss-workflow';
 import { tryParseWorkflowDsl, type WorkflowDsl } from '@/lib/workflow-learning/dsl';
-import { createWorkflowBrowserTools } from '@/lib/workflow-learning/tools/browser-tools';
+import { routeWorkflowIntent } from '@/lib/workflow-learning/intent-router';
+import {
+  createWorkflowBrowserTools,
+  workflowBrowserSessionManager,
+} from '@/lib/workflow-learning/tools/browser-tools';
 import type { WorkflowSseEvent } from '@/lib/workflow-learning/types';
+import { workflowSessionStore } from '@/lib/workflow-learning/workflow-session-store';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -56,6 +62,66 @@ function previewJson(value: unknown, max = 500): string {
     return s.length > max ? `${s.slice(0, max)}…` : s;
   } catch {
     return String(value);
+  }
+}
+
+type WorkflowEventWithoutMetadata<T> = T extends unknown ? Omit<T, 'runId' | 'timestamp'> : never;
+type WorkflowEventInput = WorkflowEventWithoutMetadata<WorkflowSseEvent>;
+
+function withWorkflowEventMetadata(
+  event: WorkflowEventInput,
+  runId: string,
+  timestamp: string,
+): WorkflowSseEvent {
+  return {
+    ...event,
+    runId,
+    timestamp,
+  } as WorkflowSseEvent;
+}
+
+class AsyncWorkflowEventQueue {
+  private readonly events: WorkflowSseEvent[] = [];
+  private readonly waiters: Array<(result: IteratorResult<WorkflowSseEvent>) => void> = [];
+  private closed = false;
+
+  push(event: WorkflowSseEvent): void {
+    if (this.closed) return;
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter({ value: event, done: false });
+      return;
+    }
+    this.events.push(event);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter({ value: undefined, done: true });
+    }
+  }
+
+  async *drain(): AsyncGenerator<WorkflowSseEvent> {
+    while (true) {
+      const next = await this.next();
+      if (next.done) return;
+      yield next.value;
+    }
+  }
+
+  private next(): Promise<IteratorResult<WorkflowSseEvent>> {
+    const event = this.events.shift();
+    if (event) {
+      return Promise.resolve({ value: event, done: false });
+    }
+    if (this.closed) {
+      return Promise.resolve({ value: undefined, done: true });
+    }
+    return new Promise((resolve) => {
+      this.waiters.push(resolve);
+    });
   }
 }
 
@@ -136,6 +202,25 @@ Return only a valid JSON object using schemaVersion "1.0", metadata.domain "recr
   return extractWorkflowDslFromText(extractTextFromMessageContent(response));
 }
 
+async function generateWorkflowDslFromTrace(
+  model: ChatOpenAI,
+  userText: string,
+  trace: readonly unknown[],
+): Promise<WorkflowDsl | null> {
+  const response = await model.invoke([
+    new HumanMessage(`Generate Workflow DSL JSON for this completed workflow.
+
+User request:
+${userText}
+
+Execution trace:
+${JSON.stringify(trace, null, 2)}
+
+Return only a valid JSON object using schemaVersion "1.0", metadata.domain "recruiting", and steps built from check_login, login, browser_action, and assertion.`),
+  ]);
+  return extractWorkflowDslFromText(extractTextFromMessageContent(response));
+}
+
 function parseToolJson(output: unknown): Record<string, unknown> | null {
   try {
     const text = toolOutputText(output);
@@ -154,16 +239,46 @@ function inputObject(input: unknown): Record<string, unknown> {
     : {};
 }
 
+type OpenOnlyRequest = { label: string; url: string };
+
+export function resolveOpenOnlyRequest(userText: string): OpenOnlyRequest | null {
+  const text = userText.trim().toLowerCase();
+  const isOpenIntent = /^(打开|open)\s*/i.test(userText.trim());
+  const hasKnownBossTarget = /boss|zhipin|直聘/i.test(userText);
+  const hasExtraTask = /消息|查看|读取|第一|列表|生成|workflow|工作流|dsl/i.test(userText);
+
+  if (isOpenIntent && hasKnownBossTarget && !hasExtraTask) {
+    return { label: 'Boss 直聘', url: 'https://www.zhipin.com/' };
+  }
+
+  const urlMatch = userText.match(/https?:\/\/\S+/i);
+  if (isOpenIntent && urlMatch && !hasExtraTask) {
+    return { label: urlMatch[0], url: urlMatch[0] };
+  }
+
+  return text === 'boss' ? { label: 'Boss 直聘', url: 'https://www.zhipin.com/' } : null;
+}
+
+export function shouldAttemptWorkflowDsl(userText: string): boolean {
+  void userText;
+  return false;
+}
+
 const WORKFLOW_SYSTEM_PROMPT = `You are Workflow Learning, a chat assistant that decides whether a user is casually chatting or asking you to learn a browser workflow.
 
 If the user is only chatting, answer normally and do not call tools.
 
 If the user asks you to do or learn a website workflow, you MUST use the browser tools:
-- browser_snapshot: inspect pages in a reusable browser session.
-- browser_open_login: open a visible local browser for QR-code/manual login when a page redirects to login or visible text indicates login is required.
+- browser_snapshot: first open the requested page in a visible reusable browser session, then inspect requestedUrl, url, urlMatchesRequested, title, and excerpt.
+- browser_open_login: open a visible local browser for QR-code/manual login only when you deliberately need to navigate to a known login URL.
 - browser_verify_login: after the user logs in, verify login from URL/text before continuing.
 
-For workflow tasks, finish with a valid JSON Workflow DSL object, optionally in a json code fence. The JSON MUST use:
+For simple requests such as "打开 Boss" or "打开 boss", first call browser_snapshot on the public Boss site URL and check whether urlMatchesRequested is true. Do not assume login is required before opening the page.
+If browser_snapshot shows urlMatchesRequested=false because the page redirected to a login page, stop this exploration, keep the current browser page open, and tell the user that this page requires login. Do NOT call browser_open_login after such a redirect; the login page is already open.
+
+Do NOT generate Workflow DSL during the exploration/opening phase. Only generate DSL after the user explicitly confirms the observed browser effect is OK and asks to generate DSL. After DSL is generated, it must be validated and then used for a separate verification run.
+
+When the user explicitly asks to generate DSL after confirming the effect, finish with a valid JSON Workflow DSL object, optionally in a json code fence. The JSON MUST use:
 - schemaVersion: "1.0"
 - metadata.domain: "recruiting"
 - steps: include check_login and login before protected recruiting actions when login may be required.
@@ -184,6 +299,96 @@ export async function* runWorkflowAgentWithEvents(options: {
   const ts = () => new Date().toISOString();
 
   yield { type: 'run_start', runId, timestamp: ts() };
+
+  const routedIntent = routeWorkflowIntent(userText);
+  if (
+    routedIntent.type === 'boss_open_home' ||
+    routedIntent.type === 'boss_read_first_message' ||
+    routedIntent.type === 'login_completed' ||
+    routedIntent.type === 'generate_dsl'
+  ) {
+    const eventQueue = new AsyncWorkflowEventQueue();
+    let emittedError = false;
+    const workflowPromise = runBossWorkflowIntent({
+      intent: routedIntent,
+      runId,
+      sessionId,
+      manager: workflowBrowserSessionManager,
+      store: workflowSessionStore,
+      emit: (event) => {
+        const fullEvent = withWorkflowEventMetadata(event, runId, ts());
+        if (fullEvent.type === 'error') {
+          emittedError = true;
+        }
+        eventQueue.push(fullEvent);
+      },
+      generateDsl: async (trace) => generateWorkflowDslFromTrace(buildModel(), userText, trace),
+    })
+      .catch((error) => {
+        if (!emittedError) {
+          const message = error instanceof Error ? error.message : 'Unknown workflow error';
+          emittedError = true;
+          eventQueue.push({ type: 'error', runId, timestamp: ts(), message });
+        }
+      })
+      .finally(() => {
+        eventQueue.close();
+      });
+
+    for await (const event of eventQueue.drain()) {
+      yield event;
+    }
+    await workflowPromise;
+    yield { type: 'run_end', runId, timestamp: ts() };
+    return;
+  }
+
+  const openOnly = resolveOpenOnlyRequest(userText);
+  if (openOnly) {
+    const toolCallId = `${runId}:browser_snapshot`;
+    const args = { sessionId, url: openOnly.url };
+    yield {
+      type: 'tool_call_start',
+      runId,
+      timestamp: ts(),
+      toolCallId,
+      toolName: 'browser_snapshot',
+      argsPreview: previewJson(args),
+    };
+
+    const startedAt = Date.now();
+    try {
+      const result = await workflowBrowserSessionManager.snapshot(args);
+      yield {
+        type: 'tool_call_result',
+        runId,
+        timestamp: ts(),
+        toolCallId,
+        ok: true,
+        resultPreview: resultPreviewFromToolOutput(JSON.stringify(result)),
+        durationMs: Date.now() - startedAt,
+      };
+      const text = result.urlMatchesRequested
+        ? `已打开${openOnly.label}：${result.url}。我会保持这个页面打开；请确认页面效果是否 OK，确认后我再生成 DSL。`
+        : `已尝试打开${openOnly.label}，但最终停在 ${result.url}，与请求地址不一致。页面会保持在当前状态；如果这是登录页，说明该页面需要登录。请确认下一步，不会自动生成 DSL。`;
+      yield { type: 'assistant_final', runId, timestamp: ts(), text };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown browser error';
+      yield {
+        type: 'tool_call_result',
+        runId,
+        timestamp: ts(),
+        toolCallId,
+        ok: false,
+        resultPreview: message,
+        durationMs: Date.now() - startedAt,
+      };
+      yield { type: 'error', runId, timestamp: ts(), message };
+    } finally {
+      yield { type: 'run_end', runId, timestamp: ts() };
+    }
+    return;
+  }
 
   const model = buildModel();
   const tools = createWorkflowBrowserTools(undefined, sessionId);
@@ -263,50 +468,52 @@ export async function* runWorkflowAgentWithEvents(options: {
       }
     }
 
-    const workflow = extractWorkflowDslFromText(lastAssistantText);
-    if (workflow) {
-      yield {
-        type: 'dsl_validation_result',
-        runId,
-        timestamp: ts(),
-        ok: true,
-      };
-      yield {
-        type: 'workflow_dsl',
-        runId,
-        timestamp: ts(),
-        workflow,
-      };
-    } else if (lastAssistantText.trim()) {
-      const validation = tryParseWorkflowDsl(tryParseJsonObject(lastAssistantText));
-      if (!validation.ok && /workflow|流程|打开|登录|boss|直聘|消息/i.test(userText)) {
-        const repaired = await repairWorkflowDsl(
-          model,
-          userText,
-          lastAssistantText,
-          validation.error,
-        );
-        if (repaired) {
-          yield {
-            type: 'dsl_validation_result',
-            runId,
-            timestamp: ts(),
-            ok: true,
-          };
-          yield {
-            type: 'workflow_dsl',
-            runId,
-            timestamp: ts(),
-            workflow: repaired,
-          };
-        } else {
-          yield {
-            type: 'dsl_validation_result',
-            runId,
-            timestamp: ts(),
-            ok: false,
-            error: validation.error,
-          };
+    if (shouldAttemptWorkflowDsl(userText)) {
+      const workflow = extractWorkflowDslFromText(lastAssistantText);
+      if (workflow) {
+        yield {
+          type: 'dsl_validation_result',
+          runId,
+          timestamp: ts(),
+          ok: true,
+        };
+        yield {
+          type: 'workflow_dsl',
+          runId,
+          timestamp: ts(),
+          workflow,
+        };
+      } else if (lastAssistantText.trim()) {
+        const validation = tryParseWorkflowDsl(tryParseJsonObject(lastAssistantText));
+        if (!validation.ok) {
+          const repaired = await repairWorkflowDsl(
+            model,
+            userText,
+            lastAssistantText,
+            validation.error,
+          );
+          if (repaired) {
+            yield {
+              type: 'dsl_validation_result',
+              runId,
+              timestamp: ts(),
+              ok: true,
+            };
+            yield {
+              type: 'workflow_dsl',
+              runId,
+              timestamp: ts(),
+              workflow: repaired,
+            };
+          } else {
+            yield {
+              type: 'dsl_validation_result',
+              runId,
+              timestamp: ts(),
+              ok: false,
+              error: validation.error,
+            };
+          }
         }
       }
     }

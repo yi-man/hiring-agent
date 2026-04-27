@@ -199,7 +199,11 @@ export function WorkflowLearningChat() {
 
 function ExecutionTrace({ events }: { events: WorkflowSseEvent[] }) {
   const tools = events.filter((e) => e.type === 'tool_call_start' || e.type === 'tool_call_result');
-  if (tools.length === 0 && !events.some((e) => e.type === 'run_start')) {
+  const hasTraceEvents = events.some(
+    (e) =>
+      e.type === 'run_start' || e.type === 'workflow_state_changed' || e.type === 'dsl_replay_step',
+  );
+  if (tools.length === 0 && !hasTraceEvents) {
     return null;
   }
   return (
@@ -256,6 +260,44 @@ function ExecutionTrace({ events }: { events: WorkflowSseEvent[] }) {
                 className="rounded-md bg-emerald-500/10 px-3 py-2 text-xs"
               >
                 <div className="font-medium">登录已验证</div>
+              </li>
+            );
+          }
+          if (ev.type === 'workflow_state_changed') {
+            return (
+              <li
+                key={`${ev.runId}-state-${ev.state}-${i}`}
+                className="bg-muted/40 rounded-md px-3 py-2 text-xs"
+              >
+                <div className="font-medium">状态 · {ev.state}</div>
+                {ev.message ? <div className="mt-1 opacity-90">{ev.message}</div> : null}
+              </li>
+            );
+          }
+          if (ev.type === 'dsl_replay_step') {
+            return (
+              <li
+                key={`${ev.runId}-replay-${ev.stepId}-${i}`}
+                className={`rounded-md px-3 py-2 text-xs ${
+                  ev.status === 'failed'
+                    ? 'bg-destructive/10 text-destructive'
+                    : ev.status === 'success'
+                      ? 'bg-emerald-500/10'
+                      : ev.status === 'skipped'
+                        ? 'bg-sky-500/10'
+                        : 'bg-muted/40'
+                }`}
+              >
+                <div className="font-medium">
+                  DSL 回放 · {ev.stepId} · {ev.status}
+                </div>
+                {ev.message ? <div className="mt-1 opacity-90">{ev.message}</div> : null}
+                {ev.outputPreview ? (
+                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">
+                    {ev.outputPreview}
+                  </pre>
+                ) : null}
+                {ev.error ? <div className="mt-1">{ev.error}</div> : null}
               </li>
             );
           }

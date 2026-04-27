@@ -42,6 +42,29 @@ export type WorkflowSseEvent =
       ok: boolean;
       error?: string;
     })
+  | (WorkflowBaseFields & {
+      type: 'workflow_state_changed';
+      state:
+        | 'check_login'
+        | 'login_required'
+        | 'resume_after_login'
+        | 'explore_target_page'
+        | 'extract_result'
+        | 'generate_dsl'
+        | 'replay_dsl'
+        | 'success'
+        | 'failed';
+      message?: string;
+    })
+  | (WorkflowBaseFields & {
+      type: 'dsl_replay_step';
+      stepId: string;
+      stepType: string;
+      status: 'running' | 'skipped' | 'success' | 'failed';
+      message?: string;
+      outputPreview?: string;
+      error?: string;
+    })
   | (WorkflowBaseFields & { type: 'error'; message: string })
   | (WorkflowBaseFields & { type: 'run_end' });
 
@@ -86,6 +109,30 @@ const workflowSseEventSchema = z.discriminatedUnion('type', [
     type: z.literal('dsl_validation_result'),
     ok: z.boolean(),
     error: z.string().min(1).optional(),
+  }),
+  baseFieldsSchema.extend({
+    type: z.literal('workflow_state_changed'),
+    state: z.enum([
+      'check_login',
+      'login_required',
+      'resume_after_login',
+      'explore_target_page',
+      'extract_result',
+      'generate_dsl',
+      'replay_dsl',
+      'success',
+      'failed',
+    ]),
+    message: z.string().optional(),
+  }),
+  baseFieldsSchema.extend({
+    type: z.literal('dsl_replay_step'),
+    stepId: z.string().min(1),
+    stepType: z.string().min(1),
+    status: z.enum(['running', 'skipped', 'success', 'failed']),
+    message: z.string().optional(),
+    outputPreview: z.string().optional(),
+    error: z.string().optional(),
   }),
   baseFieldsSchema.extend({ type: z.literal('error'), message: z.string().min(1) }),
   baseFieldsSchema.extend({ type: z.literal('run_end') }),

@@ -8,7 +8,10 @@ type PageLike = {
   goto(url: string, options?: { timeout: number; waitUntil: 'domcontentloaded' }): Promise<unknown>;
   title(): Promise<string>;
   url(): string;
-  locator(selector: string): { innerText(): Promise<string> };
+  locator(selector: string): {
+    innerText(): Promise<string>;
+    first?(): { innerText(): Promise<string> };
+  };
 };
 
 type BrowserContextLike = {
@@ -30,10 +33,19 @@ export type LoginSuccessCriteria = {
   urlIncludes?: string[];
   urlNotIncludes?: string[];
   textIncludes?: string[];
+  textNotIncludes?: string[];
 };
 
 const DEFAULT_LOGIN_TIMEOUT_MS = 120_000;
 const DEFAULT_LOGIN_POLL_INTERVAL_MS = 1_000;
+const FIRST_MESSAGE_SELECTORS = [
+  '[data-testid="message-list"] [data-testid="message-item"]',
+  '[data-testid="message-item"]',
+  '.message-list .message-item',
+  '.chat-list .chat-item',
+  '.geek-item',
+  '.message-item',
+];
 
 type BrowserSession = {
   browser: BrowserLike;
@@ -52,12 +64,15 @@ export class BrowserSessionManager {
     } = {},
   ) {}
 
-  async snapshot(input: {
-    sessionId: string;
+  async snapshot(input: { sessionId: string; url: string }): Promise<{
+    title: string;
+    excerpt: string;
+    requestedUrl: string;
     url: string;
-  }): Promise<{ title: string; excerpt: string; url: string }> {
+    urlMatchesRequested: boolean;
+  }> {
     assertUrlAllowed(input.url);
-    const session = await this.getOrCreateSession(input.sessionId, true);
+    const session = await this.getOrCreateSession(input.sessionId, false);
     await session.page.goto(input.url, {
       timeout: WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
       waitUntil: 'domcontentloaded',
@@ -66,7 +81,9 @@ export class BrowserSessionManager {
     const body = await this.readBodyText(session.page);
     return {
       title,
+      requestedUrl: input.url,
       url: session.page.url(),
+      urlMatchesRequested: urlsMatch(input.url, session.page.url()),
       excerpt: body.slice(0, WORKFLOW_TOOL_RESULT_MAX_CHARS),
     };
   }
@@ -110,7 +127,9 @@ export class BrowserSessionManager {
     const deadline = Date.now() + (input.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS);
     let lastResult = await this.checkLogin(input.sessionId, session, input.success);
     while (!lastResult.loggedIn && Date.now() < deadline) {
-      await sleep(this.options.loginPollIntervalMs ?? DEFAULT_LOGIN_POLL_INTERVAL_MS);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(this.getPollIntervalMs(), remainingMs));
       lastResult = await this.checkLogin(input.sessionId, session, input.success);
     }
 
@@ -119,6 +138,111 @@ export class BrowserSessionManager {
     }
 
     return lastResult;
+  }
+
+  async inspectLogin(input: {
+    sessionId: string;
+    success: LoginSuccessCriteria;
+  }): Promise<{ sessionId: string; loggedIn: boolean; url: string; excerpt: string }> {
+    const session = this.sessions.get(input.sessionId);
+    if (!session) {
+      return {
+        sessionId: input.sessionId,
+        loggedIn: false,
+        url: '',
+        excerpt: 'Browser session not found',
+      };
+    }
+    if (!hasPositiveSuccessCriteria(input.success)) {
+      return {
+        sessionId: input.sessionId,
+        loggedIn: false,
+        url: session.page.url(),
+        excerpt: 'Login success criteria must include urlIncludes or textIncludes.',
+      };
+    }
+
+    return this.checkLogin(input.sessionId, session, input.success);
+  }
+
+  async navigate(input: { sessionId: string; url: string }): Promise<{
+    sessionId: string;
+    requestedUrl: string;
+    url: string;
+    title: string;
+    excerpt: string;
+    urlMatchesRequested: boolean;
+  }> {
+    assertUrlAllowed(input.url);
+    const session = await this.getOrCreateSession(input.sessionId, false);
+    await session.page.goto(input.url, {
+      timeout: WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
+      waitUntil: 'domcontentloaded',
+    });
+    const title = await session.page.title();
+    const body = await this.readBodyText(session.page);
+    return {
+      sessionId: input.sessionId,
+      requestedUrl: input.url,
+      url: session.page.url(),
+      title,
+      excerpt: body.slice(0, WORKFLOW_TOOL_RESULT_MAX_CHARS),
+      urlMatchesRequested: urlsMatch(input.url, session.page.url()),
+    };
+  }
+
+  async waitForText(input: {
+    sessionId: string;
+    text: string;
+    timeoutMs?: number;
+  }): Promise<{ sessionId: string; found: boolean; url: string; excerpt: string }> {
+    const session = this.sessions.get(input.sessionId);
+    if (!session) {
+      return {
+        sessionId: input.sessionId,
+        found: false,
+        url: '',
+        excerpt: 'Browser session not found',
+      };
+    }
+
+    const deadline = Date.now() + (input.timeoutMs ?? WORKFLOW_PLAYWRIGHT_TIMEOUT_MS);
+    let body = await this.readBodyText(session.page);
+    while (!body.includes(input.text) && Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(this.getPollIntervalMs(), remainingMs));
+      body = await this.readBodyText(session.page);
+    }
+
+    return {
+      sessionId: input.sessionId,
+      found: body.includes(input.text),
+      url: session.page.url(),
+      excerpt: body.slice(0, WORKFLOW_TOOL_RESULT_MAX_CHARS),
+    };
+  }
+
+  async extractText(input: {
+    sessionId: string;
+    selectorHint?: string;
+    maxChars?: number;
+  }): Promise<{ sessionId: string; text: string; url: string }> {
+    const session = this.sessions.get(input.sessionId);
+    if (!session) {
+      return { sessionId: input.sessionId, text: '', url: '' };
+    }
+
+    const body =
+      input.selectorHint && isFirstMessageHint(input.selectorHint)
+        ? await this.readFirstAvailableSelectorText(session.page, FIRST_MESSAGE_SELECTORS)
+        : '';
+    const text = body || (await this.readBodyText(session.page));
+    return {
+      sessionId: input.sessionId,
+      text: text.slice(0, input.maxChars ?? WORKFLOW_TOOL_RESULT_MAX_CHARS).trim(),
+      url: session.page.url(),
+    };
   }
 
   async close(sessionId: string): Promise<void> {
@@ -154,11 +278,27 @@ export class BrowserSessionManager {
     return chromium;
   }
 
+  private getPollIntervalMs(): number {
+    return this.options.loginPollIntervalMs ?? DEFAULT_LOGIN_POLL_INTERVAL_MS;
+  }
+
   private async readBodyText(page: PageLike): Promise<string> {
     return page
       .locator('body')
       .innerText()
       .catch(() => '');
+  }
+
+  private async readFirstAvailableSelectorText(
+    page: PageLike,
+    selectors: readonly string[],
+  ): Promise<string> {
+    for (const selector of selectors) {
+      const locator = page.locator(selector);
+      const text = await (locator.first?.() ?? locator).innerText().catch(() => '');
+      if (text.trim()) return text;
+    }
+    return '';
   }
 
   private async checkLogin(
@@ -173,11 +313,16 @@ export class BrowserSessionManager {
       loggedIn:
         matchesIncludes(url, success.urlIncludes) &&
         matchesNotIncludes(url, success.urlNotIncludes) &&
-        matchesIncludes(body, success.textIncludes),
+        matchesIncludes(body, success.textIncludes) &&
+        matchesNotIncludes(body, success.textNotIncludes),
       url,
       excerpt: body.slice(0, WORKFLOW_TOOL_RESULT_MAX_CHARS),
     };
   }
+}
+
+function isFirstMessageHint(selectorHint: string): boolean {
+  return /first\s+message|第一.*(消息|信息)|首条.*(消息|信息)/i.test(selectorHint);
 }
 
 function matchesIncludes(value: string, needles: string[] | undefined): boolean {
@@ -189,7 +334,22 @@ function matchesNotIncludes(value: string, needles: string[] | undefined): boole
 }
 
 function hasPositiveSuccessCriteria(criteria: LoginSuccessCriteria): boolean {
-  return Boolean(criteria.urlIncludes?.length || criteria.textIncludes?.length);
+  return Boolean(
+    criteria.urlIncludes?.length ||
+    criteria.urlNotIncludes?.length ||
+    criteria.textIncludes?.length ||
+    criteria.textNotIncludes?.length,
+  );
+}
+
+function urlsMatch(requestedUrl: string, currentUrl: string): boolean {
+  try {
+    const requested = new URL(requestedUrl);
+    const current = new URL(currentUrl);
+    return requested.origin === current.origin && requested.pathname === current.pathname;
+  } catch {
+    return requestedUrl === currentUrl;
+  }
 }
 
 function sleep(ms: number): Promise<void> {

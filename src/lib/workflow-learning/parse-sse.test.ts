@@ -49,6 +49,35 @@ describe('WorkflowSseBuffer', () => {
     ]);
   });
 
+  it('parses workflow state and DSL replay events', () => {
+    const buffer = new WorkflowSseBuffer();
+    const events = buffer.push(
+      new TextEncoder().encode(
+        'data: {"type":"workflow_state_changed","runId":"r1","timestamp":"t","state":"check_login","message":"Checking login"}\n\n' +
+          'data: {"type":"dsl_replay_step","runId":"r1","timestamp":"t","stepId":"check-login","stepType":"check_login","status":"success","message":"Already logged in"}\n\n',
+      ),
+    );
+
+    expect(events).toEqual([
+      {
+        type: 'workflow_state_changed',
+        runId: 'r1',
+        timestamp: 't',
+        state: 'check_login',
+        message: 'Checking login',
+      },
+      {
+        type: 'dsl_replay_step',
+        runId: 'r1',
+        timestamp: 't',
+        stepId: 'check-login',
+        stepType: 'check_login',
+        status: 'success',
+        message: 'Already logged in',
+      },
+    ]);
+  });
+
   it('rejects malformed structured workflow events', () => {
     expect(
       isWorkflowSseEvent({

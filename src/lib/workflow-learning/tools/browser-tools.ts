@@ -9,10 +9,13 @@ const loginSuccessSchema = z.object({
   urlIncludes: z.array(z.string().min(1)).optional(),
   urlNotIncludes: z.array(z.string().min(1)).optional(),
   textIncludes: z.array(z.string().min(1)).optional(),
+  textNotIncludes: z.array(z.string().min(1)).optional(),
 });
 
+export const workflowBrowserSessionManager = new BrowserSessionManager();
+
 export function createWorkflowBrowserTools(
-  manager = new BrowserSessionManager(),
+  manager = workflowBrowserSessionManager,
   defaultSessionId = 'default',
 ) {
   const sessionIdSchema = z.string().min(1).default(defaultSessionId);
@@ -45,7 +48,7 @@ export function createWorkflowBrowserTools(
       {
         name: 'browser_snapshot',
         description:
-          'Open a page in a reusable browser session and return JSON with current URL, title, and visible text excerpt.',
+          'Open the requested page in a visible reusable browser session and return JSON with requestedUrl, current url, urlMatchesRequested, title, and visible text excerpt. Always use this before deciding a page needs login.',
         schema: snapshotSchema,
       },
     ),
@@ -57,7 +60,7 @@ export function createWorkflowBrowserTools(
       {
         name: 'browser_open_login',
         description:
-          'Open a login URL in a visible local browser window so the user can complete QR-code or manual login.',
+          'Open a login URL in a visible local browser window so the user can complete QR-code or manual login. Do not call this just because a snapshot already redirected to login; in that case leave the redirected page open and tell the user the page needs login.',
         schema: openLoginSchema,
       },
     ),

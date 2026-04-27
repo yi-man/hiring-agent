@@ -32,4 +32,38 @@ describe('createWorkflowBrowserTools', () => {
       url: 'https://example.com',
     });
   });
+
+  it('passes textNotIncludes criteria to login verification', async () => {
+    const manager = {
+      snapshot: jest.fn(),
+      openLogin: jest.fn(),
+      verifyLogin: jest.fn(async () => ({
+        sessionId: 'request-session',
+        loggedIn: true,
+        url: 'https://example.com/messages',
+        excerpt: '消息列表',
+      })),
+    };
+    const [, , verifyLogin] = createWorkflowBrowserTools(
+      manager as never,
+      'request-session',
+    ) as Array<{
+      invoke(input: unknown): Promise<unknown>;
+    }>;
+
+    await verifyLogin.invoke({
+      success: {
+        textNotIncludes: ['扫码登录'],
+      },
+      timeoutMs: 100,
+    });
+
+    expect(manager.verifyLogin).toHaveBeenCalledWith({
+      sessionId: 'request-session',
+      success: {
+        textNotIncludes: ['扫码登录'],
+      },
+      timeoutMs: 100,
+    });
+  });
 });
