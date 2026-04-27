@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
   WORKFLOW_TOOL_RESULT_MAX_CHARS,
@@ -16,6 +18,7 @@ type PageLike = {
 
 type BrowserContextLike = {
   newPage(): Promise<PageLike>;
+  pages?(): PageLike[];
   storageState(): Promise<unknown>;
   close(): Promise<unknown>;
 };
@@ -27,6 +30,10 @@ type BrowserLike = {
 
 type ChromiumLike = {
   launch(options?: { headless: boolean }): Promise<BrowserLike>;
+  launchPersistentContext?(
+    userDataDir: string,
+    options?: { headless: boolean },
+  ): Promise<BrowserContextLike>;
 };
 
 export type LoginSuccessCriteria = {
@@ -48,19 +55,22 @@ const FIRST_MESSAGE_SELECTORS = [
 ];
 
 type BrowserSession = {
-  browser: BrowserLike;
+  browser?: BrowserLike;
   context: BrowserContextLike;
   page: PageLike;
   headless: boolean;
+  persistent: boolean;
 };
 
 export class BrowserSessionManager {
   private readonly sessions = new Map<string, BrowserSession>();
+  private persistentSession?: BrowserSession;
 
   constructor(
     private readonly options: {
       chromium?: ChromiumLike;
       loginPollIntervalMs?: number;
+      userDataDir?: string;
     } = {},
   ) {}
 
@@ -248,9 +258,16 @@ export class BrowserSessionManager {
   async close(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    this.sessions.delete(sessionId);
+    for (const [key, value] of this.sessions) {
+      if (value === session) {
+        this.sessions.delete(key);
+      }
+    }
+    if (this.persistentSession === session) {
+      this.persistentSession = undefined;
+    }
     await session.context.close();
-    await session.browser.close();
+    await session.browser?.close();
   }
 
   private async getOrCreateSession(sessionId: string, headless: boolean): Promise<BrowserSession> {
@@ -264,10 +281,24 @@ export class BrowserSessionManager {
     }
 
     const chromium = await this.getChromium();
+    if (!headless && chromium.launchPersistentContext) {
+      if (this.persistentSession) {
+        this.sessions.set(sessionId, this.persistentSession);
+        return this.persistentSession;
+      }
+
+      const context = await chromium.launchPersistentContext(this.getUserDataDir(), { headless });
+      const page = context.pages?.()[0] ?? (await context.newPage());
+      const session = { context, page, headless, persistent: true };
+      this.persistentSession = session;
+      this.sessions.set(sessionId, session);
+      return session;
+    }
+
     const browser = await chromium.launch({ headless });
     const context = await browser.newContext();
     const page = await context.newPage();
-    const session = { browser, context, page, headless };
+    const session = { browser, context, page, headless, persistent: false };
     this.sessions.set(sessionId, session);
     return session;
   }
@@ -280,6 +311,14 @@ export class BrowserSessionManager {
 
   private getPollIntervalMs(): number {
     return this.options.loginPollIntervalMs ?? DEFAULT_LOGIN_POLL_INTERVAL_MS;
+  }
+
+  private getUserDataDir(): string {
+    return (
+      this.options.userDataDir ??
+      process.env.WORKFLOW_BROWSER_USER_DATA_DIR ??
+      join(homedir(), '.hiring-agent', 'workflow-learning-browser-profile')
+    );
   }
 
   private async readBodyText(page: PageLike): Promise<string> {

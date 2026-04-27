@@ -1,14 +1,17 @@
 import { BrowserSessionManager } from './browser-session';
 
-function createFakeChromium(pageState: {
-  url: string;
-  title: string;
-  body: string;
-  redirectTo?: string;
-  selectorText?: Record<string, string>;
-  selectorFirstText?: Record<string, string>;
-  selectorInnerTextErrors?: string[];
-}) {
+function createFakeChromium(
+  pageState: {
+    url: string;
+    title: string;
+    body: string;
+    redirectTo?: string;
+    selectorText?: Record<string, string>;
+    selectorFirstText?: Record<string, string>;
+    selectorInnerTextErrors?: string[];
+  },
+  options: { supportsPersistentContext?: boolean } = {},
+) {
   const page = {
     goto: jest.fn(async (url: string) => {
       pageState.url = pageState.redirectTo ?? url;
@@ -37,6 +40,7 @@ function createFakeChromium(pageState: {
   };
   const context = {
     newPage: jest.fn(async () => page),
+    pages: jest.fn(() => [page]),
     storageState: jest.fn(async () => ({ cookies: [], origins: [] })),
     close: jest.fn(),
   };
@@ -46,6 +50,11 @@ function createFakeChromium(pageState: {
   };
   const chromium = {
     launch: jest.fn(async () => browser),
+    ...(options.supportsPersistentContext
+      ? {
+          launchPersistentContext: jest.fn(async () => context),
+        }
+      : {}),
   };
 
   return { chromium, browser, context, page };
@@ -89,6 +98,33 @@ describe('BrowserSessionManager', () => {
       urlMatchesRequested: false,
     });
     expect(fake.browser.close).not.toHaveBeenCalled();
+    await manager.close('s1');
+  });
+
+  it('uses a persistent visible browser profile and shares it across sessions', async () => {
+    const fake = createFakeChromium(
+      {
+        url: 'https://example.com',
+        title: 'Example',
+        body: 'Hello from the page',
+      },
+      { supportsPersistentContext: true },
+    );
+    const manager = new BrowserSessionManager({
+      chromium: fake.chromium,
+      userDataDir: '/tmp/workflow-learning-browser-profile',
+    });
+
+    await manager.snapshot({ sessionId: 's1', url: 'https://example.com/one' });
+    await manager.snapshot({ sessionId: 's2', url: 'https://example.com/two' });
+
+    expect(fake.chromium.launchPersistentContext).toHaveBeenCalledTimes(1);
+    expect(fake.chromium.launchPersistentContext).toHaveBeenCalledWith(
+      '/tmp/workflow-learning-browser-profile',
+      { headless: false },
+    );
+    expect(fake.chromium.launch).not.toHaveBeenCalled();
+    expect(fake.browser.newContext).not.toHaveBeenCalled();
     await manager.close('s1');
   });
 
