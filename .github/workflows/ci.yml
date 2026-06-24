@@ -84,12 +84,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      # Fork PRs: no access to repo secrets → exclude only the suite that calls a real LLM (still run unit + other integration).
-      - name: Run Jest (fork PR — without real-deps LLM file)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+      # PRs avoid real external LLM calls; push to main still runs the full suite.
+      - name: Run Jest (pull request — without real-deps LLM file)
+        if: github.event_name == 'pull_request'
         run: >-
           bun run test:ci --
           --testPathIgnorePatterns tests/integration/chat/real-deps.e2e.test.ts
-      - name: Run Jest (full suite — same-repo PR / push / merge queue)
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+      - name: Run Jest (full suite — push / merge queue)
+        if: github.event_name != 'pull_request'
         run: bun run test:ci
