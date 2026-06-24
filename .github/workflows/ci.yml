@@ -12,30 +12,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
       - name: Run lint
-        run: pnpm lint
+        run: bun run lint
 
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
       - name: Run type-check
-        run: pnpm type-check
+        run: bun run type-check
 
   test:
     name: Jest Test
@@ -80,19 +78,18 @@ jobs:
       OPENAI_EMBEDDING_USE_MULTIMODAL: ${{ secrets.OPENAI_EMBEDDING_USE_MULTIMODAL || vars.OPENAI_EMBEDDING_USE_MULTIMODAL || 'auto' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      # Fork PRs: no access to repo secrets → exclude only the suite that calls a real LLM (still run unit + other integration).
-      - name: Run Jest (fork PR — without real-deps LLM file)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: bun install --frozen-lockfile
+      # PRs avoid real external LLM calls; push to main still runs the full suite.
+      - name: Run Jest (pull request — without real-deps LLM file)
+        if: github.event_name == 'pull_request'
         run: >-
-          pnpm exec jest --ci --coverage --runInBand --coverageReporters=text-summary
+          bun run test:ci --
           --testPathIgnorePatterns tests/integration/chat/real-deps.e2e.test.ts
-      - name: Run Jest (full suite — same-repo PR / push / merge queue)
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        run: pnpm exec jest --ci --coverage --runInBand --coverageReporters=text-summary
+      - name: Run Jest (full suite — push / merge queue)
+        if: github.event_name != 'pull_request'
+        run: bun run test:ci

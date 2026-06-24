@@ -145,7 +145,7 @@ export default function Home() {
                 </p>
                 <div className="bg-muted/50 rounded-lg p-4 text-left font-mono text-sm">
                   <div className="text-muted-foreground mb-1"># 安装与启动</div>
-                  <div>pnpm install && pnpm dev</div>
+                  <div>bun install && bun run dev</div>
                 </div>
               </div>
             </div>

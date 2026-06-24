@@ -45,13 +45,13 @@ cp .env.example .env.local
 
 - 本机可访问 MySQL
 - 本机可访问 Redis
-- 已安装依赖（`pnpm install`）
+- 已安装依赖（`bun install`）
 
 执行命令：
 
 ```bash
-pnpm run test:integration:auth
-pnpm run test:integration:chat
+bun run test:integration:auth
+bun run test:integration:chat
 ```
 
 ## MySQL / Redis 健康检查行为
@@ -60,6 +60,6 @@ pnpm run test:integration:chat
 
 1. 根据 `MYSQL_*` 推导测试数据库名，并追加 `MYSQL_CI_SUFFIX`（默认 `_ci`）
 2. 自动创建测试数据库（不存在则创建）
-3. 执行 `pnpm exec prisma migrate deploy`
+3. 执行 `bunx prisma migrate deploy`
 4. MySQL 健康检查：`SELECT 1`
 5. Redis 健康检查：`PING`
