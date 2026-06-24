@@ -8,28 +8,28 @@
 
 - Next.js 16 App Router、React 18、TypeScript、Tailwind CSS 4
 - Prisma + PostgreSQL、Redis、可选 Qdrant；本地用户名密码认证
-- Jest、Playwright；pnpm
+- Jest、Playwright；Bun
 
 ## 快速开始
 
 ```bash
-pnpm install
-pnpm dev
+bun install
+bun run dev
 ```
 
 浏览器打开 <http://localhost:3000>。Playwright E2E 默认在 **3100** 端口拉起 dev 服务器（见 `playwright.config.ts`）。
 
-本地默认数据库连接为 `postgresql://apple@127.0.0.1:5432/bia`。首次启动前请创建 `bia` 数据库并执行 `pnpm exec prisma migrate deploy`。默认登录账号为 `xxwade`，密码为 `hiring_2026`。
+本地默认数据库连接为 `postgresql://apple@127.0.0.1:5432/bia`。首次启动前请创建 `bia` 数据库并执行 `bunx prisma migrate deploy`。默认登录账号为 `xxwade`，密码为 `hiring_2026`。
 
 ## 常用脚本
 
-| 命令                            | 说明                  |
-| ------------------------------- | --------------------- |
-| `pnpm dev`                      | 本地开发（Turbopack） |
-| `pnpm build` / `pnpm start`     | 生产构建与启动        |
-| `pnpm lint` / `pnpm type-check` | 规范与类型检查        |
-| `pnpm test` / `pnpm test:ci`    | Jest 单测             |
-| `pnpm test:e2e`                 | Playwright E2E        |
+| 命令                                  | 说明                  |
+| ------------------------------------- | --------------------- |
+| `bun run dev`                         | 本地开发（Turbopack） |
+| `bun run build` / `bun run start`     | 生产构建与启动        |
+| `bun run lint` / `bun run type-check` | 规范与类型检查        |
+| `bun run test` / `bun run test:ci`    | Jest 单测             |
+| `bun run test:e2e`                    | Playwright E2E        |
 
 更多脚本（集成测试、Workflow E2E、LLM 运维等）见 `package.json` 与 `CLAUDE.md`。
 

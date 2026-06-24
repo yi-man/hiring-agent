@@ -28,6 +28,6 @@ describe('Home', () => {
   it('应该显示本地开发提示', () => {
     render(<Home />);
     expect(screen.getByRole('heading', { name: /本地开发/ })).toBeInTheDocument();
-    expect(screen.getByText(/pnpm install && pnpm dev/)).toBeInTheDocument();
+    expect(screen.getByText(/bun install && bun run dev/)).toBeInTheDocument();
   });
 });

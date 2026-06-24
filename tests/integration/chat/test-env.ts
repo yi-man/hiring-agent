@@ -87,7 +87,7 @@ export async function ensureIntegrationSchema(): Promise<void> {
     await adminClient.end();
   }
 
-  execFileSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
+  execFileSync('bun', ['run', 'prisma:migrate:deploy'], {
     cwd: process.cwd(),
     env: process.env,
     stdio: 'pipe',

@@ -72,7 +72,7 @@ export default async function globalSetup() {
   }
 
   try {
-    execSync('pnpm exec prisma migrate deploy', {
+    execSync('bunx prisma migrate deploy', {
       cwd: process.cwd(),
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',

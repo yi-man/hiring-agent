@@ -4,7 +4,7 @@ import { loadRepoEnv } from './tests/e2e-playwright/load-repo-env';
 loadRepoEnv(process.cwd());
 
 const isGithubActions = process.env.GITHUB_ACTIONS === 'true';
-/** 显式开启才复用 3100（例如已手动 pnpm dev）；默认 false 避免误判导致不拉起服务 */
+/** 显式开启才复用 3100（例如已手动 bun run dev）；默认 false 避免误判导致不拉起服务 */
 const reuseDevServer = process.env.PLAYWRIGHT_REUSE_DEV_SERVER === 'true';
 
 /**
@@ -38,7 +38,7 @@ export default defineConfig({
   ],
   webServer: {
     /** 与 package.json `dev` 一致；若遇 .next 损坏或 dev 锁残留，先 `rm -rf .next` 再跑 E2E */
-    command: 'NODE_ENV=development pnpm exec next dev --turbopack -p 3100',
+    command: 'NODE_ENV=development bunx next dev --turbopack -p 3100',
     /** 轻量就绪（无 DB）；完整页面走用例里 page.goto */
     url: 'http://127.0.0.1:3100/api/health',
     reuseExistingServer: reuseDevServer,

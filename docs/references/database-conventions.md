@@ -40,10 +40,10 @@
 ## 4. 变更流程（schema / 迁移）
 
 1. 修改 `prisma/schema.prisma`，遵守上文命名。
-2. 本地生成并应用迁移：`pnpm exec prisma migrate dev`（或团队约定命令）。
+2. 本地生成并应用迁移：`bunx prisma migrate dev`（或团队约定命令）。
 3. 提交 `prisma/migrations` 与 schema 变更。
-4. 生成客户端：`pnpm exec prisma generate`（`pnpm install` 的 postinstall 也会执行 `prisma generate`）。
-5. **`pnpm approve-builds` 为交互式**，勿在 CI 中使用。
+4. 生成客户端：`bunx prisma generate`（`bun install` 的 postinstall 也会执行 `prisma generate`）。
+5. 若需放开依赖生命周期脚本，先本地审计 `bun pm untrusted`；勿在 CI 中临时信任未经确认的脚本。
 
 ---
 
@@ -51,7 +51,7 @@
 
 - **Prisma** 可直接使用 **`DATABASE_URL`**，也可通过项目默认的 `POSTGRES_*` 变量构造连接。示例（本地）：`postgresql://apple@127.0.0.1:5432/bia`。
 - 将 `.env.example` 复制为 `.env`、`.env.development`、`.env.local`、`.env.test` 等；如需覆盖 `DATABASE_URL`，请本地补齐，**勿把含密码的 URL 提交进仓库**。
-- 首次或新机器：执行 **`pnpm exec prisma migrate deploy`** 后再 **`pnpm dev`**。
+- 首次或新机器：执行 **`bunx prisma migrate deploy`** 后再 **`bun run dev`**。
 - 使用聊天、登录等能力前，还需 **Redis 7** 等（与 PostgreSQL 并列准备，不属于表结构约定，但属于本地联调前提）。
 
 ---

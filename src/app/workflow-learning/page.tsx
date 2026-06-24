@@ -11,7 +11,7 @@ export default async function WorkflowLearningPage() {
         <h1 className="text-foreground text-3xl font-bold">Workflow Learning</h1>
         <p className="text-muted-foreground mt-2 text-sm">
           Phase 1：Agent + Playwright，SSE 流式展示执行轨迹（本机开发；需已安装 Chromium：
-          <code className="bg-muted px-1">pnpm exec playwright install chromium</code>）。
+          <code className="bg-muted px-1">bunx playwright install chromium</code>）。
         </p>
       </div>
       {!session?.user ? (
