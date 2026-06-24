@@ -4,25 +4,36 @@ import { loadRepoEnv } from './load-repo-env';
 
 loadRepoEnv(process.cwd());
 
-const SESSION_COOKIE_NAME = 'next-auth.session-token';
+const SESSION_COOKIE_NAME = 'hiring-agent.session';
 const SEEDED_USER_EMAIL = 'playwright-workflow-learning@example.com';
+const SEEDED_USERNAME = 'playwright-workflow-learning';
 const SEEDED_USER_NAME = 'Workflow Learning E2E User';
+const SEEDED_PASSWORD_HASH = 'pbkdf2_sha256$fixture';
 const SEEDED_SESSION_TOKEN = 'playwright-workflow-learning-session';
 const SEEDED_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const HAS_DB_ENV = Boolean(
-  process.env.MYSQL_HOST &&
-  process.env.MYSQL_PORT &&
-  process.env.MYSQL_USER &&
-  process.env.MYSQL_PASS &&
-  process.env.MYSQL_DATABASE,
+  process.env.DATABASE_URL ||
+  (process.env.POSTGRES_HOST &&
+    process.env.POSTGRES_PORT &&
+    process.env.POSTGRES_USER &&
+    process.env.POSTGRES_DATABASE),
 );
 
 async function seedSessionToken() {
   const user = await prisma.user.upsert({
     where: { email: SEEDED_USER_EMAIL },
-    update: { name: SEEDED_USER_NAME },
-    create: { email: SEEDED_USER_EMAIL, name: SEEDED_USER_NAME },
+    update: {
+      username: SEEDED_USERNAME,
+      passwordHash: SEEDED_PASSWORD_HASH,
+      name: SEEDED_USER_NAME,
+    },
+    create: {
+      username: SEEDED_USERNAME,
+      passwordHash: SEEDED_PASSWORD_HASH,
+      email: SEEDED_USER_EMAIL,
+      name: SEEDED_USER_NAME,
+    },
   });
 
   await prisma.session.deleteMany({ where: { userId: user.id } });
@@ -39,7 +50,6 @@ async function seedSessionToken() {
 
 async function cleanupSeededUser(userId: string) {
   await prisma.session.deleteMany({ where: { userId } });
-  await prisma.account.deleteMany({ where: { userId } });
   await prisma.user.deleteMany({ where: { id: userId } });
 }
 
@@ -48,7 +58,7 @@ test.describe('Workflow Learning（真实 LLM + 服务端 Playwright）', () => 
     await context.clearCookies();
     test.skip(
       !HAS_DB_ENV,
-      '需要 .env 中配置 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASS/MYSQL_DATABASE（与本地真实库一致）。',
+      '需要 .env 中配置 POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_DATABASE 或 DATABASE_URL（与本地真实库一致）。',
     );
     test.skip(
       !process.env.OPENAI_API_KEY?.trim(),

@@ -4,25 +4,36 @@ import { loadRepoEnv } from './load-repo-env';
 
 loadRepoEnv(process.cwd());
 
-const SESSION_COOKIE_NAME = 'next-auth.session-token';
+const SESSION_COOKIE_NAME = 'hiring-agent.session';
 const SEEDED_USER_EMAIL = 'playwright-copilotkit-patterns@example.com';
+const SEEDED_USERNAME = 'playwright-copilotkit-patterns';
 const SEEDED_USER_NAME = 'CopilotKit Pattern User';
+const SEEDED_PASSWORD_HASH = 'pbkdf2_sha256$fixture';
 const SEEDED_SESSION_TOKEN = 'playwright-copilotkit-patterns-session';
 const SEEDED_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const HAS_DB_ENV = Boolean(
-  process.env.MYSQL_HOST &&
-  process.env.MYSQL_PORT &&
-  process.env.MYSQL_USER &&
-  process.env.MYSQL_PASS &&
-  process.env.MYSQL_DATABASE,
+  process.env.DATABASE_URL ||
+  (process.env.POSTGRES_HOST &&
+    process.env.POSTGRES_PORT &&
+    process.env.POSTGRES_USER &&
+    process.env.POSTGRES_DATABASE),
 );
 
 async function seedSessionToken() {
   const user = await prisma.user.upsert({
     where: { email: SEEDED_USER_EMAIL },
-    update: { name: SEEDED_USER_NAME },
-    create: { email: SEEDED_USER_EMAIL, name: SEEDED_USER_NAME },
+    update: {
+      username: SEEDED_USERNAME,
+      passwordHash: SEEDED_PASSWORD_HASH,
+      name: SEEDED_USER_NAME,
+    },
+    create: {
+      username: SEEDED_USERNAME,
+      passwordHash: SEEDED_PASSWORD_HASH,
+      email: SEEDED_USER_EMAIL,
+      name: SEEDED_USER_NAME,
+    },
   });
   await prisma.session.deleteMany({ where: { userId: user.id } });
   await prisma.session.create({
@@ -39,14 +50,13 @@ async function cleanupSeededUser(userId: string) {
   await prisma.message.deleteMany({ where: { conversation: { userId } } });
   await prisma.conversation.deleteMany({ where: { userId } });
   await prisma.session.deleteMany({ where: { userId } });
-  await prisma.account.deleteMany({ where: { userId } });
   await prisma.user.deleteMany({ where: { id: userId } });
 }
 
 test.describe('Chat CopilotKit pattern demos', () => {
   test.beforeEach(async ({ context }) => {
     await context.clearCookies();
-    test.skip(!HAS_DB_ENV, 'Requires MYSQL_* in env (see .env.local).');
+    test.skip(!HAS_DB_ENV, 'Requires POSTGRES_* or DATABASE_URL in env (see .env.local).');
   });
 
   test('covers the full nine-pattern manual validation checklist', async ({

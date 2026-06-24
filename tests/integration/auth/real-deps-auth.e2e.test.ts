@@ -1,46 +1,21 @@
 /** @jest-environment node */
 import '../chat/test-env';
-import { prisma } from '@/lib/prisma';
 import { sessionCookieStore } from './session-cookie-store';
-
-jest.mock('@auth/prisma-adapter', () => {
-  return {
-    PrismaAdapter: () => ({
-      getSessionAndUser: async (sessionToken: string) => {
-        const userAndSession = await prisma.session.findUnique({
-          where: { sessionToken },
-          include: { user: true },
-        });
-        if (!userAndSession) return null;
-        const { user, ...session } = userAndSession;
-        return { user, session };
-      },
-      createSession: (data: { sessionToken: string; userId: string; expires: Date }) =>
-        prisma.session.create({ data }),
-      updateSession: (data: { sessionToken: string; expires: Date }) =>
-        prisma.session.update({
-          where: { sessionToken: data.sessionToken },
-          data: { expires: data.expires },
-        }),
-      deleteSession: (sessionToken: string) => prisma.session.delete({ where: { sessionToken } }),
-    }),
-  };
-});
 
 jest.mock('next/headers', () => {
   return {
     cookies: async () => ({
-      getAll: () =>
-        sessionCookieStore.token
-          ? [{ name: 'next-auth.session-token', value: sessionCookieStore.token }]
-          : [],
+      get: (name: string) =>
+        name === 'hiring-agent.session' && sessionCookieStore.token
+          ? { name, value: sessionCookieStore.token }
+          : undefined,
     }),
     headers: async () => new Headers(),
   };
 });
 
 import {
-  assertMysqlReachable,
+  assertPostgresReachable,
   assertRedisReachable,
   ensureIntegrationSchema,
   requireIntegrationEnv,
@@ -49,17 +24,15 @@ import { POST as postConversation } from '@/app/api/conversations/route';
 import { GET as getMessages } from '@/app/api/conversations/[id]/messages/route';
 import { createUserWithSessionFixture } from './test-fixtures';
 
-describe('auth integration with real mysql and redis', () => {
+describe('auth integration with real postgres and redis', () => {
   beforeAll(async () => {
-    requireIntegrationEnv('MYSQL_HOST');
-    requireIntegrationEnv('MYSQL_PORT');
-    requireIntegrationEnv('MYSQL_USER');
-    requireIntegrationEnv('MYSQL_PASS');
-    requireIntegrationEnv('MYSQL_DATABASE');
+    requireIntegrationEnv('POSTGRES_HOST');
+    requireIntegrationEnv('POSTGRES_PORT');
+    requireIntegrationEnv('POSTGRES_USER');
+    requireIntegrationEnv('POSTGRES_DATABASE');
     requireIntegrationEnv('REDIS_URL');
-    requireIntegrationEnv('NEXTAUTH_SECRET');
     await ensureIntegrationSchema();
-    await assertMysqlReachable();
+    await assertPostgresReachable();
     await assertRedisReachable();
   }, 60000);
 

@@ -1,9 +1,35 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/navbar';
 
-const mockUseSession = jest.fn();
-const mockSignIn = jest.fn();
-const mockSignOut = jest.fn();
+const refresh = jest.fn();
+const push = jest.fn();
+const fetchMock = jest.fn();
+const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+
+type SessionPayload = {
+  user: {
+    id: string;
+    username: string;
+    name: string | null;
+    email: string | null;
+    image: string | null;
+  } | null;
+};
+
+type MockSessionResponse = {
+  ok: boolean;
+  json: () => Promise<SessionPayload>;
+};
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver;
+  });
+
+  return { promise, resolve };
+}
 
 jest.mock('next/link', () => {
   return function MockLink({
@@ -23,10 +49,8 @@ jest.mock('next/link', () => {
   };
 });
 
-jest.mock('next-auth/react', () => ({
-  useSession: () => mockUseSession(),
-  signIn: (...args: unknown[]) => mockSignIn(...args),
-  signOut: (...args: unknown[]) => mockSignOut(...args),
+jest.mock('next/navigation', () => ({
+  useRouter: jest.fn(),
 }));
 
 jest.mock('@/components/ui/theme-toggle', () => ({
@@ -54,36 +78,46 @@ jest.mock('@/components/ui', () => ({
 jest.mock('lucide-react', () => ({
   Menu: () => <div data-testid="menu-icon" />,
   X: () => <div data-testid="x-icon" />,
-  Github: () => <div data-testid="github-icon" />,
+  LogIn: () => <div data-testid="login-icon" />,
   LogOut: () => <div data-testid="logout-icon" />,
 }));
 
 describe('Navbar auth states', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseSession.mockReturnValue({
-      data: null,
-      status: 'unauthenticated',
+    (useRouter as jest.Mock).mockReturnValue({ refresh, push });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ user: null }),
     });
   });
 
-  it('shows GitHub sign-in when unauthenticated', async () => {
+  it('shows login link when unauthenticated', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ user: null }),
+    });
+
     render(<Navbar />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /log in/i })).toHaveAttribute('href', '/auth/signin');
     });
   });
 
   it('shows user menu and logout when authenticated', async () => {
-    mockUseSession.mockReturnValue({
-      data: {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
         user: {
+          id: 'user_123',
+          username: 'alice',
           name: 'Alice',
           email: 'alice@example.com',
+          image: null,
         },
-      },
-      status: 'authenticated',
+      }),
     });
 
     render(<Navbar />);
@@ -94,35 +128,153 @@ describe('Navbar auth states', () => {
     });
   });
 
-  it('calls next-auth actions for sign in and logout', async () => {
-    mockUseSession.mockReturnValueOnce({
-      data: null,
-      status: 'unauthenticated',
-    });
-    mockUseSession.mockReturnValueOnce({
-      data: {
+  it('posts to local logout and refreshes on logout', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
         user: {
+          id: 'user_123',
+          username: 'alice',
           name: 'Alice',
+          email: 'alice@example.com',
+          image: null,
         },
-      },
-      status: 'authenticated',
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({}),
     });
 
-    const { unmount } = render(<Navbar />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole('button', { name: /sign in with github/i }));
-    expect(mockSignIn).toHaveBeenCalledWith('github');
-
-    unmount();
     render(<Navbar />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /logout/i })).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: /logout/i }));
-    expect(mockSignOut).toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST' });
+    });
+    expect(dispatchEventSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'hiring-agent-auth-changed',
+      }),
+    );
+    expect(refresh).toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith('/');
+  });
+
+  it('refetches the session when auth changes', async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ user: null }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          user: {
+            id: 'user_123',
+            username: 'alice',
+            name: 'Alice',
+            email: 'alice@example.com',
+            image: null,
+          },
+        }),
+      });
+
+    render(<Navbar />);
+
+    expect(await screen.findByRole('link', { name: /log in/i })).toBeInTheDocument();
+    window.dispatchEvent(new Event('hiring-agent-auth-changed'));
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/session');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the latest session response when an older request resolves later', async () => {
+    const initialRequest = createDeferred<MockSessionResponse>();
+    const refreshedRequest = createDeferred<MockSessionResponse>();
+
+    fetchMock
+      .mockReturnValueOnce(initialRequest.promise)
+      .mockReturnValueOnce(refreshedRequest.promise);
+
+    render(<Navbar />);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    window.dispatchEvent(new Event('hiring-agent-auth-changed'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async () => {
+      refreshedRequest.resolve({
+        ok: true,
+        json: async () => ({
+          user: {
+            id: 'user_123',
+            username: 'alice',
+            name: 'Alice',
+            email: 'alice@example.com',
+            image: null,
+          },
+        }),
+      });
+      await refreshedRequest.promise;
+    });
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+
+    await act(async () => {
+      initialRequest.resolve({
+        ok: true,
+        json: async () => ({ user: null }),
+      });
+      await initialRequest.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice')).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /log in/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('does not refresh or navigate when logout fails', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        user: {
+          id: 'user_123',
+          username: 'alice',
+          name: 'Alice',
+          email: 'alice@example.com',
+          image: null,
+        },
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ error: 'Logout failed' }),
+    });
+
+    render(<Navbar />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /logout/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/logout failed/i);
+    expect(dispatchEventSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'hiring-agent-auth-changed',
+      }),
+    );
+    expect(refresh).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
   });
 });

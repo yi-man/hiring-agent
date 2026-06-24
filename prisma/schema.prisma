@@ -3,22 +3,22 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model Conversation {
-  id           String    @id @default(uuid()) @db.VarChar(36)
-  userId       String?   @map("user_id") @db.VarChar(128)
-  title        String?   @db.VarChar(255)
-  status       String    @default("active") @db.VarChar(32)
-  lastActiveAt DateTime  @map("last_active_at") @db.DateTime(3)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
-  messages     Message[]
-  documents    ConversationDocument[]
+  id             String                      @id @default(uuid())
+  userId         String?                     @map("user_id")
+  title          String?
+  status         String                      @default("active")
+  lastActiveAt   DateTime                    @map("last_active_at")
+  createdAt      DateTime                    @default(now()) @map("created_at")
+  updatedAt      DateTime                    @updatedAt @map("updated_at")
+  messages       Message[]
+  documents      ConversationDocument[]
   documentChunks ConversationDocumentChunk[]
-  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  user           User?                       @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Restrict)
 
   @@index([lastActiveAt(sort: Desc)])
   @@index([userId], map: "idx_conversations_user_id")
@@ -26,84 +26,56 @@ model Conversation {
 }
 
 model User {
-  id            String         @id @default(cuid()) @db.VarChar(128)
-  name          String?        @db.VarChar(191)
-  email         String?        @unique @db.VarChar(191)
-  emailVerified DateTime?      @db.DateTime(3)
-  image         String?        @db.VarChar(191)
-  accounts      Account[]
+  id            String         @id @default(cuid())
+  username      String         @unique
+  passwordHash  String         @map("password_hash")
+  name          String?
+  email         String?        @unique
+  emailVerified DateTime?      @map("email_verified")
+  image         String?
   sessions      Session[]
   conversations Conversation[]
 
   @@map("users")
 }
 
-model Account {
-  id                String  @id @default(cuid()) @db.VarChar(128)
-  userId            String  @db.VarChar(128)
-  type              String  @db.VarChar(191)
-  provider          String  @db.VarChar(191)
-  providerAccountId String  @db.VarChar(191)
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
-  expires_at        Int?
-  token_type        String? @db.VarChar(191)
-  scope             String? @db.VarChar(191)
-  id_token          String? @db.Text
-  session_state     String? @db.VarChar(191)
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
-
-  @@unique([provider, providerAccountId])
-  @@index([userId], map: "idx_accounts_user_id")
-  @@map("accounts")
-}
-
 model Session {
-  id           String   @id @default(cuid()) @db.VarChar(128)
-  sessionToken String   @unique @db.VarChar(191)
-  userId       String   @db.VarChar(128)
-  expires      DateTime @db.DateTime(3)
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([userId], map: "idx_sessions_user_id")
   @@map("sessions")
 }
 
-model VerificationToken {
-  identifier String @db.VarChar(191)
-  token      String @unique @db.VarChar(191)
-  expires    DateTime @db.DateTime(3)
-
-  @@unique([identifier, token])
-  @@map("verification_tokens")
-}
-
 model Message {
-  id             String       @id @default(uuid()) @db.VarChar(36)
-  conversationId String       @map("conversation_id") @db.VarChar(36)
-  role           String       @db.VarChar(16)
-  content        String       @db.LongText
-  documentId     String?      @map("document_id") @db.VarChar(36)
+  id             String       @id @default(uuid())
+  conversationId String       @map("conversation_id")
+  role           String
+  content        String
+  documentId     String?      @map("document_id")
   seq            Int
   tokenCount     Int?         @map("token_count")
-  createdAt      DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  createdAt      DateTime     @default(now()) @map("created_at")
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@index([conversationId, seq], map: "idx_messages_conversation_seq")
   @@unique([conversationId, seq])
+  @@index([conversationId, seq], map: "idx_messages_conversation_seq")
   @@map("messages")
 }
 
 model ConversationDocument {
-  id              String                         @id @default(uuid()) @db.VarChar(36)
-  conversationId  String                         @map("conversation_id") @db.VarChar(36)
-  filename        String                         @db.VarChar(255)
-  contentMarkdown String                         @map("content_markdown") @db.LongText
-  status          String                         @default("processing") @db.VarChar(32)
-  errorMessage    String?                        @map("error_message") @db.Text
+  id              String                         @id @default(uuid())
+  conversationId  String                         @map("conversation_id")
+  filename        String
+  contentMarkdown String                         @map("content_markdown")
+  status          String                         @default("processing")
+  errorMessage    String?                        @map("error_message")
   version         Int                            @default(1)
-  createdAt       DateTime                       @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt       DateTime                       @updatedAt @map("updated_at") @db.DateTime(3)
+  createdAt       DateTime                       @default(now()) @map("created_at")
+  updatedAt       DateTime                       @updatedAt @map("updated_at")
   chunks          ConversationDocumentChunk[]
   jobs            ConversationDocumentIndexJob[]
   conversation    Conversation                   @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -115,16 +87,16 @@ model ConversationDocument {
 }
 
 model ConversationDocumentChunk {
-  id            String               @id @default(uuid()) @db.VarChar(36)
-  documentId    String               @map("document_id") @db.VarChar(36)
-  conversationId String              @map("conversation_id") @db.VarChar(36)
-  chunkIndex    Int                  @map("chunk_index")
-  content       String               @db.LongText
-  tokenEstimate Int?                 @map("token_estimate")
-  qdrantPointId String?              @unique @map("qdrant_point_id") @db.VarChar(128)
-  createdAt     DateTime             @default(now()) @map("created_at") @db.DateTime(3)
-  document      ConversationDocument @relation(fields: [documentId, conversationId], references: [id, conversationId], onDelete: Cascade, onUpdate: Restrict)
-  conversation  Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  id             String               @id @default(uuid())
+  documentId     String               @map("document_id")
+  conversationId String               @map("conversation_id")
+  chunkIndex     Int                  @map("chunk_index")
+  content        String
+  tokenEstimate  Int?                 @map("token_estimate")
+  qdrantPointId  String?              @unique @map("qdrant_point_id")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  document       ConversationDocument @relation(fields: [documentId, conversationId], references: [id, conversationId], onDelete: Cascade, onUpdate: Restrict)
+  conversation   Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([documentId, chunkIndex], map: "conversation_document_chunks_document_id_chunk_index_key")
   @@index([documentId], map: "idx_conversation_document_chunks_document_id")
@@ -134,15 +106,15 @@ model ConversationDocumentChunk {
 }
 
 model ConversationDocumentIndexJob {
-  id         String               @id @default(uuid()) @db.VarChar(36)
-  documentId String               @map("document_id") @db.VarChar(36)
-  status     String               @default("pending") @db.VarChar(32)
+  id         String               @id @default(uuid())
+  documentId String               @map("document_id")
+  status     String               @default("pending")
   attempts   Int                  @default(0)
-  lastError  String?              @map("last_error") @db.Text
-  startedAt  DateTime?            @map("started_at") @db.DateTime(3)
-  finishedAt DateTime?            @map("finished_at") @db.DateTime(3)
-  createdAt  DateTime             @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt  DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
+  lastError  String?              @map("last_error")
+  startedAt  DateTime?            @map("started_at")
+  finishedAt DateTime?            @map("finished_at")
+  createdAt  DateTime             @default(now()) @map("created_at")
+  updatedAt  DateTime             @updatedAt @map("updated_at")
   document   ConversationDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([documentId], map: "idx_conversation_document_index_jobs_document_id")
@@ -151,29 +123,29 @@ model ConversationDocumentIndexJob {
 }
 
 model LlmCallLog {
-  id             String   @id @default(uuid()) @db.VarChar(36)
-  callId         String?  @map("call_id") @db.VarChar(128)
-  traceId        String?  @map("trace_id") @db.VarChar(128)
-  requestId      String?  @map("request_id") @db.VarChar(128)
-  endpoint       String   @db.VarChar(128)
-  provider       String   @db.VarChar(64)
-  model          String   @db.VarChar(128)
-  requestHeaders Json     @map("request_headers")
-  requestPayload Json     @map("request_payload")
-  responsePayload Json?   @map("response_payload")
-  inputTokens    Int      @map("input_tokens")
-  outputTokens   Int      @map("output_tokens")
-  totalTokens    Int      @map("total_tokens")
-  latencyMs      Int      @map("latency_ms")
-  httpStatus     Int?     @map("http_status")
-  isError        Boolean  @default(false) @map("is_error")
-  errorDomain    String?  @map("error_domain") @db.VarChar(64)
-  errorCode      String?  @map("error_code") @db.VarChar(128)
-  providerStatus String?  @map("provider_status") @db.VarChar(128)
-  retryCount     Int      @default(0) @map("retry_count")
-  finalOutcome   String   @map("final_outcome") @db.VarChar(32)
-  timestamp      DateTime @db.DateTime(3)
-  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  id              String   @id @default(uuid())
+  callId          String?  @map("call_id")
+  traceId         String?  @map("trace_id")
+  requestId       String?  @map("request_id")
+  endpoint        String
+  provider        String
+  model           String
+  requestHeaders  Json     @map("request_headers")
+  requestPayload  Json     @map("request_payload")
+  responsePayload Json?    @map("response_payload")
+  inputTokens     Int      @map("input_tokens")
+  outputTokens    Int      @map("output_tokens")
+  totalTokens     Int      @map("total_tokens")
+  latencyMs       Int      @map("latency_ms")
+  httpStatus      Int?     @map("http_status")
+  isError         Boolean  @default(false) @map("is_error")
+  errorDomain     String?  @map("error_domain")
+  errorCode       String?  @map("error_code")
+  providerStatus  String?  @map("provider_status")
+  retryCount      Int      @default(0) @map("retry_count")
+  finalOutcome    String   @map("final_outcome")
+  timestamp       DateTime
+  createdAt       DateTime @default(now()) @map("created_at")
 
   @@unique([callId], map: "llm_call_logs_call_id_key")
   @@unique([provider, requestId], map: "llm_call_logs_provider_request_id_key")
@@ -185,20 +157,20 @@ model LlmCallLog {
 }
 
 model LlmUsageStatsDaily {
-  id          String   @id @default(uuid()) @db.VarChar(36)
-  bucketDate  DateTime @map("bucket_date") @db.Date
-  provider    String   @db.VarChar(64)
-  model       String   @db.VarChar(128)
-  endpoint    String   @db.VarChar(128)
-  totalCalls  Int      @default(0) @map("total_calls")
-  successCalls Int     @default(0) @map("success_calls")
-  errorCalls  Int      @default(0) @map("error_calls")
-  inputTokens Int      @default(0) @map("input_tokens")
-  outputTokens Int     @default(0) @map("output_tokens")
-  totalTokens Int      @default(0) @map("total_tokens")
-  avgLatencyMs Float   @default(0) @map("avg_latency_ms")
-  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  id           String   @id @default(uuid())
+  bucketDate   DateTime @map("bucket_date") @db.Date
+  provider     String
+  model        String
+  endpoint     String
+  totalCalls   Int      @default(0) @map("total_calls")
+  successCalls Int      @default(0) @map("success_calls")
+  errorCalls   Int      @default(0) @map("error_calls")
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  totalTokens  Int      @default(0) @map("total_tokens")
+  avgLatencyMs Float    @default(0) @map("avg_latency_ms")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@unique([bucketDate, provider, model, endpoint], map: "llm_usage_stats_daily_bucket_provider_model_endpoint_key")
   @@index([bucketDate], map: "idx_llm_usage_stats_daily_bucket_date")
@@ -206,11 +178,11 @@ model LlmUsageStatsDaily {
 }
 
 model LlmUsageStatsWeekly {
-  id           String   @id @default(uuid()) @db.VarChar(36)
+  id           String   @id @default(uuid())
   bucketWeek   DateTime @map("bucket_week") @db.Date
-  provider     String   @db.VarChar(64)
-  model        String   @db.VarChar(128)
-  endpoint     String   @db.VarChar(128)
+  provider     String
+  model        String
+  endpoint     String
   totalCalls   Int      @default(0) @map("total_calls")
   successCalls Int      @default(0) @map("success_calls")
   errorCalls   Int      @default(0) @map("error_calls")
@@ -218,8 +190,8 @@ model LlmUsageStatsWeekly {
   outputTokens Int      @default(0) @map("output_tokens")
   totalTokens  Int      @default(0) @map("total_tokens")
   avgLatencyMs Float    @default(0) @map("avg_latency_ms")
-  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@unique([bucketWeek, provider, model, endpoint], map: "llm_usage_stats_weekly_bucket_provider_model_endpoint_key")
   @@index([bucketWeek], map: "idx_llm_usage_stats_weekly_bucket_week")
@@ -227,10 +199,10 @@ model LlmUsageStatsWeekly {
 }
 
 model LlmUsageStatsTotal {
-  id           String   @id @default(uuid()) @db.VarChar(36)
-  provider     String   @db.VarChar(64)
-  model        String   @db.VarChar(128)
-  endpoint     String   @db.VarChar(128)
+  id           String   @id @default(uuid())
+  provider     String
+  model        String
+  endpoint     String
   totalCalls   Int      @default(0) @map("total_calls")
   successCalls Int      @default(0) @map("success_calls")
   errorCalls   Int      @default(0) @map("error_calls")
@@ -238,8 +210,8 @@ model LlmUsageStatsTotal {
   outputTokens Int      @default(0) @map("output_tokens")
   totalTokens  Int      @default(0) @map("total_tokens")
   avgLatencyMs Float    @default(0) @map("avg_latency_ms")
-  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@unique([provider, model, endpoint], map: "llm_usage_stats_total_provider_model_endpoint_key")
   @@map("llm_usage_stats_total")

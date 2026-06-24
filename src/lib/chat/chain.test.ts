@@ -54,7 +54,7 @@ jest.mock('@/lib/chat/prompts', () => ({
 
 jest.mock('@/lib/chat/history/redis-chat-history', () => ({
   RedisChatMessageHistory: jest.fn().mockImplementation(() => ({
-    rehydrateFromMySql: jest.fn().mockResolvedValue(undefined),
+    rehydrateFromDatabase: jest.fn().mockResolvedValue(undefined),
   })),
 }));
 

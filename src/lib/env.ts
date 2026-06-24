@@ -60,12 +60,12 @@ const envSchema = z.object({
   LLM_OBSERVABILITY_ADMIN_TOKEN: z.string().optional(),
 
   // Chat persistence
-  MYSQL_HOST: z.string().default('127.0.0.1'),
-  MYSQL_PORT: z.coerce.number().int().positive().default(3306),
-  MYSQL_USER: z.string().default('root'),
-  MYSQL_PASS: z.string().default('mysql1234'),
-  MYSQL_DATABASE: z.string().default('bia'),
-  MYSQL_CI_SUFFIX: z.string().default('_ci'),
+  POSTGRES_HOST: z.string().default('127.0.0.1'),
+  POSTGRES_PORT: z.coerce.number().int().positive().default(5432),
+  POSTGRES_USER: z.string().default('apple'),
+  POSTGRES_PASSWORD: z.string().default(''),
+  POSTGRES_DATABASE: z.string().default('bia'),
+  POSTGRES_CI_SUFFIX: z.string().default('_ci'),
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   CHAT_REDIS_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
   CHAT_HISTORY_REHYDRATE_LIMIT: z.coerce.number().int().positive().default(50),

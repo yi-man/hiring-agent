@@ -47,13 +47,13 @@ describe('RAG env defaults', () => {
       QDRANT_URL: 'not-a-url',
       RAG_TOP_K: '11',
       OPENAI_BASE_URL: 'https://example.com/v1',
-      MYSQL_HOST: 'db.internal',
+      POSTGRES_HOST: 'db.internal',
     });
 
     expect(parsed.QDRANT_URL).toBe('http://127.0.0.1:6333');
     expect(parsed.RAG_TOP_K).toBe(11);
     expect(parsed.OPENAI_BASE_URL).toBe('https://example.com/v1');
-    expect(parsed.MYSQL_HOST).toBe('db.internal');
+    expect(parsed.POSTGRES_HOST).toBe('db.internal');
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
   });

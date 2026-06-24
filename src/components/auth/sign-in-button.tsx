@@ -1,8 +1,7 @@
 'use client';
 
-import { Github } from 'lucide-react';
-import { signIn } from 'next-auth/react';
-import { Button } from '@/components/ui';
+import Link from 'next/link';
+import { LogIn } from 'lucide-react';
 
 type SignInButtonProps = {
   className?: string;
@@ -10,9 +9,12 @@ type SignInButtonProps = {
 
 export function SignInButton({ className }: SignInButtonProps) {
   return (
-    <Button className={className} variant="flat" onClick={() => signIn('github')}>
-      <Github className="h-4 w-4" />
-      Sign in with GitHub
-    </Button>
+    <Link
+      className={`bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors ${className ?? ''}`}
+      href="/auth/signin"
+    >
+      <LogIn className="h-4 w-4" />
+      Log in
+    </Link>
   );
 }
