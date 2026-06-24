@@ -1,6 +1,6 @@
 ### Project: Hiring Agent（招聘助手）
 
-Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；集成 AI 对话、职位描述（JD）生成、LLM 可观测性、对话文档与 RAG（Prisma + MySQL、Redis、可选 Qdrant）、NextAuth 与 shadcn/HeroUI 组件。
+Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；集成 AI 对话、职位描述（JD）生成、LLM 可观测性、对话文档与 RAG（Prisma + PostgreSQL、Redis、可选 Qdrant）、本地账号认证与 shadcn/HeroUI 组件。
 
 ---
 
@@ -23,8 +23,8 @@ Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；
 - `bun run lint` / `bun run lint:fix` / `bun run format` / `bun run type-check`：规范与类型检查。
 - `bun run test`：Jest 单测 + 覆盖率；`bun run test:watch`：监听；`bun run test:ci`：CI 用单测。
 - `bun run test:e2e` / `bun run test:e2e:playwright` / `bun run test:e2e:playwright:jd`：Playwright E2E（`playwright.config.ts` 默认在 **3100** 拉起 `next dev`，与日常 `bun run dev` 的 3000 不同）。
-- `bun run test:e2e:playwright:workflow`：**Workflow Learning** 真实链路 E2E（需 **MySQL** 会话种子、`OPENAI_API_KEY`、本机已 `playwright install`；与 chat 文档流用例同为 **无 mock**）。Bun 统一使用根目录 `bun.lock`，避免混用其他包管理器锁文件。
-- `bun run test:integration:chat` / `bun run test:integration:auth`：真实 MySQL/Redis 等依赖的集成测试。
+- `bun run test:e2e:playwright:workflow`：**Workflow Learning** 真实链路 E2E（需 **PostgreSQL** 会话种子、`OPENAI_API_KEY`、本机已 `playwright install`；与 chat 文档流用例同为 **无 mock**）。Bun 统一使用根目录 `bun.lock`，避免混用其他包管理器锁文件。
+- `bun run test:integration:chat` / `bun run test:integration:auth`：真实 PostgreSQL/Redis 等依赖的集成测试。
 - `bunx prisma migrate deploy`：部署迁移；`bun run prisma:generate`：仅生成客户端。
 - `bun run obs:run` / `bun run obs:realtime` / `bun run obs:retention`：LLM 可观测性运维脚本。
 - `bun run clean` / `bun run reinstall`：清理与重装。
@@ -34,7 +34,7 @@ Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；
 ### 项目架构
 
 ```
-├── prisma/                    # Prisma schema 与 migrations（MySQL）
+├── prisma/                    # Prisma schema 与 migrations（PostgreSQL）
 ├── public/                    # 静态资源
 ├── src/
 │   ├── app/                   # App Router：页面与 API Route
@@ -63,8 +63,8 @@ Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；
 ### 重要说明
 
 - **TDD 驱动**：完善单测与集成测试；新功能优先补测试再改实现。
-- **真实环境**：测试尽量对接真实依赖；集成与 real-deps 类用例需真实 **MySQL**、**Redis**（及相应 API Key 时 LLM）；数据库用真实实例而非内存假库。
+- **真实环境**：测试尽量对接真实依赖；集成与 real-deps 类用例需真实 **PostgreSQL**、**Redis**（及相应 API Key 时 LLM）；数据库用真实实例而非内存假库。
 - **排错与收尾**：遇到问题优先用 systematic-debugging 思路查清根因再改；**改完后须本地验证并跑完相关/全量测试**再视为完成。
 - **端口**：日常开发默认 **3000**；Playwright 使用 **3100**（见 `playwright.config.ts`），勿随意改动以免 E2E 失效。
-- **数据库与本地依赖**：MySQL / Redis、`DATABASE_URL`、迁移顺序与 Prisma 注意点见 [`docs/references/database-conventions.md`](docs/references/database-conventions.md)。
+- **数据库与本地依赖**：PostgreSQL / Redis、`DATABASE_URL`、迁移顺序与 Prisma 注意点见 [`docs/references/database-conventions.md`](docs/references/database-conventions.md)。
 - **LLM**：OpenAI 兼容接口；未配置 `OPENAI_API_KEY` 或 `JD_LLM_MOCK=true` 时 JD 等可走内置 mock；`tests/integration/chat/real-deps.e2e.test.ts` 无真实 Key 可能失败。

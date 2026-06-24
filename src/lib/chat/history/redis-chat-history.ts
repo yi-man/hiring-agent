@@ -74,7 +74,7 @@ export class RedisChatMessageHistory extends BaseChatMessageHistory {
 
   lc_namespace = ['chat', 'redis-history'];
 
-  async rehydrateFromMySql(limit = env.CHAT_HISTORY_REHYDRATE_LIMIT): Promise<void> {
+  async rehydrateFromDatabase(limit = env.CHAT_HISTORY_REHYDRATE_LIMIT): Promise<void> {
     const existing = await this.getMessages();
     if (existing.length) return;
     const rows = await listMessages(this.conversationId, limit);

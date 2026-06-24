@@ -1,63 +1,78 @@
 import { execSync } from 'node:child_process';
-import { PrismaClient } from '@prisma/client';
+import { Client } from 'pg';
 import { loadRepoEnv } from './load-repo-env';
 
-/**
- * Prisma migrate deploy 在「已有表但未 baseline」的库上会 P3005。
- * 仍保证 chat 流式接口需要的 messages.document_id 存在（与迁移一致）。
- */
-async function ensureMessageDocumentIdColumn(databaseUrl: string) {
-  const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
+function buildPostgresUrl(params: {
+  host: string;
+  port: string;
+  user: string;
+  password?: string;
+  database: string;
+}): string {
+  const user = encodeURIComponent(params.user);
+  const password = params.password ? `:${encodeURIComponent(params.password)}` : '';
+  return `postgresql://${user}${password}@${params.host}:${params.port}/${params.database}`;
+}
+
+async function ensurePostgresDatabase(databaseUrl: string) {
+  const url = new URL(databaseUrl);
+  const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+  if (!database) {
+    return;
+  }
+
+  const adminUrl = new URL(databaseUrl);
+  adminUrl.pathname = '/postgres';
+  const adminClient = new Client({ connectionString: adminUrl.toString() });
+  await adminClient.connect();
   try {
-    await prisma.$executeRawUnsafe(
-      'ALTER TABLE `messages` ADD COLUMN `document_id` VARCHAR(36) NULL',
-    );
-    // eslint-disable-next-line no-console -- e2e diagnostics
-    console.log('[e2e global-setup] ensured messages.document_id column');
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    if (
-      msg.includes('1060') ||
-      msg.toLowerCase().includes('duplicate') ||
-      msg.toLowerCase().includes('already exists')
-    ) {
-      return;
+    const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [
+      database,
+    ]);
+    if (exists.rowCount === 0) {
+      await adminClient.query(`CREATE DATABASE "${database.replace(/"/g, '""')}"`);
     }
-    // eslint-disable-next-line no-console -- e2e diagnostics
-    console.warn('[e2e global-setup] messages.document_id ensure:', msg.slice(0, 240));
   } finally {
-    await prisma.$disconnect();
+    await adminClient.end();
   }
 }
 
 /**
- * Prisma CLI only reads DATABASE_URL; the app often uses MYSQL_* via buildDatabaseUrl.
+ * Prisma CLI only reads DATABASE_URL; the app can also build it from POSTGRES_*.
  */
 export default async function globalSetup() {
   loadRepoEnv(process.cwd());
 
   let databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) {
-    const host = process.env.MYSQL_HOST?.trim();
-    const port = process.env.MYSQL_PORT?.trim();
-    const user = process.env.MYSQL_USER?.trim();
-    const pass = process.env.MYSQL_PASS ?? '';
-    const database = process.env.MYSQL_DATABASE?.trim();
+    const host = process.env.POSTGRES_HOST?.trim();
+    const port = process.env.POSTGRES_PORT?.trim();
+    const user = process.env.POSTGRES_USER?.trim();
+    const pass = process.env.POSTGRES_PASSWORD ?? '';
+    const database = process.env.POSTGRES_DATABASE?.trim();
     if (host && port && user && database) {
-      databaseUrl = `mysql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${database}`;
+      databaseUrl = buildPostgresUrl({ host, port, user, password: pass, database });
     }
   }
 
   if (!databaseUrl) {
     // eslint-disable-next-line no-console -- e2e diagnostics
     console.warn(
-      '[e2e global-setup] Skip DB steps: set DATABASE_URL or MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_DATABASE',
+      '[e2e global-setup] Skip DB steps: set DATABASE_URL or POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_DATABASE',
     );
     return;
   }
 
   try {
-    execSync('npx prisma migrate deploy', {
+    await ensurePostgresDatabase(databaseUrl);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    // eslint-disable-next-line no-console -- e2e diagnostics
+    console.warn('[e2e global-setup] postgres database ensure skipped:', msg.slice(0, 400));
+  }
+
+  try {
+    execSync('bunx prisma migrate deploy', {
       cwd: process.cwd(),
       env: { ...process.env, DATABASE_URL: databaseUrl },
       stdio: 'pipe',
@@ -67,6 +82,4 @@ export default async function globalSetup() {
     // eslint-disable-next-line no-console -- e2e diagnostics
     console.warn('[e2e global-setup] prisma migrate deploy skipped:', msg.slice(0, 400));
   }
-
-  await ensureMessageDocumentIdColumn(databaseUrl);
 }

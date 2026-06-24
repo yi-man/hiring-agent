@@ -36,7 +36,7 @@ export function buildChatChain() {
     runnable: chain,
     getMessageHistory: async (sessionId: string) => {
       const history = new RedisChatMessageHistory(sessionId);
-      await history.rehydrateFromMySql();
+      await history.rehydrateFromDatabase();
       return history;
     },
     inputMessagesKey: 'input',

@@ -2,23 +2,38 @@ import path from 'path';
 import { config } from 'dotenv';
 import { URL } from 'url';
 import { execFileSync } from 'child_process';
-import { createPool } from 'mysql2/promise';
+import { Client } from 'pg';
 
 config({ path: path.resolve(process.cwd(), '.env.local') });
 config({ path: path.resolve(process.cwd(), '.env.development') });
 
+function buildPostgresUrl(params: {
+  host: string;
+  port: string | number;
+  user: string;
+  password?: string;
+  database: string;
+}): string {
+  const user = encodeURIComponent(params.user);
+  const password = params.password ? `:${encodeURIComponent(params.password)}` : '';
+  return `postgresql://${user}${password}@${params.host}:${params.port}/${params.database}`;
+}
+
 function applyCiDatabaseSuffix() {
-  const ciSuffix = process.env.MYSQL_CI_SUFFIX || '_ci';
+  const ciSuffix = process.env.POSTGRES_CI_SUFFIX || '_ci';
   if (
-    process.env.MYSQL_HOST &&
-    process.env.MYSQL_PORT &&
-    process.env.MYSQL_USER &&
-    process.env.MYSQL_PASS &&
-    process.env.MYSQL_DATABASE
+    process.env.POSTGRES_HOST &&
+    process.env.POSTGRES_PORT &&
+    process.env.POSTGRES_USER &&
+    process.env.POSTGRES_DATABASE
   ) {
-    const user = encodeURIComponent(process.env.MYSQL_USER);
-    const pass = encodeURIComponent(process.env.MYSQL_PASS);
-    process.env.DATABASE_URL = `mysql://${user}:${pass}@${process.env.MYSQL_HOST}:${process.env.MYSQL_PORT}/${process.env.MYSQL_DATABASE}`;
+    process.env.DATABASE_URL = buildPostgresUrl({
+      host: process.env.POSTGRES_HOST,
+      port: process.env.POSTGRES_PORT,
+      user: process.env.POSTGRES_USER,
+      password: process.env.POSTGRES_PASSWORD ?? '',
+      database: process.env.POSTGRES_DATABASE,
+    });
   }
 
   if (process.env.DATABASE_URL) {
@@ -28,10 +43,10 @@ function applyCiDatabaseSuffix() {
     process.env.DATABASE_URL = url.toString();
   }
 
-  if (process.env.MYSQL_DATABASE) {
-    process.env.MYSQL_DATABASE = process.env.MYSQL_DATABASE.endsWith(ciSuffix)
-      ? process.env.MYSQL_DATABASE
-      : `${process.env.MYSQL_DATABASE}${ciSuffix}`;
+  if (process.env.POSTGRES_DATABASE) {
+    process.env.POSTGRES_DATABASE = process.env.POSTGRES_DATABASE.endsWith(ciSuffix)
+      ? process.env.POSTGRES_DATABASE
+      : `${process.env.POSTGRES_DATABASE}${ciSuffix}`;
   }
 }
 
@@ -46,23 +61,31 @@ export function requireIntegrationEnv(name: string): string {
 }
 
 export async function ensureIntegrationSchema(): Promise<void> {
-  const host = requireIntegrationEnv('MYSQL_HOST');
-  const port = Number(requireIntegrationEnv('MYSQL_PORT'));
-  const user = requireIntegrationEnv('MYSQL_USER');
-  const password = requireIntegrationEnv('MYSQL_PASS');
-  const database = requireIntegrationEnv('MYSQL_DATABASE');
-  process.env.DATABASE_URL = `mysql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
-  const url = new URL(process.env.DATABASE_URL);
-  const dbName = url.pathname.replace(/^\//, '');
-  const adminPool = createPool({
+  const host = requireIntegrationEnv('POSTGRES_HOST');
+  const port = Number(requireIntegrationEnv('POSTGRES_PORT'));
+  const user = requireIntegrationEnv('POSTGRES_USER');
+  const password = process.env.POSTGRES_PASSWORD ?? '';
+  const database = requireIntegrationEnv('POSTGRES_DATABASE');
+  process.env.DATABASE_URL = buildPostgresUrl({ host, port, user, password, database });
+
+  const adminClient = new Client({
     host,
     port,
     user,
     password,
-    connectionLimit: 1,
+    database: 'postgres',
   });
-  await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
-  await adminPool.end();
+  await adminClient.connect();
+  try {
+    const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [
+      database,
+    ]);
+    if (exists.rowCount === 0) {
+      await adminClient.query(`CREATE DATABASE "${database.replace(/"/g, '""')}"`);
+    }
+  } finally {
+    await adminClient.end();
+  }
 
   execFileSync('bun', ['run', 'prisma:migrate:deploy'], {
     cwd: process.cwd(),
@@ -71,7 +94,7 @@ export async function ensureIntegrationSchema(): Promise<void> {
   });
 }
 
-export async function assertMysqlReachable(): Promise<void> {
+export async function assertPostgresReachable(): Promise<void> {
   const { prisma } = await import('@/lib/prisma');
   await prisma.$queryRaw`SELECT 1`;
 }

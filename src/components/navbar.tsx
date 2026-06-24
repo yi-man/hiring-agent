@@ -3,16 +3,28 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
-import { useSession } from 'next-auth/react';
 import { SignInButton } from '@/components/auth/sign-in-button';
 import { UserMenu } from '@/components/auth/user-menu';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button } from '@/components/ui';
 
+const AUTH_CHANGED_EVENT = 'hiring-agent-auth-changed';
+
+type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
+
+type SessionUser = {
+  id?: string;
+  username?: string | null;
+  name?: string | null;
+  email?: string | null;
+  image?: string | null;
+};
+
 export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
-  const { data: session, status } = useSession();
+  const [status, setStatus] = useState<AuthStatus>('loading');
+  const [user, setUser] = useState<SessionUser | null>(null);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -21,6 +33,42 @@ export function Navbar() {
 
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+    let latestSessionRequestId = 0;
+
+    async function loadSession() {
+      const requestId = ++latestSessionRequestId;
+      try {
+        const response = await fetch('/api/auth/session');
+        const payload = (await response.json().catch(() => ({ user: null }))) as {
+          user?: SessionUser | null;
+        };
+        const sessionUser = response.ok ? (payload.user ?? null) : null;
+
+        if (!isActive || requestId !== latestSessionRequestId) {
+          return;
+        }
+
+        setUser(sessionUser);
+        setStatus(sessionUser ? 'authenticated' : 'unauthenticated');
+      } catch {
+        if (isActive && requestId === latestSessionRequestId) {
+          setUser(null);
+          setStatus('unauthenticated');
+        }
+      }
+    }
+
+    void loadSession();
+    window.addEventListener(AUTH_CHANGED_EVENT, loadSession);
+
+    return () => {
+      isActive = false;
+      window.removeEventListener(AUTH_CHANGED_EVENT, loadSession);
+    };
   }, []);
 
   const navigation = [
@@ -60,7 +108,7 @@ export function Navbar() {
             ))}
             <div className="bg-border h-6 w-px" />
             {status === 'authenticated' ? (
-              <UserMenu name={session?.user?.name} />
+              <UserMenu name={user?.name ?? user?.username ?? user?.email} />
             ) : status === 'unauthenticated' ? (
               <SignInButton className="px-4" />
             ) : (
@@ -100,7 +148,7 @@ export function Navbar() {
             <div className="border-border my-2 border-t" />
             {status === 'authenticated' ? (
               <div className="px-4 py-3">
-                <UserMenu name={session?.user?.name} />
+                <UserMenu name={user?.name ?? user?.username ?? user?.email} />
               </div>
             ) : status === 'unauthenticated' ? (
               <div className="px-4 py-3">

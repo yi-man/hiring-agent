@@ -22,9 +22,9 @@ function mergeLoopbackNoProxy() {
   }
 }
 
-/** 与本地开发一致：先 .env 再 .env.local，后者覆盖前者 */
+/** 与本地开发一致：先 .env / .env.development，再 .env.local，后者覆盖前者 */
 export function loadRepoEnv(cwd: string) {
-  for (const name of ['.env', '.env.local']) {
+  for (const name of ['.env', '.env.development', '.env.local']) {
     const p = path.join(cwd, name);
     if (fs.existsSync(p)) {
       dotenv.config({ path: p, override: true, quiet: true });

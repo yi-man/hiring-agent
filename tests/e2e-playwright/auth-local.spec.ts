@@ -4,25 +4,38 @@ import { loadRepoEnv } from './load-repo-env';
 
 loadRepoEnv(process.cwd());
 
-const SESSION_COOKIE_NAME = 'next-auth.session-token';
+const SESSION_COOKIE_NAME = 'hiring-agent.session';
 const SEEDED_USER_EMAIL = 'playwright-seeded-auth@example.com';
+const SEEDED_USERNAME = 'playwright-seeded-auth';
 const SEEDED_USER_NAME = 'Playwright Seeded User';
+const SEEDED_PASSWORD_HASH = 'pbkdf2_sha256$fixture';
 const SEEDED_SESSION_TOKEN = 'playwright-seeded-session-token';
 const SEEDED_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_USERNAME = 'xxwade';
+const DEFAULT_PASSWORD = 'hiring_2026';
 const HAS_DB_ENV = Boolean(
-  process.env.MYSQL_HOST &&
-  process.env.MYSQL_PORT &&
-  process.env.MYSQL_USER &&
-  process.env.MYSQL_PASS &&
-  process.env.MYSQL_DATABASE,
+  process.env.DATABASE_URL ||
+  (process.env.POSTGRES_HOST &&
+    process.env.POSTGRES_PORT &&
+    process.env.POSTGRES_USER &&
+    process.env.POSTGRES_DATABASE),
 );
 const IS_CI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 
 async function seedSessionToken() {
   const user = await prisma.user.upsert({
     where: { email: SEEDED_USER_EMAIL },
-    update: { name: SEEDED_USER_NAME },
-    create: { email: SEEDED_USER_EMAIL, name: SEEDED_USER_NAME },
+    update: {
+      username: SEEDED_USERNAME,
+      passwordHash: SEEDED_PASSWORD_HASH,
+      name: SEEDED_USER_NAME,
+    },
+    create: {
+      username: SEEDED_USERNAME,
+      passwordHash: SEEDED_PASSWORD_HASH,
+      email: SEEDED_USER_EMAIL,
+      name: SEEDED_USER_NAME,
+    },
   });
 
   await prisma.session.deleteMany({ where: { userId: user.id } });
@@ -41,25 +54,58 @@ async function cleanupSeededUser(userId: string) {
   await prisma.session.deleteMany({ where: { userId } });
   await prisma.message.deleteMany({ where: { conversation: { userId } } });
   await prisma.conversation.deleteMany({ where: { userId } });
-  await prisma.account.deleteMany({ where: { userId } });
   await prisma.user.deleteMany({ where: { id: userId } });
 }
 
-test.describe('GitHub auth behavior', () => {
+async function cleanupDefaultUserSessions() {
+  const user = await prisma.user.findUnique({
+    where: { username: DEFAULT_USERNAME },
+    select: { id: true },
+  });
+  if (user) {
+    await prisma.session.deleteMany({ where: { userId: user.id } });
+  }
+}
+
+test.describe('local auth behavior', () => {
   test.beforeEach(async ({ context }) => {
     await context.clearCookies();
   });
 
   test('shows login entry for unauthenticated users', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('button', { name: 'Sign in with GitHub' }).first()).toBeVisible();
+    await expect(page.getByRole('link', { name: /log in/i }).first()).toBeVisible();
   });
 
   test('blocks unauthenticated access to protected chat page', async ({ page }) => {
     await page.goto('/chat');
     await expect(page.getByText('请先登录后继续')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Sign in with GitHub' }).first()).toBeVisible();
+    await expect(page.getByRole('link', { name: /log in/i }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: '新建会话' })).toHaveCount(0);
+  });
+
+  test('logs in with the default local user', async ({ page }) => {
+    if (!HAS_DB_ENV) {
+      if (IS_CI) {
+        throw new Error(
+          'DATABASE_URL or POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_DATABASE are required in CI.',
+        );
+      }
+      test.skip(true, 'Local-only skip: POSTGRES_* not configured for default login test.');
+    }
+
+    try {
+      await page.goto('/auth/signin');
+      await page.getByLabel(/username/i).fill(DEFAULT_USERNAME);
+      await page.getByLabel(/password/i).fill(DEFAULT_PASSWORD);
+      await page.getByRole('button', { name: /log in/i }).click();
+
+      await expect(page).toHaveURL(/\/chat$/);
+      await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible();
+      await expect(page.getByText(DEFAULT_USERNAME)).toBeVisible();
+    } finally {
+      await cleanupDefaultUserSessions();
+    }
   });
 
   test('logout resets UI and protected API access is denied', async ({
@@ -69,10 +115,10 @@ test.describe('GitHub auth behavior', () => {
     if (!HAS_DB_ENV) {
       if (IS_CI) {
         throw new Error(
-          'MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASS/MYSQL_DATABASE are required in CI.',
+          'DATABASE_URL or POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_DATABASE are required in CI.',
         );
       }
-      test.skip(true, 'Local-only skip: MYSQL_* not configured for seeded session test.');
+      test.skip(true, 'Local-only skip: POSTGRES_* not configured for seeded session test.');
     }
 
     const seeded = await seedSessionToken();
@@ -98,7 +144,10 @@ test.describe('GitHub auth behavior', () => {
       await expect(page.getByText(SEEDED_USER_NAME)).toBeVisible();
 
       await page.getByRole('button', { name: 'Logout' }).click();
-      await expect(page.getByRole('button', { name: 'Sign in with GitHub' }).first()).toBeVisible();
+      await expect(page.getByRole('link', { name: /log in/i }).first()).toBeVisible();
+      await expect(page).toHaveURL(/\/$/);
+
+      await page.goto('/chat');
       await expect(page.getByText('请先登录后继续')).toBeVisible();
 
       const denied = await page.request.get('/api/conversations');
@@ -106,24 +155,5 @@ test.describe('GitHub auth behavior', () => {
     } finally {
       await cleanupSeededUser(seeded.userId);
     }
-  });
-});
-
-test.describe('GitHub live provider flow (manual)', () => {
-  test.skip(
-    process.env.PLAYWRIGHT_RUN_LIVE_GITHUB !== 'true',
-    'Manual-only test. Set PLAYWRIGHT_RUN_LIVE_GITHUB=true to run against live GitHub OAuth.',
-  );
-
-  test('navigates to provider sign-in page when login is clicked', async ({ page }) => {
-    await page.goto('/chat');
-    const signinRequestPromise = page.waitForRequest((request) => {
-      return request.url().includes('/api/auth/signin/github') && request.method() === 'POST';
-    });
-
-    await page.getByRole('button', { name: 'Sign in with GitHub' }).first().click();
-
-    await signinRequestPromise;
-    await expect(page).not.toHaveURL(/\/chat$/);
   });
 });

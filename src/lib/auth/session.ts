@@ -1,6 +1,4 @@
-import type { Session } from 'next-auth';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/auth';
+import { getSessionFromCookie, type LocalAuthSession } from '@/lib/auth/local-session';
 
 export class UnauthorizedError extends Error {
   readonly code = 'UNAUTHORIZED';
@@ -12,8 +10,8 @@ export class UnauthorizedError extends Error {
   }
 }
 
-export async function getServerAuthSession(): Promise<Session | null> {
-  return getServerSession(authOptions);
+export async function getServerAuthSession(): Promise<LocalAuthSession | null> {
+  return getSessionFromCookie();
 }
 
 export async function requireAuth(): Promise<{ user: { id: string } }> {

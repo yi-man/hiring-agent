@@ -9,10 +9,13 @@ export type SessionFixture = {
 
 export async function createUserWithSessionFixture(): Promise<SessionFixture> {
   const sessionToken = randomBytes(32).toString('hex');
+  const fixtureId = `${Date.now()}-${randomBytes(4).toString('hex')}`;
   const user = await prisma.user.create({
     data: {
+      username: `it-${fixtureId}`,
+      passwordHash: 'pbkdf2_sha256$fixture',
       name: 'Integration Test User',
-      email: `it-${Date.now()}-${randomBytes(4).toString('hex')}@example.com`,
+      email: `it-${fixtureId}@example.com`,
     },
   });
   await prisma.session.create({

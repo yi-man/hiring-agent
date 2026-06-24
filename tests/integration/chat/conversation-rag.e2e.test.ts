@@ -1,6 +1,10 @@
 /** @jest-environment node */
 import './test-env';
-import { assertMysqlReachable, ensureIntegrationSchema, requireIntegrationEnv } from './test-env';
+import {
+  assertPostgresReachable,
+  ensureIntegrationSchema,
+  requireIntegrationEnv,
+} from './test-env';
 
 const requireAuthMock = jest.fn();
 const embedDocumentsMock = jest.fn();
@@ -55,15 +59,21 @@ import { POST as postStreamMessage } from '@/app/api/conversations/[id]/messages
 import { ingestConversationDocument } from '@/lib/rag/ingest';
 import { prisma } from '@/lib/prisma';
 
+const RAG_TEST_USER = {
+  id: 'rag-int-user',
+  username: 'rag-int-user',
+  passwordHash: 'pbkdf2_sha256$fixture',
+  email: 'rag-int-user@example.com',
+};
+
 describe('conversation markdown rag ingest integration', () => {
   beforeAll(async () => {
-    requireIntegrationEnv('MYSQL_HOST');
-    requireIntegrationEnv('MYSQL_PORT');
-    requireIntegrationEnv('MYSQL_USER');
-    requireIntegrationEnv('MYSQL_PASS');
-    requireIntegrationEnv('MYSQL_DATABASE');
+    requireIntegrationEnv('POSTGRES_HOST');
+    requireIntegrationEnv('POSTGRES_PORT');
+    requireIntegrationEnv('POSTGRES_USER');
+    requireIntegrationEnv('POSTGRES_DATABASE');
     await ensureIntegrationSchema();
-    await assertMysqlReachable();
+    await assertPostgresReachable();
   }, 60000);
 
   beforeEach(() => {
@@ -86,7 +96,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
     embedDocumentsMock.mockImplementation(async (documents: string[]) =>
       documents.map((_, index) => [index + 0.1, index + 0.2, index + 0.3]),
@@ -145,7 +155,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
 
     const conversation = await prisma.conversation.create({
@@ -181,7 +191,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
     embedDocumentsMock.mockImplementation(async (documents: string[]) =>
       documents.map((_, index) => [index + 1, index + 2, index + 3]),
@@ -234,7 +244,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
 
     let release: (() => void) | null = null;
@@ -282,7 +292,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
     embedDocumentsMock.mockResolvedValue([[0.11, 0.22, 0.33]]);
     ensureCollectionMock.mockResolvedValue(undefined);
@@ -306,11 +316,10 @@ describe('conversation markdown rag ingest integration', () => {
     });
 
     const oldDate = new Date(Date.now() - 40 * 60 * 1000);
-    await prisma.$executeRaw`
-      UPDATE conversation_documents
-      SET updated_at = ${oldDate}
-      WHERE id = ${document.id}
-    `;
+    await prisma.conversationDocument.update({
+      where: { id: document.id },
+      data: { updatedAt: oldDate },
+    });
 
     await ingestConversationDocument(document.id, conversation.id);
 
@@ -325,7 +334,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
     embedDocumentsMock.mockResolvedValue([[0.51, 0.52, 0.53]]);
     ensureCollectionMock.mockResolvedValue(undefined);
@@ -349,11 +358,10 @@ describe('conversation markdown rag ingest integration', () => {
     });
 
     const recentDate = new Date(Date.now() - 10 * 60 * 1000);
-    await prisma.$executeRaw`
-      UPDATE conversation_documents
-      SET updated_at = ${recentDate}
-      WHERE id = ${document.id}
-    `;
+    await prisma.conversationDocument.update({
+      where: { id: document.id },
+      data: { updatedAt: recentDate },
+    });
 
     await ingestConversationDocument(document.id, conversation.id);
 
@@ -369,7 +377,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
     embedDocumentsMock.mockResolvedValue([[1.1, 1.2, 1.3]]);
     ensureCollectionMock.mockResolvedValue(undefined);
@@ -415,7 +423,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
     const conversation = await prisma.conversation.create({
       data: {
@@ -481,7 +489,7 @@ describe('conversation markdown rag ingest integration', () => {
     await prisma.user.upsert({
       where: { id: 'rag-int-user' },
       update: {},
-      create: { id: 'rag-int-user', email: 'rag-int-user@example.com' },
+      create: RAG_TEST_USER,
     });
     const conversation = await prisma.conversation.create({
       data: {

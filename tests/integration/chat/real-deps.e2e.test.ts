@@ -3,7 +3,7 @@ import { createClient } from 'redis';
 import {
   requireIntegrationEnv,
   ensureIntegrationSchema,
-  assertMysqlReachable,
+  assertPostgresReachable,
   assertRedisReachable,
 } from './test-env';
 import { env } from '@/lib/env';
@@ -17,17 +17,21 @@ import { streamChatReply } from '@/lib/chat/chain';
 import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 
-describe('chat integration with real deps', () => {
+const hasRealOpenAiKey = Boolean(
+  process.env.OPENAI_API_KEY?.trim() && process.env.OPENAI_API_KEY !== 'your_api_key',
+);
+const describeWithRealOpenAi = hasRealOpenAiKey ? describe : describe.skip;
+
+describeWithRealOpenAi('chat integration with real deps', () => {
   beforeAll(async () => {
     requireIntegrationEnv('OPENAI_API_KEY');
-    requireIntegrationEnv('MYSQL_HOST');
-    requireIntegrationEnv('MYSQL_PORT');
-    requireIntegrationEnv('MYSQL_USER');
-    requireIntegrationEnv('MYSQL_PASS');
-    requireIntegrationEnv('MYSQL_DATABASE');
+    requireIntegrationEnv('POSTGRES_HOST');
+    requireIntegrationEnv('POSTGRES_PORT');
+    requireIntegrationEnv('POSTGRES_USER');
+    requireIntegrationEnv('POSTGRES_DATABASE');
     requireIntegrationEnv('REDIS_URL');
     await ensureIntegrationSchema();
-    await assertMysqlReachable();
+    await assertPostgresReachable();
     await assertRedisReachable();
   }, 30000);
 
@@ -84,7 +88,7 @@ describe('chat integration with real deps', () => {
     expect(second).toContain('晨星');
   }, 120000);
 
-  it('rehydrates from mysql after redis inactivity expiration', async () => {
+  it('rehydrates from postgres after redis inactivity expiration', async () => {
     const redis = createClient({ url: env.REDIS_URL });
     await redis.connect();
     const c = await createConversation(null);
@@ -95,7 +99,7 @@ describe('chat integration with real deps', () => {
     expect(await redis.exists(key)).toBe(0);
 
     const history = new RedisChatMessageHistory(c.id, 60);
-    await history.rehydrateFromMySql();
+    await history.rehydrateFromDatabase();
     const messages = await history.getMessages();
     expect(messages.length).toBeGreaterThan(0);
     expect(await redis.exists(key)).toBe(1);

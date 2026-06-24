@@ -13,7 +13,6 @@ describe('rag schema contract', () => {
       '@@map("conversation_documents")',
       '@@map("conversation_document_chunks")',
       '@@map("conversation_document_index_jobs")',
-      'documents    ConversationDocument[]',
       '@@unique([documentId, chunkIndex]',
       '@@unique([id, conversationId]',
       '@relation(fields: [documentId, conversationId], references: [id, conversationId]',
@@ -22,5 +21,6 @@ describe('rag schema contract', () => {
     for (const snippet of requiredSnippets) {
       expect(schema).toContain(snippet);
     }
+    expect(schema).toMatch(/\bdocuments\s+ConversationDocument\[\]/);
   });
 });

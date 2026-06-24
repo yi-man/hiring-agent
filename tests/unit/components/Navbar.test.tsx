@@ -1,19 +1,21 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/navbar';
 
-jest.mock('next-auth/react', () => ({
-  useSession: () => ({
-    status: 'unauthenticated',
-    data: null,
-  }),
-  signIn: jest.fn(),
-  signOut: jest.fn(),
+const refresh = jest.fn();
+const push = jest.fn();
+const fetchMock = jest.fn();
+const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+
+jest.mock('next/navigation', () => ({
+  useRouter: jest.fn(),
 }));
 
 jest.mock('lucide-react', () => ({
   Menu: jest.fn(() => <div data-testid="menu-icon" />),
   X: jest.fn(() => <div data-testid="x-icon" />),
-  Github: jest.fn(() => <div data-testid="github-icon" />),
+  LogIn: jest.fn(() => <div data-testid="login-icon" />),
+  LogOut: jest.fn(() => <div data-testid="logout-icon" />),
 }));
 
 jest.mock('@/components/ui/theme-toggle', () => ({
@@ -29,7 +31,17 @@ jest.mock('@/components/ui', () => ({
 }));
 
 describe('Navbar', () => {
-  it('should display logo and main navigation links', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (useRouter as jest.Mock).mockReturnValue({ refresh, push });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ user: null }),
+    });
+  });
+
+  it('should display logo and main navigation links', async () => {
     render(<Navbar />);
 
     expect(screen.getByText('招聘助手')).toBeInTheDocument();
@@ -39,9 +51,10 @@ describe('Navbar', () => {
     expect(screen.getByText('Workflow')).toBeInTheDocument();
     expect(screen.getByText('JD 工作台')).toBeInTheDocument();
     expect(screen.getByText('LLM 可观测')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /log in/i })).toBeInTheDocument();
   });
 
-  it('should render theme toggle button', () => {
+  it('should render theme toggle button', async () => {
     render(<Navbar />);
 
     const themeButtons = screen.getAllByTestId('theme-toggle-button');
@@ -49,14 +62,16 @@ describe('Navbar', () => {
     themeButtons.forEach((button) => {
       expect(button).toBeInTheDocument();
     });
+    expect(await screen.findByRole('link', { name: /log in/i })).toBeInTheDocument();
   });
 
-  it('should render mobile menu button', () => {
+  it('should render mobile menu button', async () => {
     render(<Navbar />);
     expect(screen.getByTestId('menu-icon')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /log in/i })).toBeInTheDocument();
   });
 
-  it('should open mobile menu when button is clicked', () => {
+  it('should open mobile menu when button is clicked', async () => {
     render(<Navbar />);
 
     const menuButton = screen.getByRole('button', { name: /菜单/i });
@@ -64,5 +79,135 @@ describe('Navbar', () => {
 
     const homeLinks = screen.getAllByText('首页');
     expect(homeLinks.length).toBe(2);
+    expect(await screen.findAllByRole('link', { name: /log in/i })).toHaveLength(2);
+  });
+
+  it('should render login link when unauthenticated', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ user: null }),
+    });
+
+    render(<Navbar />);
+
+    expect(await screen.findByRole('link', { name: /log in/i })).toHaveAttribute(
+      'href',
+      '/auth/signin',
+    );
+  });
+
+  it('should render user menu and logout when authenticated', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        user: {
+          id: 'user_123',
+          username: 'alice',
+          name: 'Alice',
+          email: 'alice@example.com',
+          image: null,
+        },
+      }),
+    });
+
+    render(<Navbar />);
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /logout/i })).toBeInTheDocument();
+  });
+
+  it('should post to local logout when logout is clicked', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        user: {
+          id: 'user_123',
+          username: 'alice',
+          name: 'Alice',
+          email: 'alice@example.com',
+          image: null,
+        },
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({}),
+    });
+
+    render(<Navbar />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /logout/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST' });
+      expect(dispatchEventSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'hiring-agent-auth-changed',
+        }),
+      );
+      expect(refresh).toHaveBeenCalled();
+      expect(push).toHaveBeenCalledWith('/');
+    });
+  });
+
+  it('should refetch session when auth changes', async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ user: null }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          user: {
+            id: 'user_123',
+            username: 'alice',
+            name: 'Alice',
+            email: 'alice@example.com',
+            image: null,
+          },
+        }),
+      });
+
+    render(<Navbar />);
+
+    expect(await screen.findByRole('link', { name: /log in/i })).toBeInTheDocument();
+    window.dispatchEvent(new Event('hiring-agent-auth-changed'));
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/session');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('should not refresh or navigate when logout fails', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        user: {
+          id: 'user_123',
+          username: 'alice',
+          name: 'Alice',
+          email: 'alice@example.com',
+          image: null,
+        },
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ error: 'Logout failed' }),
+    });
+
+    render(<Navbar />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /logout/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/logout failed/i);
+    expect(dispatchEventSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'hiring-agent-auth-changed',
+      }),
+    );
+    expect(refresh).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
   });
 });

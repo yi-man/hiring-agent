@@ -1,23 +1,21 @@
-import { getServerSession } from 'next-auth/next';
+import { getSessionFromCookie } from '@/lib/auth/local-session';
 import { getServerAuthSession, requireAuth, UnauthorizedError } from '@/lib/auth/session';
 
-jest.mock('next-auth/next', () => ({
-  getServerSession: jest.fn(),
+jest.mock('@/lib/auth/local-session', () => ({
+  getSessionFromCookie: jest.fn(),
 }));
 
-jest.mock('@/auth', () => ({
-  authOptions: {},
-}));
-
-const getServerSessionMock = getServerSession as jest.MockedFunction<typeof getServerSession>;
+const getSessionFromCookieMock = getSessionFromCookie as jest.MockedFunction<
+  typeof getSessionFromCookie
+>;
 
 describe('auth guard helpers', () => {
   beforeEach(() => {
-    getServerSessionMock.mockReset();
+    getSessionFromCookieMock.mockReset();
   });
 
   it('returns null from getServerAuthSession when session is missing', async () => {
-    getServerSessionMock.mockResolvedValueOnce(null);
+    getSessionFromCookieMock.mockResolvedValueOnce(null);
 
     const session = await getServerAuthSession();
 
@@ -25,7 +23,7 @@ describe('auth guard helpers', () => {
   });
 
   it('throws UnauthorizedError from requireAuth when session is missing', async () => {
-    getServerSessionMock.mockResolvedValueOnce(null);
+    getSessionFromCookieMock.mockResolvedValueOnce(null);
 
     const authPromise = requireAuth();
 
@@ -37,13 +35,15 @@ describe('auth guard helpers', () => {
   });
 
   it('returns normalized auth context with user.id for authenticated requests', async () => {
-    getServerSessionMock.mockResolvedValueOnce({
+    getSessionFromCookieMock.mockResolvedValueOnce({
       user: {
         id: 'user_123',
-        email: 'alice@example.com',
+        username: 'xxwade',
+        name: 'xxwade',
+        email: null,
+        image: null,
       },
-      expires: '2099-01-01T00:00:00.000Z',
-    } as never);
+    });
 
     const auth = await requireAuth();
 

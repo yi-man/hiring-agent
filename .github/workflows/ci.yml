@@ -39,15 +39,16 @@ jobs:
     name: Jest Test
     runs-on: ubuntu-latest
     services:
-      mysql:
-        image: mysql:8.0
+      postgres:
+        image: postgres:16-alpine
         env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: hiring
+          POSTGRES_USER: apple
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bia
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-cmd="pg_isready -h 127.0.0.1 -U apple -d bia"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
@@ -62,15 +63,14 @@ jobs:
           --health-retries 5
     env:
       # VM runner (no job container): service ports map to localhost — not the Docker service hostnames.
-      MYSQL_HOST: 127.0.0.1
-      MYSQL_PORT: '3306'
-      MYSQL_USER: root
-      MYSQL_PASS: root
-      MYSQL_DATABASE: hiring
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: apple
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DATABASE: bia
+      DATABASE_URL: postgresql://apple:postgres@127.0.0.1:5432/bia
       REDIS_URL: redis://127.0.0.1:6379
-      NEXTAUTH_SECRET: ci-nextauth-secret-not-for-production
-      NEXTAUTH_URL: http://localhost:3000
-      # MySQL/Redis: job services. LLM: same env contract as .env.local — only OPENAI_API_KEY in secrets is not enough if you use Doubao etc.
+      # PostgreSQL/Redis: job services. LLM: same env contract as .env.local — only OPENAI_API_KEY in secrets is not enough if you use Doubao etc.
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL || 'https://api.openai.com/v1' }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || vars.OPENAI_MODEL || 'gpt-4o-mini' }}
