@@ -88,8 +88,8 @@ jobs:
       - name: Run Jest (fork PR — without real-deps LLM file)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         run: >-
-          bunx jest --ci --coverage --runInBand --coverageReporters=text-summary
+          bun run test:ci --
           --testPathIgnorePatterns tests/integration/chat/real-deps.e2e.test.ts
       - name: Run Jest (full suite — same-repo PR / push / merge queue)
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        run: bunx jest --ci --coverage --runInBand --coverageReporters=text-summary
+        run: bun run test:ci

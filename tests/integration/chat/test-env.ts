@@ -64,7 +64,7 @@ export async function ensureIntegrationSchema(): Promise<void> {
   await adminPool.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
   await adminPool.end();
 
-  execFileSync('bunx', ['prisma', 'migrate', 'deploy'], {
+  execFileSync('bun', ['run', 'prisma:migrate:deploy'], {
     cwd: process.cwd(),
     env: process.env,
     stdio: 'pipe',
