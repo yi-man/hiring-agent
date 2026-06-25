@@ -35,6 +35,8 @@ model User {
   image         String?
   sessions      Session[]
   conversations Conversation[]
+  knowledgeDocuments      KnowledgeDocument[]
+  knowledgeDocumentChunks KnowledgeDocumentChunk[]
 
   @@map("users")
 }
@@ -120,6 +122,67 @@ model ConversationDocumentIndexJob {
   @@index([documentId], map: "idx_conversation_document_index_jobs_document_id")
   @@index([status], map: "idx_conversation_document_index_jobs_status")
   @@map("conversation_document_index_jobs")
+}
+
+model KnowledgeDocument {
+  id              String                      @id @default(uuid())
+  userId          String                      @map("user_id")
+  filename        String
+  title           String?
+  sourceLabel     String?                     @map("source_label")
+  contentMarkdown String                      @map("content_markdown")
+  status          String                      @default("processing")
+  errorMessage    String?                     @map("error_message")
+  version         Int                         @default(1)
+  createdAt       DateTime                    @default(now()) @map("created_at")
+  updatedAt       DateTime                    @updatedAt @map("updated_at")
+  user            User                        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  chunks          KnowledgeDocumentChunk[]
+  jobs            KnowledgeDocumentIndexJob[]
+
+  @@unique([id, userId], map: "knowledge_documents_id_user_id_key")
+  @@index([userId], map: "idx_knowledge_documents_user_id")
+  @@index([status], map: "idx_knowledge_documents_status")
+  @@index([userId, sourceLabel], map: "idx_knowledge_documents_user_source_label")
+  @@map("knowledge_documents")
+}
+
+model KnowledgeDocumentChunk {
+  id                 String            @id @default(uuid())
+  documentId         String            @map("document_id")
+  userId             String            @map("user_id")
+  chunkIndex         Int               @map("chunk_index")
+  content            String
+  tokenEstimate      Int?              @map("token_estimate")
+  embeddingModel     String            @map("embedding_model")
+  embeddingDimension Int               @map("embedding_dimension")
+  embedding          Unsupported("vector")?
+  createdAt          DateTime          @default(now()) @map("created_at")
+  document           KnowledgeDocument @relation(fields: [documentId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([documentId, chunkIndex], map: "knowledge_document_chunks_document_id_chunk_index_key")
+  @@index([documentId], map: "idx_knowledge_document_chunks_document_id")
+  @@index([userId], map: "idx_knowledge_document_chunks_user_id")
+  @@index([userId, embeddingModel, embeddingDimension], map: "idx_knowledge_document_chunks_user_embedding")
+  @@map("knowledge_document_chunks")
+}
+
+model KnowledgeDocumentIndexJob {
+  id         String            @id @default(uuid())
+  documentId String            @map("document_id")
+  status     String            @default("pending")
+  attempts   Int               @default(0)
+  lastError  String?           @map("last_error")
+  startedAt  DateTime?         @map("started_at")
+  finishedAt DateTime?         @map("finished_at")
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+  document   KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([documentId], map: "idx_knowledge_document_index_jobs_document_id")
+  @@index([status], map: "idx_knowledge_document_index_jobs_status")
+  @@map("knowledge_document_index_jobs")
 }
 
 model LlmCallLog {

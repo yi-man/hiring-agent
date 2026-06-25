@@ -6,6 +6,7 @@ const touchConversationMock = jest.fn();
 const requireAuthMock = jest.fn();
 const conversationFindFirstMock = jest.fn();
 const retrieveConversationContextMock = jest.fn();
+const retrieveUserKnowledgeContextMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -24,6 +25,10 @@ jest.mock('@/lib/chat/chain', () => ({
 
 jest.mock('@/lib/rag/retrieval', () => ({
   retrieveConversationContext: (...args: unknown[]) => retrieveConversationContextMock(...args),
+}));
+
+jest.mock('@/lib/rag/knowledge-retrieval', () => ({
+  retrieveUserKnowledgeContext: (...args: unknown[]) => retrieveUserKnowledgeContextMock(...args),
 }));
 
 jest.mock('@/lib/chat/repositories/message-repo', () => ({
@@ -79,9 +84,11 @@ describe('chat stream route', () => {
     conversationFindFirstMock.mockReset();
     conversationDocumentFindFirstMock.mockReset();
     retrieveConversationContextMock.mockReset();
+    retrieveUserKnowledgeContextMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
     conversationFindFirstMock.mockResolvedValue({ id: 'c1' });
     retrieveConversationContextMock.mockResolvedValue({ contextText: '', matches: [] });
+    retrieveUserKnowledgeContextMock.mockResolvedValue({ contextText: '', matches: [] });
   });
 
   afterAll(() => {
@@ -131,7 +138,76 @@ describe('chat stream route', () => {
     });
     expect(touchConversationMock).toHaveBeenCalledTimes(2);
     expect(retrieveConversationContextMock).not.toHaveBeenCalled();
+    expect(retrieveUserKnowledgeContextMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      query: 'hello?',
+      topK: expect.any(Number),
+    });
     expect(streamChatReplyMock).toHaveBeenCalledWith('c1', 'hello?', { retrievedContext: '' });
+  });
+
+  it('adds user knowledge context when no conversation document is selected', async () => {
+    retrieveUserKnowledgeContextMock.mockResolvedValueOnce({
+      contextText: 'ByteDance performance bar: high-quality delivery.',
+      matches: [],
+    });
+    async function* gen() {
+      yield 'ok';
+    }
+    streamChatReplyMock.mockResolvedValueOnce({
+      chunks: gen(),
+      collect: async () => 'ok',
+    });
+
+    const req = { json: async () => ({ content: '今年绩效要求是什么？' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(200);
+
+    expect(streamChatReplyMock).toHaveBeenCalledWith(
+      'c1',
+      '今年绩效要求是什么？',
+      expect.objectContaining({
+        retrievedContext: expect.stringContaining('ByteDance performance bar'),
+      }),
+    );
+  });
+
+  it('returns 502 when user knowledge retrieval fails', async () => {
+    retrieveUserKnowledgeContextMock.mockRejectedValueOnce(new Error('pgvector unavailable'));
+    const req = { json: async () => ({ content: 'hello' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.code).toBe('RAG_RETRIEVAL_FAILED');
+    expect(body.error).toContain('pgvector unavailable');
+    expect(streamChatReplyMock).not.toHaveBeenCalled();
+  });
+
+  it('merges user knowledge and selected conversation document context in order', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'ready' });
+    retrieveUserKnowledgeContextMock.mockResolvedValueOnce({
+      contextText: 'User knowledge context.',
+      matches: [],
+    });
+    retrieveConversationContextMock.mockResolvedValueOnce({
+      contextText: 'Conversation document context.',
+      matches: [],
+    });
+    async function* gen() {
+      yield 'ok';
+    }
+    streamChatReplyMock.mockResolvedValueOnce({ chunks: gen(), collect: async () => 'ok' });
+
+    const req = { json: async () => ({ content: 'hi', documentId: 'd1' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(200);
+    expect(streamChatReplyMock).toHaveBeenCalledWith(
+      'c1',
+      'hi',
+      expect.objectContaining({
+        retrievedContext: 'User knowledge context.\n\nConversation document context.',
+      }),
+    );
   });
 
   it('returns 502 when RAG retrieval fails for a scoped ready document', async () => {

@@ -1,0 +1,2 @@
+# Copy local-only environment overrides into Codex-managed worktrees.
+.env.local
