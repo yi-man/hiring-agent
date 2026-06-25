@@ -9,8 +9,45 @@ import {
   replaceAndCompleteKnowledgeDocumentIngest,
 } from '@/lib/rag/knowledge-repo';
 
+const CONCURRENT_KNOWLEDGE_INGEST_MAX_WAIT_MS = 90_000;
+const CONCURRENT_KNOWLEDGE_INGEST_POLL_MS = 400;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function createClaimToken(): string {
   return `ingest:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+class KnowledgeIngestLostOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KnowledgeIngestLostOwnershipError';
+  }
+}
+
+async function awaitConcurrentKnowledgeIngestTerminal(
+  userId: string,
+  documentId: string,
+): Promise<void> {
+  const deadline = Date.now() + CONCURRENT_KNOWLEDGE_INGEST_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const doc = await getKnowledgeDocumentById(userId, documentId);
+    if (!doc) {
+      throw new Error('knowledge document not found');
+    }
+    if (doc.status === 'ready') {
+      return;
+    }
+    if (doc.status === 'failed') {
+      throw new Error(doc.errorMessage ?? 'knowledge document ingest failed');
+    }
+    await sleep(CONCURRENT_KNOWLEDGE_INGEST_POLL_MS);
+  }
+  throw new Error(
+    'knowledge document ingest timed out while waiting for indexer (still processing — check embeddings API and DB)',
+  );
 }
 
 export async function ingestKnowledgeDocument(params: {
@@ -37,6 +74,9 @@ export async function ingestKnowledgeDocument(params: {
     if (snapshot.status === 'failed') {
       throw new Error(snapshot.errorMessage ?? 'knowledge document ingest failed');
     }
+    if (snapshot.status === 'processing') {
+      await awaitConcurrentKnowledgeIngestTerminal(params.userId, params.documentId);
+    }
     return;
   }
 
@@ -55,8 +95,13 @@ export async function ingestKnowledgeDocument(params: {
     if (embeddings.length !== markdownChunks.length) {
       throw new Error('embedding count does not match knowledge chunks');
     }
-    if (embeddings.some((embedding) => embedding.length === 0)) {
+    const firstEmbedding = embeddings[0];
+    if (!firstEmbedding || embeddings.some((embedding) => embedding.length === 0)) {
       throw new Error('embedding vectors are empty');
+    }
+    const vectorSize = firstEmbedding.length;
+    if (embeddings.some((embedding) => embedding.length !== vectorSize)) {
+      throw new Error('embedding vector dimensions do not match');
     }
 
     const completed = await replaceAndCompleteKnowledgeDocumentIngest({
@@ -73,9 +118,15 @@ export async function ingestKnowledgeDocument(params: {
       })),
     });
     if (!completed) {
-      throw new Error('knowledge ingest lost ownership before replacing chunks');
+      throw new KnowledgeIngestLostOwnershipError(
+        'knowledge ingest lost ownership before replacing chunks',
+      );
     }
   } catch (error) {
+    if (error instanceof KnowledgeIngestLostOwnershipError) {
+      throw error;
+    }
+
     const message = error instanceof Error ? error.message : 'knowledge document ingest failed';
     const failed = await failKnowledgeDocumentIngest(
       params.userId,

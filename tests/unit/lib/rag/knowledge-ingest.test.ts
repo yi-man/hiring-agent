@@ -50,7 +50,7 @@ describe('ingestKnowledgeDocument', () => {
 
   it('claims with user, document, token, and stale lease date', async () => {
     claimMock.mockResolvedValueOnce(null);
-    getDocMock.mockResolvedValueOnce({ id: 'doc-1', status: 'processing' });
+    getDocMock.mockResolvedValueOnce({ id: 'doc-1', status: 'ready' });
 
     const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
     await ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' });
@@ -173,7 +173,33 @@ describe('ingestKnowledgeDocument', () => {
     expect(replaceAndCompleteMock).not.toHaveBeenCalled();
   });
 
-  it('marks failed when ownership is lost before replacing chunks', async () => {
+  it('marks failed when embedding vector dimensions do not match', async () => {
+    claimMock.mockResolvedValueOnce({ id: 'doc-1' });
+    getDocMock.mockResolvedValueOnce({
+      id: 'doc-1',
+      userId: 'u1',
+      contentMarkdown: '# A',
+    });
+    splitMock.mockResolvedValueOnce([
+      { index: 0, content: 'A' },
+      { index: 1, content: 'B' },
+    ]);
+    embedDocumentsMock.mockResolvedValueOnce([[0.1, 0.2], [0.3]]);
+
+    const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
+    await expect(ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' })).rejects.toThrow(
+      'embedding vector dimensions do not match',
+    );
+    expect(failMock).toHaveBeenCalledWith(
+      'u1',
+      'doc-1',
+      expect.stringMatching(/^ingest:/),
+      'embedding vector dimensions do not match',
+    );
+    expect(replaceAndCompleteMock).not.toHaveBeenCalled();
+  });
+
+  it('throws without marking failed when ownership is lost before replacing chunks', async () => {
     claimMock.mockResolvedValueOnce({ id: 'doc-1' });
     getDocMock.mockResolvedValueOnce({
       id: 'doc-1',
@@ -188,12 +214,9 @@ describe('ingestKnowledgeDocument', () => {
     await expect(ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' })).rejects.toThrow(
       'knowledge ingest lost ownership before replacing chunks',
     );
-    expect(failMock).toHaveBeenCalledWith(
-      'u1',
-      'doc-1',
-      expect.stringMatching(/^ingest:/),
-      'knowledge ingest lost ownership before replacing chunks',
-    );
+    expect(replaceAndCompleteMock).toHaveBeenCalledTimes(1);
+    expect(replaceChunksMock).not.toHaveBeenCalled();
+    expect(failMock).not.toHaveBeenCalled();
   });
 
   it('returns when a document is already ready', async () => {
@@ -222,14 +245,33 @@ describe('ingestKnowledgeDocument', () => {
     expect(embedDocumentsMock).not.toHaveBeenCalled();
   });
 
-  it('returns for an unclaimed processing document without embedding', async () => {
+  it('waits for an unclaimed processing document to become ready without embedding', async () => {
     claimMock.mockResolvedValueOnce(null);
-    getDocMock.mockResolvedValueOnce({ id: 'doc-1', status: 'processing' });
+    getDocMock
+      .mockResolvedValueOnce({ id: 'doc-1', status: 'processing' })
+      .mockResolvedValueOnce({ id: 'doc-1', status: 'ready' });
 
     const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
     await expect(
       ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' }),
     ).resolves.toBeUndefined();
+    expect(getDocMock).toHaveBeenCalledTimes(2);
+    expect(embedDocumentsMock).not.toHaveBeenCalled();
+  });
+
+  it('throws stored error when an unclaimed processing document later fails', async () => {
+    claimMock.mockResolvedValueOnce(null);
+    getDocMock.mockResolvedValueOnce({ id: 'doc-1', status: 'processing' }).mockResolvedValueOnce({
+      id: 'doc-1',
+      status: 'failed',
+      errorMessage: 'other worker failed',
+    });
+
+    const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
+    await expect(ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' })).rejects.toThrow(
+      'other worker failed',
+    );
+    expect(getDocMock).toHaveBeenCalledTimes(2);
     expect(embedDocumentsMock).not.toHaveBeenCalled();
   });
 });
