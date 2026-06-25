@@ -5,6 +5,7 @@ import {
   createKnowledgeDocument,
   deleteKnowledgeDocument,
   findKnowledgeDocumentBySourceLabel,
+  replaceAndCompleteKnowledgeDocumentIngest,
   replaceKnowledgeDocumentChunks,
   searchKnowledgeDocumentChunks,
   vectorToPgLiteral,
@@ -143,6 +144,93 @@ describe('knowledge repository', () => {
       where: { documentId: 'doc-1', userId: 'u1' },
     });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces chunks and completes ingest only while claim token owns the document', async () => {
+    const tx = {
+      knowledgeDocument: {
+        updateMany: jest
+          .fn()
+          .mockResolvedValueOnce({ count: 1 })
+          .mockResolvedValueOnce({ count: 1 }),
+      },
+      knowledgeDocumentChunk: { deleteMany: jest.fn() },
+      $executeRaw: jest.fn(),
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    const result = await replaceAndCompleteKnowledgeDocumentIngest({
+      userId: 'u1',
+      documentId: 'doc-1',
+      claimToken: 'ingest:1:abc',
+      embeddingModel: 'text-embedding-3-small',
+      chunks: [
+        {
+          id: 'chunk-1',
+          chunkIndex: 0,
+          content: 'hello',
+          tokenEstimate: null,
+          embedding: [0.1, 0.2],
+        },
+      ],
+    });
+
+    expect(result).toBe(true);
+    expect(tx.knowledgeDocument.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'doc-1',
+        userId: 'u1',
+        status: 'processing',
+        errorMessage: 'ingest:1:abc',
+      },
+      data: { updatedAt: expect.any(Date) },
+    });
+    expect(tx.knowledgeDocumentChunk.deleteMany).toHaveBeenCalledWith({
+      where: { documentId: 'doc-1', userId: 'u1' },
+    });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.knowledgeDocument.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'doc-1',
+        userId: 'u1',
+        status: 'processing',
+        errorMessage: 'ingest:1:abc',
+      },
+      data: { status: 'ready', errorMessage: null },
+    });
+  });
+
+  it('does not replace chunks when claim token no longer owns the document', async () => {
+    const tx = {
+      knowledgeDocument: { updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }) },
+      knowledgeDocumentChunk: { deleteMany: jest.fn() },
+      $executeRaw: jest.fn(),
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    const result = await replaceAndCompleteKnowledgeDocumentIngest({
+      userId: 'u1',
+      documentId: 'doc-1',
+      claimToken: 'ingest:lost',
+      embeddingModel: 'text-embedding-3-small',
+      chunks: [
+        {
+          id: 'chunk-1',
+          chunkIndex: 0,
+          content: 'hello',
+          tokenEstimate: null,
+          embedding: [0.1, 0.2],
+        },
+      ],
+    });
+
+    expect(result).toBe(false);
+    expect(tx.knowledgeDocumentChunk.deleteMany).not.toHaveBeenCalled();
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
   });
 
   it('searches chunks with user, model, dimension, and ready document filters', async () => {

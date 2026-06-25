@@ -236,6 +236,58 @@ export async function replaceKnowledgeDocumentChunks(params: {
   return params.chunks.length;
 }
 
+export async function replaceAndCompleteKnowledgeDocumentIngest(params: {
+  userId: string;
+  documentId: string;
+  claimToken: string;
+  embeddingModel: string;
+  chunks: KnowledgeChunkInsert[];
+}): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.knowledgeDocument.updateMany({
+      where: {
+        id: params.documentId,
+        userId: params.userId,
+        status: 'processing',
+        errorMessage: params.claimToken,
+      },
+      data: { updatedAt: new Date() },
+    });
+    if (claimed.count === 0) {
+      return false;
+    }
+
+    await tx.knowledgeDocumentChunk.deleteMany({
+      where: { documentId: params.documentId, userId: params.userId },
+    });
+
+    for (const chunk of params.chunks) {
+      const id = chunk.id ?? randomUUID();
+      const vectorLiteral = vectorToPgLiteral(chunk.embedding);
+      await tx.$executeRaw`
+        INSERT INTO "public"."knowledge_document_chunks"
+          ("id", "document_id", "user_id", "chunk_index", "content", "token_estimate",
+           "embedding_model", "embedding_dimension", "embedding", "created_at")
+        VALUES
+          (${id}, ${params.documentId}, ${params.userId}, ${chunk.chunkIndex}, ${chunk.content},
+           ${chunk.tokenEstimate ?? null}, ${params.embeddingModel}, ${chunk.embedding.length},
+           ${vectorLiteral}::vector, CURRENT_TIMESTAMP)
+      `;
+    }
+
+    const completed = await tx.knowledgeDocument.updateMany({
+      where: {
+        id: params.documentId,
+        userId: params.userId,
+        status: 'processing',
+        errorMessage: params.claimToken,
+      },
+      data: { status: 'ready', errorMessage: null },
+    });
+    return completed.count > 0;
+  });
+}
+
 export async function searchKnowledgeDocumentChunks(params: {
   userId: string;
   queryVector: number[];

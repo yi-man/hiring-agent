@@ -4,10 +4,9 @@ import { embedDocuments } from '@/lib/rag/embed';
 import { splitMarkdownToChunks } from '@/lib/rag/markdown';
 import {
   claimKnowledgeDocumentIngest,
-  completeKnowledgeDocumentIngest,
   failKnowledgeDocumentIngest,
   getKnowledgeDocumentById,
-  replaceKnowledgeDocumentChunks,
+  replaceAndCompleteKnowledgeDocumentIngest,
 } from '@/lib/rag/knowledge-repo';
 
 function createClaimToken(): string {
@@ -60,9 +59,10 @@ export async function ingestKnowledgeDocument(params: {
       throw new Error('embedding vectors are empty');
     }
 
-    await replaceKnowledgeDocumentChunks({
+    const completed = await replaceAndCompleteKnowledgeDocumentIngest({
       documentId: document.id,
       userId: params.userId,
+      claimToken,
       embeddingModel: env.OPENAI_EMBEDDING_MODEL,
       chunks: markdownChunks.map((chunk, index) => ({
         id: randomUUID(),
@@ -72,14 +72,8 @@ export async function ingestKnowledgeDocument(params: {
         embedding: embeddings[index] ?? [],
       })),
     });
-
-    const completed = await completeKnowledgeDocumentIngest(
-      params.userId,
-      params.documentId,
-      claimToken,
-    );
     if (!completed) {
-      throw new Error('knowledge ingest lost ownership before marking document ready');
+      throw new Error('knowledge ingest lost ownership before replacing chunks');
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'knowledge document ingest failed';

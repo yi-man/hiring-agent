@@ -3,6 +3,7 @@ const completeMock = jest.fn();
 const failMock = jest.fn();
 const getDocMock = jest.fn();
 const replaceChunksMock = jest.fn();
+const replaceAndCompleteMock = jest.fn();
 const splitMock = jest.fn();
 const embedDocumentsMock = jest.fn();
 
@@ -18,6 +19,8 @@ jest.mock('@/lib/rag/knowledge-repo', () => ({
   completeKnowledgeDocumentIngest: (...args: unknown[]) => completeMock(...args),
   failKnowledgeDocumentIngest: (...args: unknown[]) => failMock(...args),
   getKnowledgeDocumentById: (...args: unknown[]) => getDocMock(...args),
+  replaceAndCompleteKnowledgeDocumentIngest: (...args: unknown[]) =>
+    replaceAndCompleteMock(...args),
   replaceKnowledgeDocumentChunks: (...args: unknown[]) => replaceChunksMock(...args),
 }));
 
@@ -36,11 +39,13 @@ describe('ingestKnowledgeDocument', () => {
     failMock.mockReset();
     getDocMock.mockReset();
     replaceChunksMock.mockReset();
+    replaceAndCompleteMock.mockReset();
     splitMock.mockReset();
     embedDocumentsMock.mockReset();
     completeMock.mockResolvedValue(true);
     failMock.mockResolvedValue(true);
     replaceChunksMock.mockResolvedValue(1);
+    replaceAndCompleteMock.mockResolvedValue(true);
   });
 
   it('claims with user, document, token, and stale lease date', async () => {
@@ -75,10 +80,11 @@ describe('ingestKnowledgeDocument', () => {
     await ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' });
 
     expect(embedDocumentsMock).toHaveBeenCalledWith(['Alpha chunk']);
-    expect(replaceChunksMock).toHaveBeenCalledWith(
+    expect(replaceAndCompleteMock).toHaveBeenCalledWith(
       expect.objectContaining({
         documentId: 'doc-1',
         userId: 'u1',
+        claimToken: expect.stringMatching(/^ingest:/),
         embeddingModel: 'text-embedding-3-small',
         chunks: [
           expect.objectContaining({
@@ -89,7 +95,8 @@ describe('ingestKnowledgeDocument', () => {
         ],
       }),
     );
-    expect(completeMock).toHaveBeenCalledWith('u1', 'doc-1', expect.stringMatching(/^ingest:/));
+    expect(replaceChunksMock).not.toHaveBeenCalled();
+    expect(completeMock).not.toHaveBeenCalled();
   });
 
   it('marks failed when embedding throws', async () => {
@@ -137,7 +144,7 @@ describe('ingestKnowledgeDocument', () => {
       expect.stringMatching(/^ingest:/),
       'embedding count does not match knowledge chunks',
     );
-    expect(replaceChunksMock).not.toHaveBeenCalled();
+    expect(replaceAndCompleteMock).not.toHaveBeenCalled();
   });
 
   it('marks failed when any embedding vector is empty', async () => {
@@ -163,7 +170,30 @@ describe('ingestKnowledgeDocument', () => {
       expect.stringMatching(/^ingest:/),
       'embedding vectors are empty',
     );
-    expect(replaceChunksMock).not.toHaveBeenCalled();
+    expect(replaceAndCompleteMock).not.toHaveBeenCalled();
+  });
+
+  it('marks failed when ownership is lost before replacing chunks', async () => {
+    claimMock.mockResolvedValueOnce({ id: 'doc-1' });
+    getDocMock.mockResolvedValueOnce({
+      id: 'doc-1',
+      userId: 'u1',
+      contentMarkdown: '# A',
+    });
+    splitMock.mockResolvedValueOnce([{ index: 0, content: 'Alpha chunk' }]);
+    embedDocumentsMock.mockResolvedValueOnce([[0.1, 0.2, 0.3]]);
+    replaceAndCompleteMock.mockResolvedValueOnce(false);
+
+    const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
+    await expect(ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' })).rejects.toThrow(
+      'knowledge ingest lost ownership before replacing chunks',
+    );
+    expect(failMock).toHaveBeenCalledWith(
+      'u1',
+      'doc-1',
+      expect.stringMatching(/^ingest:/),
+      'knowledge ingest lost ownership before replacing chunks',
+    );
   });
 
   it('returns when a document is already ready', async () => {
