@@ -100,6 +100,30 @@ describe('KnowledgePage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('refreshes the document list when the refresh button is clicked', async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ documents: [], total: 0 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ documents: [handbookDocument], total: 1 }),
+      });
+
+    render(<KnowledgePage />);
+
+    expect(await screen.findByText('还没有知识文档')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/knowledge/documents');
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/knowledge/documents');
+    expect(await screen.findByText('handbook.md')).toBeInTheDocument();
+  });
+
   it('deletes a document then reloads the document list', async () => {
     fetchMock
       .mockResolvedValueOnce({
