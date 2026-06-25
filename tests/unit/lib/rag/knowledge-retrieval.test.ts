@@ -1,5 +1,6 @@
 const embedQueryMock = jest.fn();
 const hasReadyMock = jest.fn();
+const listDocumentsMock = jest.fn();
 const searchMock = jest.fn();
 
 jest.mock('@/lib/env', () => ({
@@ -17,6 +18,7 @@ jest.mock('@/lib/rag/embed', () => ({
 
 jest.mock('@/lib/rag/knowledge-repo', () => ({
   hasReadyKnowledgeDocuments: (...args: unknown[]) => hasReadyMock(...args),
+  listKnowledgeDocuments: (...args: unknown[]) => listDocumentsMock(...args),
   searchKnowledgeDocumentChunks: (...args: unknown[]) => searchMock(...args),
 }));
 
@@ -24,8 +26,10 @@ describe('retrieveUserKnowledgeContext', () => {
   beforeEach(() => {
     embedQueryMock.mockReset();
     hasReadyMock.mockReset();
+    listDocumentsMock.mockReset();
     searchMock.mockReset();
     hasReadyMock.mockResolvedValue(true);
+    listDocumentsMock.mockResolvedValue([]);
   });
 
   it('returns empty context without embedding when query is blank', async () => {
@@ -194,5 +198,40 @@ describe('retrieveUserKnowledgeContext', () => {
     const { retrieveUserKnowledgeContext } = await import('@/lib/rag/knowledge-retrieval');
     const result = await retrieveUserKnowledgeContext({ userId: 'u1', query: 'anything' });
     expect(result.contextText).toContain('[knowledge source filename="bad name.md" chunkIndex=0]');
+  });
+
+  it('falls back to ready document markdown when vector retrieval fails', async () => {
+    embedQueryMock.mockRejectedValueOnce(new Error('Unexpected token < in embedding response'));
+    listDocumentsMock.mockResolvedValueOnce([
+      {
+        id: 'doc-fallback',
+        userId: 'u1',
+        filename: 'company.md',
+        title: '公司介绍',
+        sourceLabel: 'company',
+        contentMarkdown: '我们是一家面向 HR 的 AI 招聘协作公司，强调知识库驱动的招聘流程。',
+        status: 'ready',
+        errorMessage: null,
+        version: 1,
+        createdAt: new Date('2026-06-25T01:00:00.000Z'),
+        updatedAt: new Date('2026-06-25T01:00:00.000Z'),
+      },
+    ]);
+
+    const { retrieveUserKnowledgeContext } = await import('@/lib/rag/knowledge-retrieval');
+    const result = await retrieveUserKnowledgeContext({ userId: 'u1', query: '公司招聘口径' });
+
+    expect(searchMock).not.toHaveBeenCalled();
+    expect(listDocumentsMock).toHaveBeenCalledWith('u1');
+    expect(result.contextText).toContain('[knowledge source filename="company.md" chunkIndex=0]');
+    expect(result.contextText).toContain('知识库驱动的招聘流程');
+    expect(result.matches).toEqual([
+      expect.objectContaining({
+        score: 0,
+        documentId: 'doc-fallback',
+        chunkId: 'doc-fallback:fallback',
+        filename: 'company.md',
+      }),
+    ]);
   });
 });

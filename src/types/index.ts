@@ -146,6 +146,7 @@ export type SearchParams = {
 
 export type {
   EvaluationResult,
+  CreateJobDescriptionRequest,
   JD,
   JDAgentAction,
   JDAgentContextMatch,
@@ -158,10 +159,16 @@ export type {
   JDAgentTokenMeta,
   JDAgentTokenUsage,
   JDAgentTimingMeta,
+  JDStatus,
   JDScore,
+  JobDescriptionDto,
   JobSchema,
   JDTone,
+  RegenerateJobDescriptionRequest,
+  UpdateJobDescriptionRequest,
 } from './jd-agent';
+
+export { JD_STATUSES } from './jd-agent';
 
 export type {
   ChatRole,

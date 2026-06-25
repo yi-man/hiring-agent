@@ -7,4 +7,9 @@ describe('parseJobInput', () => {
     expect(parsed.tone).toBe('tech');
     expect(parsed.skills.length).toBeGreaterThan(0);
   });
+
+  it('strips structured title labels from composed job input', () => {
+    const parsed = parseJobInput('职位：测试工程师\n部门：技术部', 'tech');
+    expect(parsed.title).toBe('测试工程师');
+  });
 });

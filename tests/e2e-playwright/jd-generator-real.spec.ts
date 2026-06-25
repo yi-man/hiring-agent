@@ -16,28 +16,29 @@ test.describe('JD 生成（真实上游 LLM）', () => {
   });
 
   test('从岗位描述生成可解析的 JD JSON', async ({ page }) => {
-    await page.goto('/jd-generator');
-    await page
-      .getByLabel('要创建什么岗位')
-      .fill('招聘测试工程师，负责 Web 端自动化与 Playwright 维护。');
+    await page.goto('/jd-generator/new');
+    await page.getByLabel('部门').selectOption('技术部');
+    await page.getByLabel('职位').selectOption('测试工程师');
+    await page.getByLabel('职位说明').fill('负责 Web 端自动化与 Playwright 维护。');
 
     /** initial_generate 会多次调用上游，总耗时可能超过 3 分钟 */
     const responsePromise = page.waitForResponse(
-      (r) => r.url().includes('/api/jd/agent') && r.request().method() === 'POST',
+      (r) => r.url().endsWith('/api/jd') && r.request().method() === 'POST',
       { timeout: 600_000 },
     );
-    await page.getByRole('button', { name: '生成 JD' }).click();
+    await page.getByRole('button', { name: '生成并创建' }).click();
     const resp = await responsePromise;
     expect(resp.ok(), `HTTP ${resp.status()}`).toBeTruthy();
-    const payload = (await resp.json()) as { success?: boolean; message?: string };
-    expect(payload.success, payload.message).toBeTruthy();
+    const payload = (await resp.json()) as {
+      jobDescription?: {
+        content?: { title?: string; summary?: string; responsibilities?: string[] };
+      };
+      error?: string;
+    };
+    expect(payload.jobDescription, payload.error).toBeTruthy();
 
-    await expect(page.getByRole('button', { name: '生成 JD' })).toBeEnabled({ timeout: 60_000 });
-
-    const editor = page.getByLabel('JD编辑框');
-    const raw = await editor.inputValue();
-    expect(() => JSON.parse(raw)).not.toThrow();
-    const jd = JSON.parse(raw) as { title?: string; summary?: string; responsibilities?: string[] };
+    await expect(page.getByLabel('岗位摘要')).toBeVisible({ timeout: 60_000 });
+    const jd = payload.jobDescription?.content ?? {};
     expect(
       jd.title?.trim().length ||
         jd.summary?.trim().length ||

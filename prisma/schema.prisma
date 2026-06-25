@@ -26,19 +26,42 @@ model Conversation {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  username      String         @unique
-  passwordHash  String         @map("password_hash")
-  name          String?
-  email         String?        @unique
-  emailVerified DateTime?      @map("email_verified")
-  image         String?
-  sessions      Session[]
-  conversations Conversation[]
+  id                      String                   @id @default(cuid())
+  username                String                   @unique
+  passwordHash            String                   @map("password_hash")
+  name                    String?
+  email                   String?                  @unique
+  emailVerified           DateTime?                @map("email_verified")
+  image                   String?
+  sessions                Session[]
+  conversations           Conversation[]
+  jobDescriptions         JobDescription[]
   knowledgeDocuments      KnowledgeDocument[]
   knowledgeDocumentChunks KnowledgeDocumentChunk[]
 
   @@map("users")
+}
+
+model JobDescription {
+  id                  String   @id @default(uuid())
+  userId              String   @map("user_id")
+  department          String
+  position            String
+  positionDescription String   @map("position_description")
+  tone                String   @default("tech")
+  status              String   @default("created")
+  content             Json
+  evaluation          Json?
+  generationMeta      Json?    @map("generation_meta")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([userId], map: "idx_job_descriptions_user_id")
+  @@index([status], map: "idx_job_descriptions_status")
+  @@index([updatedAt(sort: Desc)], map: "idx_job_descriptions_updated_at")
+  @@index([userId, status], map: "idx_job_descriptions_user_status")
+  @@map("job_descriptions")
 }
 
 model Session {
@@ -148,18 +171,18 @@ model KnowledgeDocument {
 }
 
 model KnowledgeDocumentChunk {
-  id                 String            @id @default(uuid())
-  documentId         String            @map("document_id")
-  userId             String            @map("user_id")
-  chunkIndex         Int               @map("chunk_index")
+  id                 String                 @id @default(uuid())
+  documentId         String                 @map("document_id")
+  userId             String                 @map("user_id")
+  chunkIndex         Int                    @map("chunk_index")
   content            String
-  tokenEstimate      Int?              @map("token_estimate")
-  embeddingModel     String            @map("embedding_model")
-  embeddingDimension Int               @map("embedding_dimension")
+  tokenEstimate      Int?                   @map("token_estimate")
+  embeddingModel     String                 @map("embedding_model")
+  embeddingDimension Int                    @map("embedding_dimension")
   embedding          Unsupported("vector")?
-  createdAt          DateTime          @default(now()) @map("created_at")
-  document           KnowledgeDocument @relation(fields: [documentId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
-  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  createdAt          DateTime               @default(now()) @map("created_at")
+  document           KnowledgeDocument      @relation(fields: [documentId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  user               User                   @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([documentId, chunkIndex], map: "knowledge_document_chunks_document_id_chunk_index_key")
   @@index([documentId], map: "idx_knowledge_document_chunks_document_id")
