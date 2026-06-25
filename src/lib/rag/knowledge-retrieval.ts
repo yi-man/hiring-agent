@@ -15,6 +15,15 @@ export type RetrievedKnowledgeMatch = {
   sourceLabel: string | null;
 };
 
+function sanitizeSourceValue(value: string): string {
+  return (
+    value
+      .replace(/["\r\n]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'unknown'
+  );
+}
+
 export async function retrieveUserKnowledgeContext(params: {
   userId: string;
   query: string;
@@ -58,7 +67,7 @@ export async function retrieveUserKnowledgeContext(params: {
     }
 
     const formattedChunk = [
-      `[knowledge source filename="${row.filename}" chunkIndex=${row.chunkIndex}]`,
+      `[knowledge source filename="${sanitizeSourceValue(row.filename)}" chunkIndex=${row.chunkIndex}]`,
       content,
     ].join('\n');
     const nextChars = contextChars + formattedChunk.length;

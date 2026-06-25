@@ -105,4 +105,59 @@ describe('retrieveUserKnowledgeContext', () => {
     expect(result.contextText).toBe('');
     expect(result.matches).toEqual([]);
   });
+
+  it('skips oversized hits and still includes later smaller hits', async () => {
+    embedQueryMock.mockResolvedValueOnce([0.1]);
+    searchMock.mockResolvedValueOnce([
+      {
+        id: 'big',
+        documentId: 'doc-1',
+        userId: 'u1',
+        chunkIndex: 0,
+        content: 'x'.repeat(200),
+        filename: 'big.md',
+        title: null,
+        sourceLabel: null,
+        score: 0.9,
+      },
+      {
+        id: 'small',
+        documentId: 'doc-1',
+        userId: 'u1',
+        chunkIndex: 1,
+        content: 'ok',
+        filename: 'small.md',
+        title: null,
+        sourceLabel: null,
+        score: 0.9,
+      },
+    ]);
+
+    const { retrieveUserKnowledgeContext } = await import('@/lib/rag/knowledge-retrieval');
+    const result = await retrieveUserKnowledgeContext({ userId: 'u1', query: 'anything' });
+    expect(result.contextText).toContain('small.md');
+    expect(result.contextText).toContain('ok');
+    expect(result.contextText).not.toContain('big.md');
+  });
+
+  it('sanitizes filenames in source markers', async () => {
+    embedQueryMock.mockResolvedValueOnce([0.1]);
+    searchMock.mockResolvedValueOnce([
+      {
+        id: 'chunk-1',
+        documentId: 'doc-1',
+        userId: 'u1',
+        chunkIndex: 0,
+        content: 'ok',
+        filename: 'bad"\nname.md',
+        title: null,
+        sourceLabel: null,
+        score: 0.9,
+      },
+    ]);
+
+    const { retrieveUserKnowledgeContext } = await import('@/lib/rag/knowledge-retrieval');
+    const result = await retrieveUserKnowledgeContext({ userId: 'u1', query: 'anything' });
+    expect(result.contextText).toContain('[knowledge source filename="bad name.md" chunkIndex=0]');
+  });
 });

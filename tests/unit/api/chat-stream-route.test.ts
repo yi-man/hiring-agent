@@ -183,6 +183,33 @@ describe('chat stream route', () => {
     expect(streamChatReplyMock).not.toHaveBeenCalled();
   });
 
+  it('merges user knowledge and selected conversation document context in order', async () => {
+    conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'ready' });
+    retrieveUserKnowledgeContextMock.mockResolvedValueOnce({
+      contextText: 'User knowledge context.',
+      matches: [],
+    });
+    retrieveConversationContextMock.mockResolvedValueOnce({
+      contextText: 'Conversation document context.',
+      matches: [],
+    });
+    async function* gen() {
+      yield 'ok';
+    }
+    streamChatReplyMock.mockResolvedValueOnce({ chunks: gen(), collect: async () => 'ok' });
+
+    const req = { json: async () => ({ content: 'hi', documentId: 'd1' }) } as Request;
+    const res = await POST(req, { params: Promise.resolve({ id: 'c1' }) });
+    expect(res.status).toBe(200);
+    expect(streamChatReplyMock).toHaveBeenCalledWith(
+      'c1',
+      'hi',
+      expect.objectContaining({
+        retrievedContext: 'User knowledge context.\n\nConversation document context.',
+      }),
+    );
+  });
+
   it('returns 502 when RAG retrieval fails for a scoped ready document', async () => {
     conversationDocumentFindFirstMock.mockResolvedValueOnce({ id: 'd1', status: 'ready' });
     retrieveConversationContextMock.mockRejectedValueOnce(new Error('embedding API timeout'));
