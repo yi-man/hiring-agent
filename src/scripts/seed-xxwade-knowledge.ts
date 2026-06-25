@@ -21,6 +21,7 @@ const FIXTURE_URL = new URL(
 );
 
 async function upsertSyntheticKnowledgeDocument(userId: string, contentMarkdown: string) {
+  // Local/manual seed only: sourceLabel is indexed but not unique, so do not run concurrently.
   const existing = await findKnowledgeDocumentBySourceLabel(userId, SOURCE_LABEL);
   if (existing) {
     const updated = await updateKnowledgeDocumentForReindex({
@@ -62,10 +63,15 @@ async function main(): Promise<void> {
     console.log(`[knowledge-seed] indexed ${FILENAME} for xxwade`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (jobId) {
-      await markKnowledgeDocumentIndexJobFailed(jobId, message);
-    }
     console.error(`[knowledge-seed] failed to index ${FILENAME} for xxwade: ${message}`);
+    if (jobId) {
+      try {
+        await markKnowledgeDocumentIndexJobFailed(jobId, message);
+      } catch (markError) {
+        const markMessage = markError instanceof Error ? markError.message : String(markError);
+        console.error(`[knowledge-seed] failed to mark index job ${jobId} failed: ${markMessage}`);
+      }
+    }
     throw error;
   } finally {
     await closePrismaClient();
