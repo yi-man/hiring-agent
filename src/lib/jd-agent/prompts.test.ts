@@ -44,4 +44,19 @@ describe('jd-agent prompts', () => {
       '返回完整优化后的JSON JD',
     );
   });
+
+  it('injects company context with grounding rules', async () => {
+    const companyContext =
+      '[knowledge source filename="company.md" chunkIndex=0]\n招聘助手服务 HR 团队，提供 AI 对话、知识库和 JD 生成能力。';
+
+    const generatePrompt = await buildGenerateUserPrompt(schema, companyContext);
+    const evaluatePrompt = await buildEvaluateUserPrompt(jd, companyContext);
+    const improvePrompt = await buildImproveUserPrompt(jd, evalResult, '更专业', companyContext);
+
+    expect(generatePrompt).toContain('公司上下文');
+    expect(generatePrompt).toContain('不要编造');
+    expect(generatePrompt).toContain('AI 对话、知识库和 JD 生成能力');
+    expect(evaluatePrompt).toContain('公司上下文校验');
+    expect(improvePrompt).toContain('AI 对话、知识库和 JD 生成能力');
+  });
 });

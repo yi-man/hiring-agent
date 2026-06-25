@@ -78,6 +78,24 @@ export type JDAgentTokenMeta = {
   stages: JDAgentStageTokenUsage[];
 };
 
+export type JDAgentContextMatch = {
+  score: number;
+  documentId: string;
+  chunkId: string;
+  chunkIndex: number;
+  filename: string;
+  title: string | null;
+  sourceLabel: string | null;
+};
+
+export type JDAgentContextMeta = {
+  used: boolean;
+  query: string;
+  textLength: number;
+  matches: JDAgentContextMatch[];
+  warnings: string[];
+};
+
 export type JDAgentResponse = {
   jd: JD;
   evaluation: EvaluationResult;
@@ -88,6 +106,7 @@ export type JDAgentResponse = {
     action: JDAgentAction;
     timing?: JDAgentTimingMeta;
     tokens?: JDAgentTokenMeta;
+    context?: JDAgentContextMeta;
   };
   warnings?: string[];
 };

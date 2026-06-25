@@ -16,6 +16,28 @@ describe('JDGeneratorWorkbench', () => {
             bonus: [],
             highlights: ['h1'],
           },
+          meta: {
+            model: 'mock-jd-agent',
+            promptVersion: 'jd_v3.2',
+            action: 'initial_generate',
+            context: {
+              used: true,
+              query: '高级前端工程师',
+              textLength: 42,
+              matches: [
+                {
+                  score: 0.91,
+                  documentId: 'doc-1',
+                  chunkId: 'chunk-1',
+                  chunkIndex: 0,
+                  filename: 'company.md',
+                  title: '公司介绍',
+                  sourceLabel: null,
+                },
+              ],
+              warnings: [],
+            },
+          },
         },
       }),
     }) as jest.Mock;
@@ -29,7 +51,9 @@ describe('JDGeneratorWorkbench', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成 JD' }));
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue(/高级前端工程师/)).toBeInTheDocument();
+      expect(screen.getByText('已使用公司上下文')).toBeInTheDocument();
     });
+    expect(screen.getByDisplayValue(/summary/)).toBeInTheDocument();
+    expect(screen.getByText(/company.md/)).toBeInTheDocument();
   });
 });

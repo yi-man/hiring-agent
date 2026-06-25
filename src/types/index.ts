@@ -148,6 +148,8 @@ export type {
   EvaluationResult,
   JD,
   JDAgentAction,
+  JDAgentContextMatch,
+  JDAgentContextMeta,
   JDAgentDecision,
   JDAgentRequest,
   JDAgentResponse,
