@@ -13,6 +13,8 @@ import {
 } from '@/lib/rag/knowledge-repo';
 
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_MULTIPART_OVERHEAD_BYTES = 512 * 1024;
+const MAX_MULTIPART_CONTENT_LENGTH_BYTES = MAX_FILE_SIZE_BYTES + MAX_MULTIPART_OVERHEAD_BYTES;
 
 type UploadFileLike = {
   name?: string;
@@ -59,6 +61,17 @@ function validateUploadFile(file: UploadFileLike | null): { error: string; statu
   }
 
   return null;
+}
+
+function contentLengthExceedsLimit(contentLength: string | null): boolean {
+  if (!contentLength) {
+    return false;
+  }
+
+  const parsedContentLength = Number(contentLength);
+  return (
+    Number.isFinite(parsedContentLength) && parsedContentLength > MAX_MULTIPART_CONTENT_LENGTH_BYTES
+  );
 }
 
 async function readFileContentMarkdown(file: UploadFileLike): Promise<string> {
@@ -108,6 +121,10 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const auth = await requireAuth();
+    if (contentLengthExceedsLimit(request.headers.get('content-length'))) {
+      return NextResponse.json({ error: 'file exceeds 5MB limit' }, { status: 413 });
+    }
+
     const formData = await request.formData();
     const fileValue = formData.get('file');
     if (fileValue === null) {
@@ -129,6 +146,10 @@ export async function POST(request: Request) {
 
     const filename = file.name?.trim() ?? '';
     const contentMarkdown = await readFileContentMarkdown(file);
+    if (!contentMarkdown.trim()) {
+      return NextResponse.json({ error: 'markdown content must not be empty' }, { status: 400 });
+    }
+
     const document = await createKnowledgeDocument({
       userId: auth.user.id,
       filename,

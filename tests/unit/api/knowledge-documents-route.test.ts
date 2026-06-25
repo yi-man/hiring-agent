@@ -92,6 +92,9 @@ type UploadFileLike = {
 
 function formRequest(file: UploadFileLike | string | null) {
   return {
+    headers: {
+      get: () => null,
+    },
     formData: async () => ({
       get: (key: string) => (key === 'file' ? file : null),
     }),
@@ -188,6 +191,38 @@ describe('knowledge documents API routes', () => {
 
     expect(res.status).toBe(413);
     expect(body.error).toContain('5MB');
+    expect(createKnowledgeDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized Content-Length before parsing formData', async () => {
+    const formDataMock = jest.fn(async () => ({
+      get: () => ({ name: 'handbook.md', size: 12, text: async () => '# Handbook' }),
+    }));
+    const req = {
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-length' ? String(5 * 1024 * 1024 + 512 * 1024 + 1) : null,
+      },
+      formData: formDataMock,
+    } as unknown as Request;
+
+    const res = await POST_DOCUMENT(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(413);
+    expect(body.error).toContain('5MB');
+    expect(formDataMock).not.toHaveBeenCalled();
+    expect(createKnowledgeDocumentMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects whitespace-only markdown content before creating a document', async () => {
+    const res = await POST_DOCUMENT(
+      formRequest({ name: 'handbook.md', size: 4, text: async () => ' \n\t ' }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain('empty');
     expect(createKnowledgeDocumentMock).not.toHaveBeenCalled();
   });
 
