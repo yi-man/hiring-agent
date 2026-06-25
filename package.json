@@ -15,6 +15,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "type-check": "tsc --noEmit",
+    "seed:knowledge:xxwade": "bunx tsx src/scripts/seed-xxwade-knowledge.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "test": "jest --coverage --runInBand",
