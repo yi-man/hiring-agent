@@ -25,6 +25,8 @@ describe('rag schema contract', () => {
       'Unsupported("vector")',
       '@@unique([documentId, chunkIndex]',
       '@relation(fields: [userId], references: [id]',
+      '@@unique([id, userId]',
+      '@relation(fields: [documentId, userId], references: [id, userId]',
     ];
 
     for (const snippet of requiredSnippets) {

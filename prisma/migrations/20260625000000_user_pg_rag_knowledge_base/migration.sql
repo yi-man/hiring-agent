@@ -48,6 +48,8 @@ CREATE TABLE "public"."knowledge_document_index_jobs" (
 CREATE INDEX "idx_knowledge_documents_user_id" ON "public"."knowledge_documents"("user_id");
 CREATE INDEX "idx_knowledge_documents_status" ON "public"."knowledge_documents"("status");
 CREATE INDEX "idx_knowledge_documents_user_source_label" ON "public"."knowledge_documents"("user_id", "source_label");
+CREATE UNIQUE INDEX "knowledge_documents_id_user_id_key"
+ON "public"."knowledge_documents"("id", "user_id");
 
 CREATE UNIQUE INDEX "knowledge_document_chunks_document_id_chunk_index_key"
 ON "public"."knowledge_document_chunks"("document_id", "chunk_index");
@@ -69,8 +71,8 @@ FOREIGN KEY ("user_id") REFERENCES "public"."users"("id")
 ON DELETE CASCADE ON UPDATE RESTRICT;
 
 ALTER TABLE "public"."knowledge_document_chunks"
-ADD CONSTRAINT "knowledge_document_chunks_document_id_fkey"
-FOREIGN KEY ("document_id") REFERENCES "public"."knowledge_documents"("id")
+ADD CONSTRAINT "knowledge_document_chunks_document_id_user_id_fkey"
+FOREIGN KEY ("document_id", "user_id") REFERENCES "public"."knowledge_documents"("id", "user_id")
 ON DELETE CASCADE ON UPDATE RESTRICT;
 
 ALTER TABLE "public"."knowledge_document_chunks"

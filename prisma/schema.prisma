@@ -140,6 +140,7 @@ model KnowledgeDocument {
   chunks          KnowledgeDocumentChunk[]
   jobs            KnowledgeDocumentIndexJob[]
 
+  @@unique([id, userId], map: "knowledge_documents_id_user_id_key")
   @@index([userId], map: "idx_knowledge_documents_user_id")
   @@index([status], map: "idx_knowledge_documents_status")
   @@index([userId, sourceLabel], map: "idx_knowledge_documents_user_source_label")
@@ -157,7 +158,7 @@ model KnowledgeDocumentChunk {
   embeddingDimension Int               @map("embedding_dimension")
   embedding          Unsupported("vector")?
   createdAt          DateTime          @default(now()) @map("created_at")
-  document           KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  document           KnowledgeDocument @relation(fields: [documentId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
   user               User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([documentId, chunkIndex], map: "knowledge_document_chunks_document_id_chunk_index_key")
