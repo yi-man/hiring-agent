@@ -140,6 +140,41 @@ describe('retrieveUserKnowledgeContext', () => {
     expect(result.contextText).not.toContain('big.md');
   });
 
+  it('counts separators when enforcing max context length', async () => {
+    embedQueryMock.mockResolvedValueOnce([0.1]);
+    searchMock.mockResolvedValueOnce([
+      {
+        id: 'first',
+        documentId: 'doc-1',
+        userId: 'u1',
+        chunkIndex: 0,
+        content: 'a'.repeat(11),
+        filename: 'a.md',
+        title: null,
+        sourceLabel: null,
+        score: 0.9,
+      },
+      {
+        id: 'second',
+        documentId: 'doc-1',
+        userId: 'u1',
+        chunkIndex: 1,
+        content: 'b'.repeat(13),
+        filename: 'b.md',
+        title: null,
+        sourceLabel: null,
+        score: 0.9,
+      },
+    ]);
+
+    const { retrieveUserKnowledgeContext } = await import('@/lib/rag/knowledge-retrieval');
+    const result = await retrieveUserKnowledgeContext({ userId: 'u1', query: 'anything' });
+    expect(result.contextText.length).toBeLessThanOrEqual(120);
+    expect(result.contextText).toContain('a.md');
+    expect(result.contextText).not.toContain('b.md');
+    expect(result.matches).toEqual([expect.objectContaining({ chunkId: 'first' })]);
+  });
+
   it('sanitizes filenames in source markers', async () => {
     embedQueryMock.mockResolvedValueOnce([0.1]);
     searchMock.mockResolvedValueOnce([

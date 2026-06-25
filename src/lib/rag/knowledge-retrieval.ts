@@ -70,7 +70,8 @@ export async function retrieveUserKnowledgeContext(params: {
       `[knowledge source filename="${sanitizeSourceValue(row.filename)}" chunkIndex=${row.chunkIndex}]`,
       content,
     ].join('\n');
-    const nextChars = contextChars + formattedChunk.length;
+    const separatorChars = selectedTexts.length > 0 ? 2 : 0;
+    const nextChars = contextChars + separatorChars + formattedChunk.length;
     if (nextChars > env.RAG_CONTEXT_MAX_CHARS) {
       continue;
     }
