@@ -6,6 +6,7 @@ import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { DEPENDENCY_OUTAGE_MESSAGE, isDependencyOutageError } from '@/lib/errors/dependency-outage';
 import { prisma } from '@/lib/prisma';
 import { env } from '@/lib/env';
+import { retrieveUserKnowledgeContext } from '@/lib/rag/knowledge-retrieval';
 import { retrieveConversationContext } from '@/lib/rag/retrieval';
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -56,21 +57,35 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     });
     await touchConversation(id);
 
-    let retrievedContext = '';
-    if (ragDocumentId) {
-      try {
+    const retrievedContextParts: string[] = [];
+
+    try {
+      const userKnowledge = await retrieveUserKnowledgeContext({
+        userId: auth.user.id,
+        query: input,
+        topK: env.RAG_TOP_K,
+      });
+      if (userKnowledge.contextText.trim()) {
+        retrievedContextParts.push(userKnowledge.contextText.trim());
+      }
+
+      if (ragDocumentId) {
         const retrieval = await retrieveConversationContext({
           conversationId: id,
           query: input,
           topK: env.RAG_TOP_K,
           documentId: ragDocumentId,
         });
-        retrievedContext = retrieval.contextText;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'RAG retrieval failed';
-        return NextResponse.json({ error: message, code: 'RAG_RETRIEVAL_FAILED' }, { status: 502 });
+        if (retrieval.contextText.trim()) {
+          retrievedContextParts.push(retrieval.contextText.trim());
+        }
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'RAG retrieval failed';
+      return NextResponse.json({ error: message, code: 'RAG_RETRIEVAL_FAILED' }, { status: 502 });
     }
+
+    const retrievedContext = retrievedContextParts.join('\n\n');
 
     const { chunks, collect } = await streamChatReply(id, input, { retrievedContext });
 
