@@ -2,10 +2,34 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { KnowledgePage } from '@/components/knowledge/knowledge-page';
 
 jest.mock('lucide-react', () => ({
+  Eye: jest.fn(() => <span data-testid="eye-icon" />),
   FileText: jest.fn(() => <span data-testid="file-text-icon" />),
   RefreshCw: jest.fn(() => <span data-testid="refresh-icon" />),
   Trash2: jest.fn(() => <span data-testid="trash-icon" />),
   Upload: jest.fn(() => <span data-testid="upload-icon" />),
+  X: jest.fn(() => <span data-testid="x-icon" />),
+}));
+
+jest.mock('react-markdown', () => ({
+  __esModule: true,
+  default: ({ children }: { children: string }) => (
+    <div>
+      {children
+        .split('\n')
+        .map((line, index) => {
+          if (!line.trim()) return null;
+          if (line.startsWith('# ')) return <h1 key={index}>{line.slice(2)}</h1>;
+          if (line.startsWith('## ')) return <h2 key={index}>{line.slice(3)}</h2>;
+          return <p key={index}>{line}</p>;
+        })
+        .filter(Boolean)}
+    </div>
+  ),
+}));
+
+jest.mock('remark-gfm', () => ({
+  __esModule: true,
+  default: () => undefined,
 }));
 
 jest.mock('@/components/ui', () => ({
@@ -64,6 +88,21 @@ describe('KnowledgePage', () => {
     expect(await screen.findByText('handbook.md')).toBeInTheDocument();
     expect(screen.getByText('synthetic')).toBeInTheDocument();
     expect(screen.getByText('ready')).toBeInTheDocument();
+  });
+
+  it('previews the selected markdown document', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ documents: [handbookDocument], total: 1 }),
+    });
+
+    render(<KnowledgePage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '预览 handbook.md' }));
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Markdown 预览' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Handbook' })).toBeInTheDocument();
+    expect(screen.getByText('Recruiting notes')).toBeInTheDocument();
   });
 
   it('uploads a markdown file then reloads the document list', async () => {

@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { FileText, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { Eye, FileText, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { Button, Card, CardBody, Chip } from '@/components/ui';
+import { AssistantMarkdown } from '@/components/chat/message-renderers/assistant-markdown';
 import {
   deleteKnowledgeDocument,
   fetchKnowledgeDocuments,
@@ -60,6 +61,11 @@ export function KnowledgePage() {
   const [isUploading, setIsUploading] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+
+  const selectedDocument = selectedDocumentId
+    ? (documents.find((doc) => doc.id === selectedDocumentId) ?? null)
+    : null;
 
   const loadDocuments = async (options?: { silent?: boolean }) => {
     const requestId = ++latestRequestIdRef.current;
@@ -118,6 +124,9 @@ export function KnowledgePage() {
     setDeletingDocumentId(doc.id);
     setError(null);
     try {
+      if (selectedDocumentId === doc.id) {
+        setSelectedDocumentId(null);
+      }
       await deleteKnowledgeDocument(doc.id);
       await loadDocuments({ silent: true });
     } catch (e) {
@@ -176,88 +185,163 @@ export function KnowledgePage() {
         </div>
       ) : null}
 
-      <Card className="border-border rounded-lg border shadow-none">
-        <CardBody className="p-0">
-          <div className="border-border flex items-center justify-between border-b px-4 py-3">
-            <div className="text-foreground text-sm font-medium">文档列表</div>
-            <div className="text-muted-foreground text-xs">
-              {isLoading ? '正在加载知识文档…' : `${documents.length} 个文档`}
-            </div>
-          </div>
-
-          {isLoading ? (
-            <div className="text-muted-foreground px-4 py-10 text-center text-sm">
-              正在加载知识文档…
-            </div>
-          ) : documents.length === 0 ? (
-            <div className="px-4 py-10 text-center">
-              <div className="border-border mx-auto flex h-10 w-10 items-center justify-center rounded-md border">
-                <FileText className="text-muted-foreground h-5 w-5" aria-hidden />
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.96fr)_minmax(380px,1.04fr)]">
+        <Card className="border-border rounded-lg border shadow-none">
+          <CardBody className="p-0">
+            <div className="border-border flex items-center justify-between border-b px-4 py-3">
+              <div className="text-foreground text-sm font-medium">文档列表</div>
+              <div className="text-muted-foreground text-xs">
+                {isLoading ? '正在加载知识文档…' : `${documents.length} 个文档`}
               </div>
-              <div className="text-foreground mt-3 text-sm font-medium">还没有知识文档</div>
-              <p className="text-muted-foreground mt-1 text-sm">
-                上传 Markdown 文件后会显示在这里。
-              </p>
             </div>
-          ) : (
-            <div className="divide-border divide-y">
-              {documents.map((doc) => {
-                const meta = statusMeta[doc.status];
-                return (
-                  <article
-                    key={doc.id}
-                    className="grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_160px_180px_56px] md:items-center"
+
+            {isLoading ? (
+              <div className="text-muted-foreground px-4 py-10 text-center text-sm">
+                正在加载知识文档…
+              </div>
+            ) : documents.length === 0 ? (
+              <div className="px-4 py-10 text-center">
+                <div className="border-border mx-auto flex h-10 w-10 items-center justify-center rounded-md border">
+                  <FileText className="text-muted-foreground h-5 w-5" aria-hidden />
+                </div>
+                <div className="text-foreground mt-3 text-sm font-medium">还没有知识文档</div>
+                <p className="text-muted-foreground mt-1 text-sm">
+                  上传 Markdown 文件后会显示在这里。
+                </p>
+              </div>
+            ) : (
+              <div className="divide-border divide-y">
+                {documents.map((doc) => {
+                  const meta = statusMeta[doc.status];
+                  const isSelected = selectedDocumentId === doc.id;
+                  return (
+                    <article
+                      key={doc.id}
+                      className={`grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_130px_170px_112px] md:items-center ${
+                        isSelected ? 'bg-muted/40' : ''
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <FileText
+                            className="text-muted-foreground h-4 w-4 shrink-0"
+                            aria-hidden
+                          />
+                          <div className="text-foreground min-w-0 truncate text-sm font-medium">
+                            {doc.filename}
+                          </div>
+                        </div>
+                        <div className="text-muted-foreground mt-1 min-w-0 truncate text-xs">
+                          {documentDisplayTitle(doc)}
+                          {doc.sourceLabel ? <span className="ml-2">{doc.sourceLabel}</span> : null}
+                        </div>
+                        {doc.errorMessage ? (
+                          <div className="mt-2 text-xs text-rose-600 dark:text-rose-300">
+                            {doc.errorMessage}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="flex items-center gap-2 md:block">
+                        <Chip
+                          className={`border text-xs ${meta.className}`}
+                          size="sm"
+                          variant="flat"
+                        >
+                          {meta.label}
+                        </Chip>
+                      </div>
+
+                      <div className="text-muted-foreground text-xs">
+                        <div>{formatUpdatedAt(doc.updatedAt)}</div>
+                        <div className="mt-1">
+                          {formatContentSize(doc.contentMarkdown)} · v{doc.version}
+                        </div>
+                      </div>
+
+                      <div className="flex justify-start gap-1 md:justify-end">
+                        <Button
+                          aria-label={`预览 ${doc.filename}`}
+                          className={isSelected ? 'bg-primary/10 text-primary' : ''}
+                          size="sm"
+                          type="button"
+                          variant="light"
+                          onClick={() => setSelectedDocumentId(doc.id)}
+                        >
+                          <Eye className="h-4 w-4" aria-hidden />
+                        </Button>
+                        <Button
+                          aria-label={`删除 ${doc.filename}`}
+                          isDisabled={deletingDocumentId !== null}
+                          size="sm"
+                          type="button"
+                          variant="light"
+                          onClick={() => void handleDelete(doc)}
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                        </Button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        <Card className="border-border rounded-lg border shadow-none">
+          <CardBody className="p-0">
+            <div className="border-border flex items-start justify-between gap-3 border-b px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-foreground text-sm font-medium">Markdown 预览</h2>
+                <div className="text-muted-foreground mt-1 truncate text-xs">
+                  {selectedDocument ? selectedDocument.filename : '选择一份文档查看渲染内容'}
+                </div>
+              </div>
+              {selectedDocument ? (
+                <Button
+                  aria-label="关闭预览"
+                  size="sm"
+                  type="button"
+                  variant="light"
+                  onClick={() => setSelectedDocumentId(null)}
+                >
+                  <X className="h-4 w-4" aria-hidden />
+                </Button>
+              ) : null}
+            </div>
+
+            {selectedDocument ? (
+              <div className="max-h-[70vh] overflow-auto px-5 py-5">
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <Chip
+                    className={`border text-xs ${statusMeta[selectedDocument.status].className}`}
+                    size="sm"
+                    variant="flat"
                   >
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <FileText className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden />
-                        <div className="text-foreground min-w-0 truncate text-sm font-medium">
-                          {doc.filename}
-                        </div>
-                      </div>
-                      <div className="text-muted-foreground mt-1 min-w-0 truncate text-xs">
-                        {documentDisplayTitle(doc)}
-                        {doc.sourceLabel ? <span className="ml-2">{doc.sourceLabel}</span> : null}
-                      </div>
-                      {doc.errorMessage ? (
-                        <div className="mt-2 text-xs text-rose-600 dark:text-rose-300">
-                          {doc.errorMessage}
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div className="flex items-center gap-2 md:block">
-                      <Chip className={`border text-xs ${meta.className}`} size="sm" variant="flat">
-                        {meta.label}
-                      </Chip>
-                    </div>
-
-                    <div className="text-muted-foreground text-xs">
-                      <div>{formatUpdatedAt(doc.updatedAt)}</div>
-                      <div className="mt-1">
-                        {formatContentSize(doc.contentMarkdown)} · v{doc.version}
-                      </div>
-                    </div>
-
-                    <div className="flex justify-start md:justify-end">
-                      <Button
-                        aria-label={`删除 ${doc.filename}`}
-                        isDisabled={deletingDocumentId !== null}
-                        size="sm"
-                        type="button"
-                        variant="light"
-                        onClick={() => void handleDelete(doc)}
-                      >
-                        <Trash2 className="h-4 w-4" aria-hidden />
-                      </Button>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </CardBody>
-      </Card>
+                    {statusMeta[selectedDocument.status].label}
+                  </Chip>
+                  <span className="text-muted-foreground text-xs">
+                    {formatContentSize(selectedDocument.contentMarkdown)} · v
+                    {selectedDocument.version}
+                  </span>
+                </div>
+                <AssistantMarkdown>{selectedDocument.contentMarkdown}</AssistantMarkdown>
+              </div>
+            ) : (
+              <div className="px-5 py-12 text-center">
+                <div className="border-border mx-auto flex h-10 w-10 items-center justify-center rounded-md border">
+                  <Eye className="text-muted-foreground h-5 w-5" aria-hidden />
+                </div>
+                <div className="text-foreground mt-3 text-sm font-medium">选择文档预览</div>
+                <p className="text-muted-foreground mt-1 text-sm">
+                  预览会按 Markdown 渲染标题、列表、表格和代码块。
+                </p>
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      </div>
     </div>
   );
 }
