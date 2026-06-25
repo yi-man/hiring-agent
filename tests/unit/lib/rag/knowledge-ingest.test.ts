@@ -13,8 +13,6 @@ jest.mock('@/lib/env', () => ({
   },
 }));
 
-jest.mock('@/lib/chat/repositories/document-repo', () => ({}));
-
 jest.mock('@/lib/rag/knowledge-repo', () => ({
   claimKnowledgeDocumentIngest: (...args: unknown[]) => claimMock(...args),
   completeKnowledgeDocumentIngest: (...args: unknown[]) => completeMock(...args),
@@ -43,6 +41,23 @@ describe('ingestKnowledgeDocument', () => {
     completeMock.mockResolvedValue(true);
     failMock.mockResolvedValue(true);
     replaceChunksMock.mockResolvedValue(1);
+  });
+
+  it('claims with user, document, token, and stale lease date', async () => {
+    claimMock.mockResolvedValueOnce(null);
+    getDocMock.mockResolvedValueOnce({ id: 'doc-1', status: 'processing' });
+
+    const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
+    await ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' });
+
+    expect(claimMock).toHaveBeenCalledWith(
+      'u1',
+      'doc-1',
+      expect.stringMatching(/^ingest:/),
+      expect.any(Date),
+    );
+    const staleDate = claimMock.mock.calls[0][3] as Date;
+    expect(Date.now() - staleDate.getTime()).toBeGreaterThanOrEqual(1800000 - 5000);
   });
 
   it('splits, embeds, writes chunks, and marks ready', async () => {
@@ -116,11 +131,70 @@ describe('ingestKnowledgeDocument', () => {
     await expect(ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' })).rejects.toThrow(
       'embedding count does not match knowledge chunks',
     );
+    expect(failMock).toHaveBeenCalledWith(
+      'u1',
+      'doc-1',
+      expect.stringMatching(/^ingest:/),
+      'embedding count does not match knowledge chunks',
+    );
+    expect(replaceChunksMock).not.toHaveBeenCalled();
+  });
+
+  it('marks failed when any embedding vector is empty', async () => {
+    claimMock.mockResolvedValueOnce({ id: 'doc-1' });
+    getDocMock.mockResolvedValueOnce({
+      id: 'doc-1',
+      userId: 'u1',
+      contentMarkdown: '# A',
+    });
+    splitMock.mockResolvedValueOnce([
+      { index: 0, content: 'A' },
+      { index: 1, content: 'B' },
+    ]);
+    embedDocumentsMock.mockResolvedValueOnce([[0.1, 0.2], []]);
+
+    const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
+    await expect(ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' })).rejects.toThrow(
+      'embedding vectors are empty',
+    );
+    expect(failMock).toHaveBeenCalledWith(
+      'u1',
+      'doc-1',
+      expect.stringMatching(/^ingest:/),
+      'embedding vectors are empty',
+    );
+    expect(replaceChunksMock).not.toHaveBeenCalled();
   });
 
   it('returns when a document is already ready', async () => {
     claimMock.mockResolvedValueOnce(null);
     getDocMock.mockResolvedValueOnce({ id: 'doc-1', status: 'ready' });
+
+    const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
+    await expect(
+      ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' }),
+    ).resolves.toBeUndefined();
+    expect(embedDocumentsMock).not.toHaveBeenCalled();
+  });
+
+  it('throws stored error for an unclaimed failed document', async () => {
+    claimMock.mockResolvedValueOnce(null);
+    getDocMock.mockResolvedValueOnce({
+      id: 'doc-1',
+      status: 'failed',
+      errorMessage: 'previous failure',
+    });
+
+    const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
+    await expect(ingestKnowledgeDocument({ userId: 'u1', documentId: 'doc-1' })).rejects.toThrow(
+      'previous failure',
+    );
+    expect(embedDocumentsMock).not.toHaveBeenCalled();
+  });
+
+  it('returns for an unclaimed processing document without embedding', async () => {
+    claimMock.mockResolvedValueOnce(null);
+    getDocMock.mockResolvedValueOnce({ id: 'doc-1', status: 'processing' });
 
     const { ingestKnowledgeDocument } = await import('@/lib/rag/knowledge-ingest');
     await expect(

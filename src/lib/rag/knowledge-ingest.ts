@@ -56,7 +56,7 @@ export async function ingestKnowledgeDocument(params: {
     if (embeddings.length !== markdownChunks.length) {
       throw new Error('embedding count does not match knowledge chunks');
     }
-    if (!embeddings[0] || embeddings[0].length === 0) {
+    if (embeddings.some((embedding) => embedding.length === 0)) {
       throw new Error('embedding vectors are empty');
     }
 
