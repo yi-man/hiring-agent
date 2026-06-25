@@ -48,6 +48,7 @@ describe('Navbar', () => {
 
     expect(screen.getByText('首页')).toBeInTheDocument();
     expect(screen.getByText('对话')).toBeInTheDocument();
+    expect(screen.getByText('知识库')).toBeInTheDocument();
     expect(screen.getByText('Workflow')).toBeInTheDocument();
     expect(screen.getByText('JD 工作台')).toBeInTheDocument();
     expect(screen.getByText('LLM 可观测')).toBeInTheDocument();
