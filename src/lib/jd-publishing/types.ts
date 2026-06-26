@@ -25,6 +25,92 @@ export type PublishSkillAction =
   | 'wait_for_text'
   | 'add_keywords';
 
+export type TargetDescriptor = {
+  kind: 'field' | 'button' | 'link' | 'text' | 'container';
+  role?: 'textbox' | 'button' | 'link' | 'form' | 'combobox';
+  name: string;
+  exact?: boolean;
+  valueHint?: 'title' | 'company' | 'salary' | 'location' | 'description' | 'keyword';
+  stableAttrs?: {
+    testId?: string;
+    id?: string;
+    name?: string;
+    ariaLabel?: string;
+    autocomplete?: string;
+  };
+  scope?: {
+    kind: 'form' | 'section' | 'dialog' | 'page';
+    name?: string;
+  };
+};
+
+export type DomCandidate = {
+  tag: string;
+  role?: string;
+  accessibleName?: string;
+  label?: string;
+  placeholder?: string;
+  id?: string;
+  name?: string;
+  testId?: string;
+  text?: string;
+  visible: boolean;
+  enabled: boolean;
+  editable: boolean;
+  cssPath?: string;
+};
+
+export type StructuredDomSnapshot = {
+  url: string;
+  title: string;
+  pageState: 'login' | 'publish_form' | 'list' | 'unknown';
+  headings: DomCandidate[];
+  forms: Array<{
+    name?: string;
+    fields: DomCandidate[];
+    buttons: DomCandidate[];
+  }>;
+  links: DomCandidate[];
+  textBlocks: DomCandidate[];
+};
+
+export type LocatorMatchReport = {
+  target: TargetDescriptor;
+  status: 'unique' | 'not_found' | 'ambiguous' | 'low_confidence';
+  strategy: string;
+  candidateCount: number;
+  confidence: number;
+  chosen?: DomCandidate;
+  candidates: DomCandidate[];
+  reason?: string;
+};
+
+export type BrowserTargetInput = string | TargetDescriptor;
+
+export type BrowserCommand = {
+  id: string;
+  taskId: string;
+  stepId: string;
+  action: PublishSkillAction | 'check';
+  target?: TargetDescriptor;
+  params: Record<string, unknown>;
+  timeoutMs: number;
+};
+
+export type BrowserCommandResult = {
+  commandId: string;
+  success: boolean;
+  error?: string;
+  domSnapshot?: StructuredDomSnapshot;
+  match?: LocatorMatchReport;
+};
+
+export type BrowserResolveOptions = {
+  action?: PublishSkillAction | 'check';
+  requireEditable?: boolean;
+  timeoutMs?: number;
+};
+
 export type PublishSkillMeta = Record<string, unknown> & {
   success_rate?: number;
   usage_count?: number;
@@ -90,22 +176,28 @@ export type PublishSkill = {
 export type BrowserStepResult = {
   success: boolean;
   error?: string;
-  domSnapshot?: string;
+  domSnapshot?: string | StructuredDomSnapshot;
+  match?: LocatorMatchReport;
 };
 
 export type BrowserExecutor = {
   navigate(url: string): Promise<BrowserStepResult>;
-  fill(locator: string, value: string): Promise<BrowserStepResult>;
-  click(locator: string): Promise<BrowserStepResult>;
+  fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult>;
+  click(target: BrowserTargetInput): Promise<BrowserStepResult>;
   waitForUrl(url: string): Promise<BrowserStepResult>;
   check(check: PublishStepCheck): Promise<boolean>;
   waitForText?(text: string): Promise<BrowserStepResult>;
   addKeywords?(
-    locator: string,
+    target: BrowserTargetInput,
     values: string[],
-    submitLocator: string,
+    submitTarget: BrowserTargetInput,
   ): Promise<BrowserStepResult>;
   snapshot?(): Promise<string>;
+  snapshotStructured?(): Promise<StructuredDomSnapshot>;
+  resolveTarget?(
+    target: BrowserTargetInput,
+    options?: BrowserResolveOptions,
+  ): Promise<LocatorMatchReport>;
   close?(): Promise<void>;
 };
 

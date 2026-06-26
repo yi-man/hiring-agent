@@ -6,29 +6,42 @@ import { runPublishingAgentGraph } from './graph';
 import type {
   BrowserExecutor,
   BrowserStepResult,
+  BrowserTargetInput,
+  LocatorMatchReport,
   PublishSkill,
   PublishTaskDto,
   PublishTraceStep,
+  StructuredDomSnapshot,
+  TargetDescriptor,
 } from './types';
 
 class GraphExecutor implements BrowserExecutor {
   readonly calls: string[] = [];
 
-  constructor(private readonly failures: Record<string, BrowserStepResult> = {}) {}
+  constructor(
+    private readonly failures: Record<string, BrowserStepResult> = {},
+    private readonly targetReport?: LocatorMatchReport,
+  ) {}
+
+  private targetName(target: BrowserTargetInput): string {
+    return typeof target === 'string' ? target : target.name;
+  }
 
   async navigate(url: string): Promise<BrowserStepResult> {
     this.calls.push(`navigate:${url}`);
     return this.failures.navigate ?? { success: true };
   }
 
-  async fill(locator: string, value: string): Promise<BrowserStepResult> {
-    this.calls.push(`fill:${locator}:${value}`);
-    return this.failures[`fill:${locator}`] ?? { success: true };
+  async fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult> {
+    const name = this.targetName(target);
+    this.calls.push(`fill:${name}:${value}`);
+    return this.failures[`fill:${name}`] ?? { success: true };
   }
 
-  async click(locator: string): Promise<BrowserStepResult> {
-    this.calls.push(`click:${locator}`);
-    return this.failures[`click:${locator}`] ?? { success: true };
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    const name = this.targetName(target);
+    this.calls.push(`click:${name}`);
+    return this.failures[`click:${name}`] ?? { success: true };
   }
 
   async waitForUrl(url: string): Promise<BrowserStepResult> {
@@ -44,6 +57,41 @@ class GraphExecutor implements BrowserExecutor {
   async snapshot(): Promise<string> {
     this.calls.push('snapshot');
     return '<html>snapshot</html>';
+  }
+
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    this.calls.push('snapshotStructured');
+    return {
+      url: 'http://localhost:6183/employer/jobs/new',
+      title: '发布职位',
+      pageState: 'publish_form',
+      headings: [],
+      forms: [],
+      links: [],
+      textBlocks: [],
+    };
+  }
+
+  async resolveTarget(target: BrowserTargetInput): Promise<LocatorMatchReport> {
+    this.calls.push(`resolveTarget:${this.targetName(target)}`);
+    if (this.targetReport) return this.targetReport;
+    const descriptor =
+      typeof target === 'string' ? { kind: 'field' as const, name: target, exact: false } : target;
+    return {
+      target: descriptor,
+      status: 'unique',
+      strategy: 'role_name',
+      candidateCount: 1,
+      confidence: 0.9,
+      chosen: {
+        tag: descriptor.kind === 'button' ? 'button' : 'input',
+        accessibleName: descriptor.name,
+        visible: true,
+        enabled: true,
+        editable: descriptor.kind === 'field',
+      },
+      candidates: [],
+    };
   }
 }
 
@@ -358,6 +406,243 @@ describe('runPublishingAgentGraph', () => {
         status: 'failed',
         errorMessage: 'selector not found',
       }),
+    );
+  });
+
+  it('re-explores a failed structured target and patches only that step into a new version', async () => {
+    const staleTarget: TargetDescriptor = {
+      kind: 'field',
+      role: 'textbox',
+      name: '旧版职位名称',
+      exact: true,
+      valueHint: 'title',
+      scope: { kind: 'form', name: '发布职位' },
+    };
+    const repairedTarget: TargetDescriptor = {
+      ...staleTarget,
+      name: '职位名称',
+      stableAttrs: { name: 'title' },
+    };
+    const failingSkill: PublishSkill = {
+      ...simpleSkill,
+      steps: [
+        {
+          id: 'fill_title',
+          type: 'action',
+          action: 'fill',
+          params: { target: staleTarget, value: '{{input.title}}' },
+          next: 'fill_company',
+          onFail: {
+            type: 'fallback_agent',
+            reason: 'title target changed',
+          },
+        },
+        {
+          id: 'fill_company',
+          type: 'action',
+          action: 'fill',
+          params: { locator: '公司名称', value: '{{input.company}}' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ],
+    };
+    const repairReport: LocatorMatchReport = {
+      target: repairedTarget,
+      status: 'unique',
+      strategy: 'stable_attr:name',
+      candidateCount: 1,
+      confidence: 0.96,
+      chosen: {
+        tag: 'input',
+        name: 'title',
+        accessibleName: '职位名称',
+        visible: true,
+        enabled: true,
+        editable: true,
+      },
+      candidates: [],
+    };
+    const executor = new GraphExecutor(
+      {
+        'fill:旧版职位名称': {
+          success: false,
+          error: 'not_found_target: old title',
+          match: {
+            ...repairReport,
+            target: staleTarget,
+            status: 'not_found',
+            candidateCount: 0,
+            confidence: 0,
+            chosen: undefined,
+          },
+        },
+      },
+      repairReport,
+    );
+    const createNextSkillVersion = jest.fn().mockResolvedValue({
+      ...failingSkill,
+      id: 'skill-2',
+      version: 2,
+      steps: [
+        {
+          ...failingSkill.steps[0],
+          params: { target: repairedTarget, value: '{{input.title}}' },
+        },
+        failingSkill.steps[1],
+        failingSkill.steps[2],
+      ],
+    });
+
+    const result = await runPublishingAgentGraph({
+      jobDescription: sampleJobDescription,
+      settings: settings(),
+      executor,
+      target: {
+        loginUrl: 'http://localhost:6183/employer/login',
+        newJobUrl: 'http://localhost:6183/employer/jobs/new',
+      },
+      credentials: { username: 'admin', password: 'boss123' },
+      dependencies: {
+        getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
+        createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
+        completeTask: jest.fn().mockResolvedValue(undefined),
+        createNextSkillVersion,
+      },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(executor.calls).toEqual(
+      expect.arrayContaining(['snapshotStructured', 'resolveTarget:旧版职位名称']),
+    );
+    expect(createNextSkillVersion).toHaveBeenCalledWith({
+      previousSkill: failingSkill,
+      steps: [
+        {
+          ...failingSkill.steps[0],
+          params: { target: repairedTarget, value: '{{input.title}}' },
+        },
+        failingSkill.steps[1],
+        failingSkill.steps[2],
+      ],
+      meta: expect.objectContaining({
+        created_from: 'agent',
+        failed_step_id: 'fill_title',
+        repair_reason: expect.stringContaining('stable_attr:name'),
+      }),
+    });
+    expect(result.trace.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: 'fallback_agent',
+          result: expect.objectContaining({
+            success: true,
+            match: repairReport,
+            domSnapshot: expect.objectContaining({ pageState: 'publish_form' }),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('fails with ambiguous_target and does not upgrade when re-explore remains ambiguous', async () => {
+    const target: TargetDescriptor = {
+      kind: 'button',
+      role: 'button',
+      name: '发布职位',
+      exact: true,
+    };
+    const ambiguousReport: LocatorMatchReport = {
+      target,
+      status: 'ambiguous',
+      strategy: 'role_name',
+      candidateCount: 2,
+      confidence: 0.5,
+      candidates: [
+        {
+          tag: 'button',
+          accessibleName: '发布职位',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+        {
+          tag: 'button',
+          accessibleName: '发布职位',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+      reason: 'two publish buttons',
+    };
+    const failingSkill: PublishSkill = {
+      ...simpleSkill,
+      steps: [
+        {
+          id: 'submit_job',
+          type: 'action',
+          action: 'click',
+          params: { target },
+          next: 'done',
+          onFail: {
+            type: 'fallback_agent',
+            reason: 'submit target ambiguous',
+          },
+        },
+        { id: 'done', type: 'end' },
+      ],
+    };
+    const createNextSkillVersion = jest.fn();
+    const completeTask = jest.fn().mockResolvedValue(undefined);
+
+    const result = await runPublishingAgentGraph({
+      jobDescription: sampleJobDescription,
+      settings: settings(),
+      executor: new GraphExecutor(
+        {
+          'click:发布职位': {
+            success: false,
+            error: 'ambiguous_target: two publish buttons',
+            match: ambiguousReport,
+          },
+        },
+        ambiguousReport,
+      ),
+      target: {
+        loginUrl: 'http://localhost:6183/employer/login',
+        newJobUrl: 'http://localhost:6183/employer/jobs/new',
+      },
+      credentials: { username: 'admin', password: 'boss123' },
+      dependencies: {
+        getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
+        createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
+        completeTask,
+        createNextSkillVersion,
+      },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(createNextSkillVersion).not.toHaveBeenCalled();
+    expect(completeTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        errorMessage: expect.stringContaining('ambiguous_target'),
+      }),
+    );
+    expect(result.trace.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: 'fallback_agent',
+          result: expect.objectContaining({
+            success: false,
+            error: expect.stringContaining('ambiguous_target'),
+            match: ambiguousReport,
+          }),
+        }),
+      ]),
     );
   });
 });

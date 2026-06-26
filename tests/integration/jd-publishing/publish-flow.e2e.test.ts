@@ -14,7 +14,11 @@ import { PlaywrightBrowserExecutor } from '@/lib/jd-publishing/executors/playwri
 import { createExploredPublishSkill } from '@/lib/jd-publishing/publish-repo';
 import { publishJobDescriptionToBossLike } from '@/lib/jd-publishing/service';
 import { bossLikePublishSkill } from '@/lib/jd-publishing/skill-registry';
-import type { PublishJobDescriptionSettings, PublishSkill } from '@/lib/jd-publishing/types';
+import type {
+  PublishJobDescriptionSettings,
+  PublishSkill,
+  PublishTraceStep,
+} from '@/lib/jd-publishing/types';
 import { prisma } from '@/lib/prisma';
 import type { JobDescriptionDto, JD } from '@/types';
 
@@ -250,9 +254,11 @@ function brokenSkillWithRepair(): PublishSkill {
     isActive: true,
     steps: bossLikePublishSkill.steps.map((step) => {
       if (step.type !== 'action' || step.id !== 'fill_title') return step;
+      const legacyParams = { ...step.params };
+      delete legacyParams.target;
       return {
         ...step,
-        params: { ...step.params, locator: '旧版职位名称' },
+        params: { ...legacyParams, locator: '旧版职位名称' },
         onFail: {
           type: 'fallback_agent',
           reason: 'title label changed',
@@ -316,6 +322,27 @@ describe('JD publishing integration flow with real postgres and browser UI', () 
       expect(skillsAfterExplore[0]?.meta).toEqual(
         expect.objectContaining({ created_from: 'explore' }),
       );
+      const exploredSteps = skillsAfterExplore[0]?.steps as PublishSkill['steps'];
+      expect(exploredSteps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'fill_title',
+            params: expect.objectContaining({
+              target: expect.objectContaining({
+                kind: 'field',
+                name: '职位名称',
+                valueHint: 'title',
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            id: 'submit_job',
+            params: expect.objectContaining({
+              target: expect.objectContaining({ kind: 'button', name: '发布职位' }),
+            }),
+          }),
+        ]),
+      );
       expect(second.status).toBe('success');
       expect(second.skillId).toBe(skillsAfterExplore[0]?.id);
       expect(skillsAfterReuse.map((skill) => skill.id)).toEqual([skillsAfterExplore[0]?.id]);
@@ -329,6 +356,35 @@ describe('JD publishing integration flow with real postgres and browser UI', () 
           expect.objectContaining({ stepId: 'verify_published', action: 'condition' }),
         ]),
       );
+      const secondTraceSteps = (secondTask?.trace?.steps ?? []) as PublishTraceStep[];
+      const domActionSteps = secondTraceSteps.filter((step) =>
+        ['fill', 'click', 'add_keywords', 'wait_for_text'].includes(step.action),
+      );
+      expect(domActionSteps.length).toBeGreaterThan(0);
+      expect(domActionSteps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            stepId: 'fill_title',
+            result: expect.objectContaining({
+              match: expect.objectContaining({ status: 'unique' }),
+            }),
+          }),
+          expect.objectContaining({
+            stepId: 'submit_job',
+            result: expect.objectContaining({
+              match: expect.objectContaining({ status: 'unique' }),
+            }),
+          }),
+        ]),
+      );
+      for (const step of domActionSteps) {
+        expect(step.result.match).toEqual(
+          expect.objectContaining({
+            status: 'unique',
+            candidateCount: expect.any(Number),
+          }),
+        );
+      }
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();
@@ -362,7 +418,13 @@ describe('JD publishing integration flow with real postgres and browser UI', () 
       expect(failed.skillId).toBe(brokenSkill.id);
       expect(failedTask?.trace?.steps).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ stepId: 'fill_title', action: 'fill' }),
+          expect.objectContaining({
+            stepId: 'fill_title',
+            action: 'fill',
+            result: expect.objectContaining({
+              match: expect.objectContaining({ status: 'not_found' }),
+            }),
+          }),
           expect.objectContaining({ stepId: 'fallback_agent', action: 'fallback_agent' }),
           expect.objectContaining({ stepId: 'skill_upgrade', action: 'skill_upgrade' }),
         ]),

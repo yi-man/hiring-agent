@@ -1,10 +1,14 @@
 import { randomUUID } from 'crypto';
-import { bossLikePublishSkill } from './skill-registry';
+import { buildBossLikeStructuredPublishSkill } from './skill-registry';
 import type {
   BrowserExecutor,
+  BrowserResolveOptions,
+  BrowserTargetInput,
   BrowserStepResult,
   PublishExecutionContext,
   PublishSkill,
+  PublishSkillAction,
+  PublishStep,
 } from './types';
 
 const REQUIRED_BOSS_LIKE_FORM_TEXT = [
@@ -25,6 +29,74 @@ function readString(record: Record<string, unknown>, key: string): string {
 function ensureSuccess(label: string, result: BrowserStepResult): void {
   if (!result.success) {
     throw new Error(`${label} failed: ${result.error ?? 'unknown browser error'}`);
+  }
+}
+
+function actionResolveOptions(action: PublishSkillAction): BrowserResolveOptions {
+  if (action === 'fill' || action === 'add_keywords') {
+    return { action, requireEditable: true };
+  }
+  return { action };
+}
+
+function isBrowserTargetInput(value: unknown): value is BrowserTargetInput {
+  if (typeof value === 'string') return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.kind === 'string' && typeof record.name === 'string';
+}
+
+async function ensureTargetResolvable(params: {
+  executor: BrowserExecutor;
+  step: Extract<PublishStep, { type: 'action' }>;
+  target: BrowserTargetInput;
+  options: BrowserResolveOptions;
+}): Promise<void> {
+  const { executor, step, target, options } = params;
+  if (!executor.resolveTarget) return;
+  const report = await executor.resolveTarget(target, options);
+  if (report.status !== 'unique') {
+    throw new Error(
+      `explore_target_not_unique: ${step.id} ${report.status} ${report.reason ?? report.target.name}`,
+    );
+  }
+}
+
+async function dryRunResolveSkillTargets(params: {
+  executor: BrowserExecutor;
+  skill: PublishSkill;
+}): Promise<void> {
+  const { executor, skill } = params;
+  const currentPageTargetSteps = new Set([
+    'fill_title',
+    'fill_company',
+    'fill_salary',
+    'fill_location',
+    'fill_description',
+    'add_keywords',
+    'submit_job',
+  ]);
+  for (const step of skill.steps) {
+    if (step.type !== 'action') continue;
+    if (!currentPageTargetSteps.has(step.id)) continue;
+    const target = step.params.target;
+    if (isBrowserTargetInput(target)) {
+      await ensureTargetResolvable({
+        executor,
+        step,
+        target,
+        options: actionResolveOptions(step.action),
+      });
+    }
+    const submitTarget = step.params.submitTarget;
+    if (isBrowserTargetInput(submitTarget)) {
+      await ensureTargetResolvable({
+        executor,
+        step,
+        target: submitTarget,
+        options: { action: 'click' },
+      });
+    }
   }
 }
 
@@ -82,9 +154,12 @@ export async function exploreBossLikePublishSkill(params: {
   }
 
   await executor.snapshot?.();
+  const structuredSnapshot = await executor.snapshotStructured?.();
+  if (structuredSnapshot && structuredSnapshot.pageState !== 'publish_form') {
+    throw new Error(`boss-like explore page is not publish_form: ${structuredSnapshot.pageState}`);
+  }
 
-  return {
-    ...bossLikePublishSkill,
+  const skill = buildBossLikeStructuredPublishSkill({
     id: `boss-like-publish-jd-explore-${randomUUID()}`,
     version: 1,
     isActive: true,
@@ -93,5 +168,9 @@ export async function exploreBossLikePublishSkill(params: {
       usage_count: 0,
       created_from: 'explore',
     },
-  };
+  });
+
+  await dryRunResolveSkillTargets({ executor, skill });
+
+  return skill;
 }

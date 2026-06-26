@@ -13,6 +13,9 @@ import {
 import { executePublishingStep } from './skill-executor';
 import type {
   BrowserExecutor,
+  BrowserResolveOptions,
+  BrowserTargetInput,
+  LocatorMatchReport,
   PublishExecutionContext,
   PublishJobDescriptionSettings,
   PublishPlatform,
@@ -23,6 +26,7 @@ import type {
   PublishTaskDto,
   PublishTaskResult,
   PublishTraceStep,
+  StructuredDomSnapshot,
 } from './types';
 
 type PublishingRoute = 'execute' | 'fallback' | 'upgrade' | 'finalize';
@@ -61,6 +65,7 @@ const PublishingState = Annotation.Root({
   onFail: Annotation<PublishStepOnFail | undefined>(),
   failedTraceStep: Annotation<PublishTraceStep | undefined>(),
   repairSteps: Annotation<PublishStep[] | undefined>(),
+  repairReason: Annotation<string | undefined>(),
   errorMessage: Annotation<string | undefined>(),
 });
 
@@ -92,8 +97,56 @@ function lastError(traceStep?: PublishTraceStep, fallbackReason?: string): strin
   return traceStep?.result.error ?? fallbackReason;
 }
 
-function buildFallbackTraceStep(state: PublishingGraphState): PublishTraceStep {
-  const repairAvailable = Boolean(state.repairSteps?.length);
+function isBrowserTargetInput(value: unknown): value is BrowserTargetInput {
+  if (typeof value === 'string') return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.kind === 'string' && typeof record.name === 'string';
+}
+
+function resolveOptionsForTraceStep(traceStep: PublishTraceStep): BrowserResolveOptions {
+  if (traceStep.action === 'fill' || traceStep.action === 'add_keywords') {
+    return { action: traceStep.action, requireEditable: true };
+  }
+  if (traceStep.action === 'click' || traceStep.action === 'wait_for_text') {
+    return { action: traceStep.action };
+  }
+  return {};
+}
+
+function targetFailureCode(report: LocatorMatchReport): string {
+  if (report.status === 'ambiguous') return 'ambiguous_target';
+  if (report.status === 'low_confidence') return 'low_confidence_target';
+  return 'not_found_target';
+}
+
+function patchFailedStepTarget(params: {
+  steps: PublishStep[];
+  failedStepId: string;
+  target: BrowserTargetInput;
+}): PublishStep[] {
+  return params.steps.map((step) => {
+    if (step.id !== params.failedStepId || step.type !== 'action') return step;
+    return {
+      ...step,
+      params: {
+        ...step.params,
+        target: params.target,
+      },
+    };
+  });
+}
+
+function buildFallbackTraceStep(
+  state: PublishingGraphState,
+  params: {
+    repairSteps?: PublishStep[];
+    errorMessage?: string;
+    domSnapshot?: string | StructuredDomSnapshot;
+    match?: LocatorMatchReport;
+  } = {},
+): PublishTraceStep {
+  const repairAvailable = Boolean(params.repairSteps?.length ?? state.repairSteps?.length);
   return {
     stepId: 'fallback_agent',
     action: 'fallback_agent',
@@ -104,8 +157,11 @@ function buildFallbackTraceStep(state: PublishingGraphState): PublishTraceStep {
     },
     result: {
       success: repairAvailable,
-      error: repairAvailable ? undefined : (state.errorMessage ?? state.onFail?.reason),
-      domSnapshot: state.failedTraceStep?.result.domSnapshot,
+      error: repairAvailable
+        ? undefined
+        : (params.errorMessage ?? state.errorMessage ?? state.onFail?.reason),
+      domSnapshot: params.domSnapshot ?? state.failedTraceStep?.result.domSnapshot,
+      match: params.match,
     },
   };
 }
@@ -244,10 +300,52 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
   }
 
   async function fallbackAgentNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
-    const fallbackTrace = buildFallbackTraceStep(state);
+    const skill = requireSkill(state);
+    const failedTraceStep = state.failedTraceStep;
+    const failedTarget = failedTraceStep?.params.target;
+    let repairSteps = state.repairSteps;
+    let repairReason = state.repairReason;
+    let fallbackError = state.errorMessage;
+    let fallbackSnapshot = failedTraceStep?.result.domSnapshot;
+    let fallbackMatch: LocatorMatchReport | undefined;
+
+    if (!repairSteps?.length && failedTraceStep && isBrowserTargetInput(failedTarget)) {
+      const structuredSnapshot = state.executor.snapshotStructured
+        ? await state.executor.snapshotStructured().catch(() => undefined)
+        : undefined;
+      fallbackSnapshot = structuredSnapshot ?? fallbackSnapshot;
+      const report = state.executor.resolveTarget
+        ? await state.executor
+            .resolveTarget(failedTarget, resolveOptionsForTraceStep(failedTraceStep))
+            .catch(() => undefined)
+        : undefined;
+      if (report) {
+        fallbackMatch = report;
+        if (report.status === 'unique') {
+          repairSteps = patchFailedStepTarget({
+            steps: skill.steps,
+            failedStepId: failedTraceStep.stepId,
+            target: report.target,
+          });
+          repairReason = `target re-explore resolved by ${report.strategy}`;
+        } else {
+          fallbackError = `${targetFailureCode(report)}: ${report.reason ?? report.target.name}`;
+        }
+      }
+    }
+
+    const fallbackTrace = buildFallbackTraceStep(state, {
+      repairSteps,
+      errorMessage: fallbackError,
+      domSnapshot: fallbackSnapshot,
+      match: fallbackMatch,
+    });
     return {
       traceSteps: appendTrace(state, fallbackTrace),
-      route: state.repairSteps?.length ? 'upgrade' : 'finalize',
+      route: repairSteps?.length ? 'upgrade' : 'finalize',
+      repairSteps,
+      repairReason,
+      errorMessage: fallbackError,
     };
   }
 
@@ -268,7 +366,8 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
         repaired_from_skill_id: skill.id,
         repaired_from_version: skill.version,
         failed_step_id: state.failedTraceStep?.stepId ?? state.currentStepId ?? '',
-        repair_reason: state.onFail?.reason ?? state.errorMessage ?? 'step failed',
+        repair_reason:
+          state.repairReason ?? state.onFail?.reason ?? state.errorMessage ?? 'step failed',
       },
     });
     return {
@@ -368,6 +467,7 @@ export async function runPublishingAgentGraph(options: {
       onFail: undefined,
       failedTraceStep: undefined,
       repairSteps: undefined,
+      repairReason: undefined,
       errorMessage: undefined,
     },
     { recursionLimit: 200 },

@@ -1,5 +1,6 @@
 import type {
   BrowserExecutor,
+  BrowserTargetInput,
   BrowserStepResult,
   PublishActionStep,
   PublishConditionStep,
@@ -55,6 +56,18 @@ function asStringList(value: unknown): string[] {
     : [];
 }
 
+function isBrowserTargetInput(value: unknown): value is BrowserTargetInput {
+  if (typeof value === 'string') return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.kind === 'string' && typeof record.name === 'string';
+}
+
+function asBrowserTargetInput(preferred: unknown, legacyLocator: unknown): BrowserTargetInput {
+  if (isBrowserTargetInput(preferred)) return preferred;
+  return asString(legacyLocator);
+}
+
 async function executeActionStep(
   step: PublishActionStep,
   params: Record<string, unknown>,
@@ -64,10 +77,13 @@ async function executeActionStep(
     return executor.navigate(asString(params.url));
   }
   if (step.action === 'fill') {
-    return executor.fill(asString(params.locator), asString(params.value));
+    return executor.fill(
+      asBrowserTargetInput(params.target, params.locator),
+      asString(params.value),
+    );
   }
   if (step.action === 'click') {
-    return executor.click(asString(params.locator));
+    return executor.click(asBrowserTargetInput(params.target, params.locator));
   }
   if (step.action === 'wait_for_url') {
     return executor.waitForUrl(asString(params.url));
@@ -83,9 +99,9 @@ async function executeActionStep(
       return { success: false, error: 'executor does not support add_keywords' };
     }
     return executor.addKeywords(
-      asString(params.locator),
+      asBrowserTargetInput(params.target, params.locator),
       asStringList(params.values),
-      asString(params.submitLocator),
+      asBrowserTargetInput(params.submitTarget, params.submitLocator),
     );
   }
   return { success: false, error: `unsupported action: ${step.action}` };

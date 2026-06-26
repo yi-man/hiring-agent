@@ -1,24 +1,54 @@
-import type { Locator, Page, Browser } from 'playwright';
+import type { Page, Browser } from 'playwright';
+import {
+  createStructuredDomSnapshot,
+  resolveTarget as resolveDomTarget,
+} from '@/lib/jd-publishing/dom-resolver';
 import type {
   BrowserExecutor,
+  BrowserResolveOptions,
   BrowserStepResult,
+  BrowserTargetInput,
+  LocatorMatchReport,
   PublishStepCheck,
+  StructuredDomSnapshot,
 } from '@/lib/jd-publishing/types';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DOM_SNAPSHOT_MAX_CHARS = 8_000;
+const RESOLVE_POLL_INTERVAL_MS = 50;
 
 export function resolveHeadlessOption(headless: boolean | undefined): boolean {
   return headless ?? false;
 }
 
-function escapeXPathText(text: string): string {
-  if (!text.includes("'")) return `'${text}'`;
-  return `concat('${text.split("'").join("', \"'\", '")}')`;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
-function normalizeLocator(locator: string): string {
-  return locator.trim().replace(/\s+\*$/, '');
+async function waitForAnyVisibleText(
+  page: Page,
+  text: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const matches = page.getByText(text, { exact: false });
+    const count = await matches.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      if (
+        await matches
+          .nth(index)
+          .isVisible()
+          .catch(() => false)
+      ) {
+        return true;
+      }
+    }
+    await sleep(RESOLVE_POLL_INTERVAL_MS);
+  } while (Date.now() < deadline);
+  return false;
 }
 
 export class PlaywrightBrowserExecutor implements BrowserExecutor {
@@ -56,6 +86,11 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
       .catch(() => '');
   }
 
+  private async structuredDomSnapshot(): Promise<StructuredDomSnapshot> {
+    const page = await this.getPage();
+    return createStructuredDomSnapshot(page);
+  }
+
   private async wrap(action: () => Promise<void>): Promise<BrowserStepResult> {
     try {
       await action();
@@ -69,37 +104,46 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     }
   }
 
-  private async locatorFromLabelText(page: Page, locator: string): Promise<Locator> {
-    const label = normalizeLocator(locator);
-    const labelExpression = escapeXPathText(label);
-    const byLabel = page.getByLabel(label, { exact: false });
-    const byPlaceholder = page.getByPlaceholder(label, { exact: false });
-    const inputAfterLabel = page.locator(
-      `xpath=//label[contains(normalize-space(.), ${labelExpression})]` +
-        `/following::*[self::input or self::textarea][1]`,
-    );
-
-    return byLabel.or(byPlaceholder).or(inputAfterLabel).or(page.locator(locator)).first();
+  private async targetFailureResult(report: LocatorMatchReport): Promise<BrowserStepResult> {
+    const errorCode =
+      report.status === 'ambiguous'
+        ? 'ambiguous_target'
+        : report.status === 'low_confidence'
+          ? 'low_confidence_target'
+          : 'not_found_target';
+    return {
+      success: false,
+      error: `${errorCode}: ${report.reason ?? report.target.name}`,
+      domSnapshot: await this.structuredDomSnapshot().catch(() => ''),
+      match: report,
+    };
   }
 
-  private async clickBestMatch(page: Page, locator: string): Promise<void> {
-    const label = normalizeLocator(locator);
-    const candidates: Locator[] = [
-      page.getByRole('button', { name: label, exact: false }).first(),
-      page.getByRole('link', { name: label, exact: false }).first(),
-      page.getByText(label, { exact: true }).first(),
-      page.locator(locator).first(),
-    ];
-    let lastError: unknown;
-    for (const candidate of candidates) {
-      try {
-        await candidate.click({ timeout: this.timeoutMs });
-        return;
-      } catch (error) {
-        lastError = error;
-      }
+  private async targetErrorResult(
+    error: unknown,
+    match?: LocatorMatchReport,
+  ): Promise<BrowserStepResult> {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown browser execution error',
+      domSnapshot: await this.structuredDomSnapshot().catch(() => ''),
+      match,
+    };
+  }
+
+  private async resolveForAction(
+    target: BrowserTargetInput,
+    options: BrowserResolveOptions,
+  ): Promise<Awaited<ReturnType<typeof resolveDomTarget>>> {
+    const page = await this.getPage();
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
+    const deadline = Date.now() + timeoutMs;
+    let lastResult = await resolveDomTarget(page, target, options);
+    while (lastResult.report.status === 'not_found' && Date.now() < deadline) {
+      await sleep(RESOLVE_POLL_INTERVAL_MS);
+      lastResult = await resolveDomTarget(page, target, options);
     }
-    throw lastError instanceof Error ? lastError : new Error(`Unable to click ${locator}`);
+    return lastResult;
   }
 
   async navigate(url: string): Promise<BrowserStepResult> {
@@ -109,18 +153,35 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     });
   }
 
-  async fill(locator: string, value: string): Promise<BrowserStepResult> {
-    return this.wrap(async () => {
-      const page = await this.getPage();
-      await (await this.locatorFromLabelText(page, locator)).fill(value);
-    });
+  async fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult> {
+    try {
+      const resolved = await this.resolveForAction(target, {
+        action: 'fill',
+        requireEditable: true,
+      });
+      if (!resolved.locator || resolved.report.status !== 'unique') {
+        return this.targetFailureResult(resolved.report);
+      }
+      await resolved.locator.fill(value, { timeout: this.timeoutMs });
+      return { success: true, match: resolved.report };
+    } catch (error) {
+      return this.targetErrorResult(error);
+    }
   }
 
-  async click(locator: string): Promise<BrowserStepResult> {
-    return this.wrap(async () => {
-      const page = await this.getPage();
-      await this.clickBestMatch(page, locator);
-    });
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    let match: LocatorMatchReport | undefined;
+    try {
+      const resolved = await this.resolveForAction(target, { action: 'click' });
+      match = resolved.report;
+      if (!resolved.locator || resolved.report.status !== 'unique') {
+        return this.targetFailureResult(resolved.report);
+      }
+      await resolved.locator.click({ timeout: this.timeoutMs });
+      return { success: true, match: resolved.report };
+    } catch (error) {
+      return this.targetErrorResult(error, match);
+    }
   }
 
   async waitForUrl(url: string): Promise<BrowserStepResult> {
@@ -132,29 +193,66 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
   }
 
   async waitForText(text: string): Promise<BrowserStepResult> {
-    return this.wrap(async () => {
-      const page = await this.getPage();
-      await page.getByText(text, { exact: false }).first().waitFor({ timeout: this.timeoutMs });
-    });
+    let match: LocatorMatchReport | undefined;
+    try {
+      const resolved = await this.resolveForAction(
+        { kind: 'text', name: text, exact: false },
+        { action: 'wait_for_text' },
+      );
+      match = resolved.report;
+      if (!resolved.locator || resolved.report.status !== 'unique') {
+        return this.targetFailureResult(resolved.report);
+      }
+      await resolved.locator.waitFor({ timeout: this.timeoutMs });
+      return { success: true, match: resolved.report };
+    } catch (error) {
+      return this.targetErrorResult(error, match);
+    }
   }
 
   async snapshot(): Promise<string> {
     return this.domSnapshot();
   }
 
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    return this.structuredDomSnapshot();
+  }
+
+  async resolveTarget(
+    target: BrowserTargetInput,
+    options: BrowserResolveOptions = {},
+  ): Promise<LocatorMatchReport> {
+    return (await this.resolveForAction(target, options)).report;
+  }
+
   async addKeywords(
-    locator: string,
+    target: BrowserTargetInput,
     values: string[],
-    submitLocator: string,
+    submitTarget: BrowserTargetInput,
   ): Promise<BrowserStepResult> {
-    return this.wrap(async () => {
-      const page = await this.getPage();
+    let match: LocatorMatchReport | undefined;
+    try {
       for (const value of values) {
         if (!value.trim()) continue;
-        await (await this.locatorFromLabelText(page, locator)).fill(value);
-        await this.clickBestMatch(page, submitLocator);
+        const field = await this.resolveForAction(target, {
+          action: 'add_keywords',
+          requireEditable: true,
+        });
+        match = field.report;
+        if (!field.locator || field.report.status !== 'unique') {
+          return this.targetFailureResult(field.report);
+        }
+        const submit = await this.resolveForAction(submitTarget, { action: 'click' });
+        if (!submit.locator || submit.report.status !== 'unique') {
+          return this.targetFailureResult(submit.report);
+        }
+        await field.locator.fill(value, { timeout: this.timeoutMs });
+        await submit.locator.click({ timeout: this.timeoutMs });
       }
-    });
+      return { success: true, match };
+    } catch (error) {
+      return this.targetErrorResult(error, match);
+    }
   }
 
   async check(check: PublishStepCheck): Promise<boolean> {
@@ -171,20 +269,13 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     if (check.type === 'dom_exists') {
       if (!check.selector) return false;
       return page
-        .locator(check.selector)
-        .first()
-        .waitFor({ timeout })
+        .waitForSelector(check.selector, { timeout, state: 'visible' })
         .then(() => true)
         .catch(() => false);
     }
     if (check.type === 'text_contains') {
       if (!check.text) return false;
-      return page
-        .getByText(check.text, { exact: false })
-        .first()
-        .waitFor({ timeout })
-        .then(() => true)
-        .catch(() => false);
+      return waitForAnyVisibleText(page, check.text, timeout);
     }
     return false;
   }
