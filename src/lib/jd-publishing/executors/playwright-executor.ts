@@ -16,6 +16,10 @@ export function isRouteContextDisposedError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('Request context disposed');
 }
 
+export function resolveHeadlessOption(headless: boolean | undefined): boolean {
+  return headless ?? false;
+}
+
 function escapeXPathText(text: string): string {
   if (!text.includes("'")) return `'${text}'`;
   return `concat('${text.split("'").join("', \"'\", '")}')`;
@@ -44,7 +48,9 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
   private async getPage(): Promise<Page> {
     if (this.page) return this.page;
     const { chromium } = await import('playwright');
-    this.browser = await chromium.launch({ headless: this.options.headless ?? true });
+    this.browser = await chromium.launch({
+      headless: resolveHeadlessOption(this.options.headless),
+    });
     const context = await this.browser.newContext();
     const apiBaseUrl = this.options.apiBaseUrl?.replace(/\/+$/, '');
     if (apiBaseUrl) {

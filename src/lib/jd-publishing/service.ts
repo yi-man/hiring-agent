@@ -19,7 +19,6 @@ import type {
 } from './types';
 
 const DEFAULT_BOSS_LIKE_BASE_URL = 'http://localhost:6183';
-const DEFAULT_BOSS_LIKE_API_BASE_URL = 'http://localhost:6810';
 
 function targetUrls(baseUrl: string): Record<string, string> {
   const normalized = baseUrl.replace(/\/+$/, '');
@@ -27,6 +26,11 @@ function targetUrls(baseUrl: string): Record<string, string> {
     loginUrl: `${normalized}/employer/login`,
     newJobUrl: `${normalized}/employer/jobs/new`,
   };
+}
+
+function optionalEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value || undefined;
 }
 
 async function resolveActivePublishSkill(platform: PublishPlatform): Promise<PublishSkill> {
@@ -83,7 +87,7 @@ export async function publishJobDescriptionToBossLike(options: {
   const executor =
     options.executor ??
     new PlaywrightBrowserExecutor({
-      apiBaseUrl: process.env.BOSS_LIKE_API_BASE_URL || DEFAULT_BOSS_LIKE_API_BASE_URL,
+      apiBaseUrl: optionalEnv('BOSS_LIKE_API_BASE_URL'),
     });
   const shouldCloseExecutor = !options.executor;
   const baseUrl = process.env.BOSS_LIKE_BASE_URL || DEFAULT_BOSS_LIKE_BASE_URL;

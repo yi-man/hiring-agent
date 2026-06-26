@@ -73,6 +73,15 @@ const dbSkill: PublishSkill = {
 
 const originalEnv = { ...process.env };
 
+function restoreEnv(name: string): void {
+  const value = originalEnv[name];
+  if (typeof value === 'undefined') {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
 function createExecutor(): BrowserExecutor & { close: jest.Mock<Promise<void>, []> } {
   return {
     navigate: jest.fn(),
@@ -87,10 +96,10 @@ function createExecutor(): BrowserExecutor & { close: jest.Mock<Promise<void>, [
 describe('publishJobDescriptionToBossLike', () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    process.env.BOSS_LIKE_BASE_URL = originalEnv.BOSS_LIKE_BASE_URL;
-    process.env.BOSS_LIKE_API_BASE_URL = originalEnv.BOSS_LIKE_API_BASE_URL;
-    process.env.BOSS_LIKE_EMPLOYER_USERNAME = originalEnv.BOSS_LIKE_EMPLOYER_USERNAME;
-    process.env.BOSS_LIKE_EMPLOYER_PASSWORD = originalEnv.BOSS_LIKE_EMPLOYER_PASSWORD;
+    restoreEnv('BOSS_LIKE_BASE_URL');
+    restoreEnv('BOSS_LIKE_API_BASE_URL');
+    restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
+    restoreEnv('BOSS_LIKE_EMPLOYER_PASSWORD');
 
     createPublishTaskMock.mockResolvedValue({
       id: 'task-1',
@@ -109,10 +118,10 @@ describe('publishJobDescriptionToBossLike', () => {
   });
 
   afterAll(() => {
-    process.env.BOSS_LIKE_BASE_URL = originalEnv.BOSS_LIKE_BASE_URL;
-    process.env.BOSS_LIKE_API_BASE_URL = originalEnv.BOSS_LIKE_API_BASE_URL;
-    process.env.BOSS_LIKE_EMPLOYER_USERNAME = originalEnv.BOSS_LIKE_EMPLOYER_USERNAME;
-    process.env.BOSS_LIKE_EMPLOYER_PASSWORD = originalEnv.BOSS_LIKE_EMPLOYER_PASSWORD;
+    restoreEnv('BOSS_LIKE_BASE_URL');
+    restoreEnv('BOSS_LIKE_API_BASE_URL');
+    restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
+    restoreEnv('BOSS_LIKE_EMPLOYER_PASSWORD');
   });
 
   it('creates a task, runs the active DB skill, and stores a successful trace', async () => {
@@ -244,8 +253,44 @@ describe('publishJobDescriptionToBossLike', () => {
     expect(result.status).toBe('failed');
     expect(result.trace.steps[0]?.result.error).toBe('browser launch failed');
     expect(PlaywrightBrowserExecutorMock).toHaveBeenCalledWith({
-      apiBaseUrl: 'http://localhost:6810',
+      apiBaseUrl: undefined,
     });
     expect(executor.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an explicit boss-like API base URL to the default Playwright executor', async () => {
+    const executor = createExecutor();
+    process.env.BOSS_LIKE_API_BASE_URL = 'http://localhost:6810';
+    getActivePublishSkillFromDbMock.mockResolvedValueOnce(dbSkill);
+    PlaywrightBrowserExecutorMock.mockImplementationOnce(
+      () => executor as unknown as PlaywrightBrowserExecutor,
+    );
+    runPublishingSkillMock.mockResolvedValueOnce({
+      taskId: 'task-1',
+      skillId: 'db-skill',
+      status: 'success',
+      trace: {
+        taskId: 'task-1',
+        skillId: 'db-skill',
+        status: 'success',
+        steps: [],
+        createdAt: '2026-06-26T00:00:00.000Z',
+      },
+    });
+
+    await publishJobDescriptionToBossLike({
+      jobDescription: sampleJobDescription,
+      settings: {
+        platform: 'boss-like',
+        company: '星河智能',
+        salary: '25-40K',
+        location: '上海',
+        keywords: [],
+      },
+    });
+
+    expect(PlaywrightBrowserExecutorMock).toHaveBeenCalledWith({
+      apiBaseUrl: 'http://localhost:6810',
+    });
   });
 });

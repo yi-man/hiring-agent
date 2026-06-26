@@ -4,6 +4,7 @@
 import {
   isRouteContextDisposedError,
   PlaywrightBrowserExecutor,
+  resolveHeadlessOption,
   shouldProxyApiRequest,
 } from './playwright-executor';
 
@@ -20,8 +21,14 @@ describe('PlaywrightBrowserExecutor', () => {
     expect(isRouteContextDisposedError(new Error('route.fetch: ECONNREFUSED'))).toBe(false);
   });
 
+  it('defaults to a headed browser unless headless mode is explicitly requested', () => {
+    expect(resolveHeadlessOption(undefined)).toBe(false);
+    expect(resolveHeadlessOption(false)).toBe(false);
+    expect(resolveHeadlessOption(true)).toBe(true);
+  });
+
   it('waits for a delayed form input that follows a text label', async () => {
-    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000 });
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
     try {
       const html = encodeURIComponent(`
         <!doctype html>
@@ -48,7 +55,7 @@ describe('PlaywrightBrowserExecutor', () => {
   });
 
   it('waits while checking for delayed visible text', async () => {
-    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000 });
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
     try {
       const html = encodeURIComponent(`
         <!doctype html>
@@ -79,7 +86,7 @@ describe('PlaywrightBrowserExecutor', () => {
   });
 
   it('clicks the matching button instead of earlier text with the same label fragment', async () => {
-    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000 });
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
     try {
       const html = encodeURIComponent(`
         <!doctype html>
