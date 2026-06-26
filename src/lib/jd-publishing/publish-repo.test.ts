@@ -1,5 +1,7 @@
 import {
   completePublishTask,
+  createExploredPublishSkill,
+  createNextActivePublishSkillVersion,
   createPublishTask,
   getActivePublishSkillFromDb,
   listPublishTasksForJobDescription,
@@ -10,8 +12,10 @@ import { bossLikePublishSkill } from './skill-registry';
 jest.mock('@/lib/prisma', () => ({
   prisma: {
     publishSkill: {
+      create: jest.fn(),
       upsert: jest.fn(),
       findFirst: jest.fn(),
+      updateMany: jest.fn(),
     },
     jobPublishTask: {
       create: jest.fn(),
@@ -27,8 +31,10 @@ jest.mock('@/lib/prisma', () => ({
 const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
   prisma: {
     publishSkill: {
+      create: jest.Mock;
       upsert: jest.Mock;
       findFirst: jest.Mock;
+      updateMany: jest.Mock;
     };
     jobPublishTask: {
       create: jest.Mock;
@@ -47,14 +53,17 @@ const skillRow = {
   ...bossLikePublishSkill,
   isActive: true,
   inputSchema: bossLikePublishSkill.inputSchema,
+  meta: { success_rate: 0.75, usage_count: 4, created_from: 'explore' },
   createdAt: now,
   updatedAt: now,
 };
 
 describe('publish repository', () => {
   beforeEach(() => {
+    prismaMock.publishSkill.create.mockReset();
     prismaMock.publishSkill.upsert.mockReset();
     prismaMock.publishSkill.findFirst.mockReset();
+    prismaMock.publishSkill.updateMany.mockReset();
     prismaMock.jobPublishTask.create.mockReset();
     prismaMock.jobPublishTask.findMany.mockReset();
     prismaMock.jobPublishTask.update.mockReset();
@@ -101,6 +110,131 @@ describe('publish repository', () => {
       orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
     });
     expect(result?.steps[0]?.id).toBe('open_new_job');
+    expect(result?.meta).toEqual({
+      success_rate: 0.75,
+      usage_count: 4,
+      created_from: 'explore',
+    });
+  });
+
+  it('stores an explored skill as the active browser-authored skill', async () => {
+    const exploredSkill = {
+      ...bossLikePublishSkill,
+      id: 'explored-skill-1',
+      meta: { success_rate: 0, usage_count: 0, created_from: 'explore' as const },
+    };
+    prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 0 });
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(null);
+    prismaMock.publishSkill.create.mockResolvedValueOnce({
+      ...exploredSkill,
+      isActive: true,
+      inputSchema: exploredSkill.inputSchema,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await createExploredPublishSkill(exploredSkill);
+
+    expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith({
+      where: { name: 'publish_jd', platform: 'boss-like', isActive: true },
+      data: { isActive: false },
+    });
+    expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: 'explored-skill-1',
+        name: 'publish_jd',
+        platform: 'boss-like',
+        version: 1,
+        isActive: true,
+        meta: { success_rate: 0, usage_count: 0, created_from: 'explore' },
+      }),
+    });
+    expect(result.meta?.created_from).toBe('explore');
+  });
+
+  it('stores an explored skill as the next version when inactive history already exists', async () => {
+    const exploredSkill = {
+      ...bossLikePublishSkill,
+      id: 'explored-skill-2',
+      version: 1,
+      meta: { success_rate: 0, usage_count: 0, created_from: 'explore' as const },
+    };
+    prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 0 });
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce({
+      id: 'old-skill',
+      version: 3,
+    });
+    prismaMock.publishSkill.create.mockResolvedValueOnce({
+      ...exploredSkill,
+      version: 4,
+      isActive: true,
+      inputSchema: exploredSkill.inputSchema,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await createExploredPublishSkill(exploredSkill);
+
+    expect(prismaMock.publishSkill.findFirst).toHaveBeenCalledWith({
+      where: { name: 'publish_jd', platform: 'boss-like' },
+      orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
+    });
+    expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: 'explored-skill-2',
+        version: 4,
+        isActive: true,
+        meta: { success_rate: 0, usage_count: 0, created_from: 'explore' },
+      }),
+    });
+    expect(result.version).toBe(4);
+  });
+
+  it('creates the next active skill version without overwriting the old version', async () => {
+    const repairedSteps = [
+      {
+        id: 'open_repaired',
+        type: 'action' as const,
+        action: 'navigate' as const,
+        params: { url: '{{target.newJobUrl}}' },
+        next: 'done',
+      },
+      { id: 'done', type: 'end' as const },
+    ];
+    prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.publishSkill.create.mockResolvedValueOnce({
+      ...bossLikePublishSkill,
+      id: 'boss-like-publish-jd-v2',
+      version: 2,
+      steps: repairedSteps,
+      isActive: true,
+      inputSchema: bossLikePublishSkill.inputSchema,
+      meta: { created_from: 'agent', success_rate: 0, usage_count: 0 },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await createNextActivePublishSkillVersion({
+      previousSkill: bossLikePublishSkill,
+      steps: repairedSteps,
+      meta: { created_from: 'agent', success_rate: 0, usage_count: 0 },
+    });
+
+    expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith({
+      where: { name: 'publish_jd', platform: 'boss-like', isActive: true },
+      data: { isActive: false },
+    });
+    expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'publish_jd',
+        platform: 'boss-like',
+        version: 2,
+        isActive: true,
+        steps: repairedSteps,
+      }),
+    });
+    expect(result.version).toBe(2);
+    expect(result.steps).toEqual(repairedSteps);
   });
 
   it('creates a running publish task for a JD', async () => {

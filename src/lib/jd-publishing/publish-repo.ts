@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma';
 import type {
   PublishPlatform,
   PublishSkill,
+  PublishSkillMeta,
+  PublishStep,
   PublishTaskDto,
   PublishTaskStatus,
   PublishTrace,
@@ -57,6 +59,11 @@ function toRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function toSkillMeta(value: unknown): PublishSkillMeta | undefined {
+  const record = toRecord(value);
+  return Object.keys(record).length > 0 ? (record as PublishSkillMeta) : undefined;
+}
+
 function mapSkill(row: PublishSkillRecord): PublishSkill {
   return {
     id: row.id,
@@ -68,6 +75,22 @@ function mapSkill(row: PublishSkillRecord): PublishSkill {
     inputSchema: toRecord(row.inputSchema),
     variables: toRecord(row.variables),
     steps: Array.isArray(row.steps) ? (row.steps as PublishSkill['steps']) : [],
+    meta: toSkillMeta(row.meta),
+  };
+}
+
+function skillCreateData(skill: PublishSkill): Prisma.PublishSkillCreateInput {
+  return {
+    id: skill.id,
+    name: skill.name,
+    platform: skill.platform,
+    description: skill.description,
+    version: skill.version,
+    isActive: skill.isActive,
+    inputSchema: toJson(skill.inputSchema),
+    variables: toJson(skill.variables),
+    steps: toJson(skill.steps),
+    meta: toJson(skill.meta ?? {}),
   };
 }
 
@@ -128,6 +151,49 @@ export async function upsertDefaultPublishSkill(skill: PublishSkill): Promise<Pu
       steps: toJson(skill.steps),
     },
   });
+  return mapSkill(row);
+}
+
+export async function createExploredPublishSkill(skill: PublishSkill): Promise<PublishSkill> {
+  await prisma.publishSkill.updateMany({
+    where: { name: skill.name, platform: skill.platform, isActive: true },
+    data: { isActive: false },
+  });
+  const latest = await prisma.publishSkill.findFirst({
+    where: { name: skill.name, platform: skill.platform },
+    orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
+  });
+  const nextVersion = latest ? Math.max(skill.version, latest.version + 1) : skill.version;
+  const row = await prisma.publishSkill.create({
+    data: skillCreateData({
+      ...skill,
+      version: nextVersion,
+      isActive: true,
+      meta: skill.meta ?? { success_rate: 0, usage_count: 0, created_from: 'explore' },
+    }),
+  });
+  return mapSkill(row);
+}
+
+export async function createNextActivePublishSkillVersion(params: {
+  previousSkill: PublishSkill;
+  steps: PublishStep[];
+  meta?: PublishSkillMeta;
+}): Promise<PublishSkill> {
+  const { previousSkill, steps } = params;
+  await prisma.publishSkill.updateMany({
+    where: { name: previousSkill.name, platform: previousSkill.platform, isActive: true },
+    data: { isActive: false },
+  });
+  const nextSkill: PublishSkill = {
+    ...previousSkill,
+    id: `${previousSkill.name}-${previousSkill.platform}-v${previousSkill.version + 1}`,
+    version: previousSkill.version + 1,
+    isActive: true,
+    steps,
+    meta: params.meta ?? { success_rate: 0, usage_count: 0, created_from: 'agent' },
+  };
+  const row = await prisma.publishSkill.create({ data: skillCreateData(nextSkill) });
   return mapSkill(row);
 }
 

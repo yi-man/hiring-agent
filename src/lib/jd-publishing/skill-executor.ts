@@ -2,8 +2,11 @@ import type {
   BrowserExecutor,
   BrowserStepResult,
   PublishActionStep,
+  PublishConditionStep,
   PublishExecutionContext,
   PublishSkill,
+  PublishStep,
+  PublishStepOnFail,
   PublishTaskResult,
   PublishTraceStep,
 } from './types';
@@ -88,6 +91,110 @@ async function executeActionStep(
   return { success: false, error: `unsupported action: ${step.action}` };
 }
 
+export type PublishingStepExecutionResult = {
+  status: 'running' | 'success' | 'failed' | 'fallback';
+  nextStepId: string | null;
+  traceStep?: PublishTraceStep;
+  onFail?: PublishStepOnFail;
+  step?: PublishStep;
+};
+
+function missingStepResult(stepId: string): PublishingStepExecutionResult {
+  return {
+    status: 'failed',
+    nextStepId: null,
+    traceStep: {
+      stepId,
+      action: 'missing_step',
+      params: {},
+      result: { success: false, error: `step not found: ${stepId}` },
+    },
+  };
+}
+
+function endStepResult(step: PublishStep): PublishingStepExecutionResult {
+  return {
+    status: 'success',
+    nextStepId: null,
+    step,
+  };
+}
+
+function routeFailure(
+  step: PublishActionStep | PublishConditionStep,
+  traceStep: PublishTraceStep,
+): PublishingStepExecutionResult {
+  if (step.onFail?.type === 'fallback_agent') {
+    return {
+      status: 'fallback',
+      nextStepId: null,
+      traceStep,
+      onFail: step.onFail,
+      step,
+    };
+  }
+  return {
+    status: 'failed',
+    nextStepId: null,
+    traceStep,
+    onFail: step.onFail,
+    step,
+  };
+}
+
+export async function executePublishingStep(params: {
+  stepId: string;
+  skill: PublishSkill;
+  executor: BrowserExecutor;
+  context: PublishExecutionContext;
+}): Promise<PublishingStepExecutionResult> {
+  const { stepId, skill, executor, context } = params;
+  const step = skill.steps.find((candidate) => candidate.id === stepId);
+  if (!step) {
+    return missingStepResult(stepId);
+  }
+
+  if (step.type === 'end') {
+    return endStepResult(step);
+  }
+
+  if (step.type === 'condition') {
+    const check = interpolate(step.check, context) as typeof step.check;
+    const ok = await executor.check(check);
+    const traceStep: PublishTraceStep = {
+      stepId: step.id,
+      action: 'condition',
+      params: check as unknown as Record<string, unknown>,
+      result: { success: ok },
+    };
+    const nextStepId = ok ? step.ifTrue?.next : step.ifFalse?.next;
+    if (nextStepId) {
+      return { status: 'running', nextStepId, traceStep, step };
+    }
+    return ok
+      ? { status: 'success', nextStepId: null, traceStep, step }
+      : routeFailure(step, traceStep);
+  }
+
+  const resolvedParams = interpolate(step.params, context) as Record<string, unknown>;
+  const result = await executeActionStep(step, resolvedParams, executor);
+  const traceStep: PublishTraceStep = {
+    stepId: step.id,
+    action: step.action,
+    params: resolvedParams,
+    result,
+  };
+  if (!result.success) {
+    return routeFailure(step, traceStep);
+  }
+  return {
+    status: 'running',
+    nextStepId: step.next,
+    traceStep,
+    step,
+  };
+}
+
 export async function runPublishingSkill(params: {
   taskId: string;
   skill: PublishSkill;
@@ -95,63 +202,31 @@ export async function runPublishingSkill(params: {
   context: PublishExecutionContext;
 }): Promise<PublishTaskResult> {
   const { taskId, skill, executor, context } = params;
-  const stepsById = new Map(skill.steps.map((step) => [step.id, step]));
   const traceSteps: PublishTraceStep[] = [];
-  let currentStepId = skill.steps[0]?.id;
+  let currentStepId: string | null = skill.steps[0]?.id ?? null;
   let status: 'success' | 'failed' = 'success';
   let stoppedByTerminalStep = false;
   const maxIterations = Math.max(skill.steps.length * 3, 1);
 
   for (let iteration = 0; currentStepId && iteration < maxIterations; iteration += 1) {
-    const step = stepsById.get(currentStepId);
-    if (!step) {
-      traceSteps.push({
-        stepId: currentStepId,
-        action: 'missing_step',
-        params: {},
-        result: { success: false, error: `step not found: ${currentStepId}` },
-      });
-      status = 'failed';
-      break;
+    const result = await executePublishingStep({
+      stepId: currentStepId,
+      skill,
+      executor,
+      context,
+    });
+    if (result.traceStep) {
+      traceSteps.push(result.traceStep);
     }
-
-    if (step.type === 'end') {
+    if (result.status === 'success') {
       stoppedByTerminalStep = true;
       break;
     }
-
-    if (step.type === 'condition') {
-      const check = interpolate(step.check, context) as typeof step.check;
-      const ok = await executor.check(check);
-      traceSteps.push({
-        stepId: step.id,
-        action: 'condition',
-        params: check as unknown as Record<string, unknown>,
-        result: { success: ok },
-      });
-      const next = ok ? step.ifTrue?.next : step.ifFalse?.next;
-      if (!next) {
-        status = ok ? 'success' : 'failed';
-        stoppedByTerminalStep = true;
-        break;
-      }
-      currentStepId = next;
-      continue;
-    }
-
-    const resolvedParams = interpolate(step.params, context) as Record<string, unknown>;
-    const result = await executeActionStep(step, resolvedParams, executor);
-    traceSteps.push({
-      stepId: step.id,
-      action: step.action,
-      params: resolvedParams,
-      result,
-    });
-    if (!result.success) {
+    if (result.status === 'failed' || result.status === 'fallback') {
       status = 'failed';
       break;
     }
-    currentStepId = step.next;
+    currentStepId = result.nextStepId;
   }
 
   if (currentStepId && status === 'success' && !stoppedByTerminalStep) {

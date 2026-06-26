@@ -25,6 +25,18 @@ export type PublishSkillAction =
   | 'wait_for_text'
   | 'add_keywords';
 
+export type PublishSkillMeta = Record<string, unknown> & {
+  success_rate?: number;
+  usage_count?: number;
+  created_from?: 'explore' | 'agent';
+};
+
+export type PublishStepOnFail = {
+  type: 'abort' | 'fallback_agent';
+  reason: string;
+  repairSteps?: PublishStep[];
+};
+
 export type PublishStepCheck = {
   id?: string;
   type: 'dom_exists' | 'text_contains' | 'url_contains';
@@ -39,6 +51,7 @@ export type PublishActionStep = {
   action: PublishSkillAction;
   params: Record<string, unknown>;
   next: string;
+  onFail?: PublishStepOnFail;
 };
 
 export type PublishConditionStep = {
@@ -47,10 +60,7 @@ export type PublishConditionStep = {
   check: PublishStepCheck;
   ifTrue?: { next: string };
   ifFalse?: { next: string };
-  onFail?: {
-    type: 'abort' | 'fallback_agent';
-    reason: string;
-  };
+  onFail?: PublishStepOnFail;
 };
 
 export type PublishEndStep = {
@@ -70,6 +80,7 @@ export type PublishSkill = {
   inputSchema: Record<string, unknown>;
   variables: Record<string, unknown>;
   steps: PublishStep[];
+  meta?: PublishSkillMeta;
 };
 
 export type BrowserStepResult = {
@@ -90,6 +101,7 @@ export type BrowserExecutor = {
     values: string[],
     submitLocator: string,
   ): Promise<BrowserStepResult>;
+  snapshot?(): Promise<string>;
   close?(): Promise<void>;
 };
 

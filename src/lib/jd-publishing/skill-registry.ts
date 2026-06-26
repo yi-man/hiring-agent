@@ -23,6 +23,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'navigate',
       params: { url: '{{target.newJobUrl}}' },
       next: 'check_login',
+      onFail: { type: 'fallback_agent', reason: 'cannot open new job page' },
     },
     {
       id: 'check_login',
@@ -42,6 +43,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'fill',
       params: { locator: '用户名', value: '{{credentials.username}}' },
       next: 'fill_password',
+      onFail: { type: 'fallback_agent', reason: 'cannot fill username' },
     },
     {
       id: 'fill_password',
@@ -49,6 +51,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'fill',
       params: { locator: '密码', value: '{{credentials.password}}' },
       next: 'submit_login',
+      onFail: { type: 'fallback_agent', reason: 'cannot fill password' },
     },
     {
       id: 'submit_login',
@@ -56,6 +59,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'click',
       params: { locator: '登录' },
       next: 'wait_after_login',
+      onFail: { type: 'fallback_agent', reason: 'cannot submit login' },
     },
     {
       id: 'wait_after_login',
@@ -63,6 +67,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'wait_for_url',
       params: { url: '/employer/resumes' },
       next: 'open_new_job_after_login',
+      onFail: { type: 'fallback_agent', reason: 'login redirect did not complete' },
     },
     {
       id: 'open_new_job_after_login',
@@ -70,6 +75,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'navigate',
       params: { url: '{{target.newJobUrl}}' },
       next: 'fill_title',
+      onFail: { type: 'fallback_agent', reason: 'cannot open new job page after login' },
     },
     {
       id: 'fill_title',
@@ -77,6 +83,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'fill',
       params: { locator: '职位名称', value: '{{input.title}}' },
       next: 'fill_company',
+      onFail: { type: 'fallback_agent', reason: 'cannot fill job title' },
     },
     {
       id: 'fill_company',
@@ -84,6 +91,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'fill',
       params: { locator: '公司名称', value: '{{input.company}}' },
       next: 'fill_salary',
+      onFail: { type: 'fallback_agent', reason: 'cannot fill company name' },
     },
     {
       id: 'fill_salary',
@@ -91,6 +99,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'fill',
       params: { locator: '薪资范围', value: '{{input.salary}}' },
       next: 'fill_location',
+      onFail: { type: 'fallback_agent', reason: 'cannot fill salary range' },
     },
     {
       id: 'fill_location',
@@ -98,6 +107,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'fill',
       params: { locator: '工作地点', value: '{{input.location}}' },
       next: 'fill_description',
+      onFail: { type: 'fallback_agent', reason: 'cannot fill job location' },
     },
     {
       id: 'fill_description',
@@ -105,6 +115,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'fill',
       params: { locator: '职位描述', value: '{{input.description}}' },
       next: 'add_keywords',
+      onFail: { type: 'fallback_agent', reason: 'cannot fill job description' },
     },
     {
       id: 'add_keywords',
@@ -116,6 +127,7 @@ export const bossLikePublishSkill: PublishSkill = {
         submitLocator: '添加',
       },
       next: 'submit_job',
+      onFail: { type: 'fallback_agent', reason: 'cannot add skill keywords' },
     },
     {
       id: 'submit_job',
@@ -123,6 +135,7 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'click',
       params: { locator: '发布职位' },
       next: 'wait_jobs_list',
+      onFail: { type: 'fallback_agent', reason: 'cannot submit job publish form' },
     },
     {
       id: 'wait_jobs_list',
@@ -130,13 +143,14 @@ export const bossLikePublishSkill: PublishSkill = {
       action: 'wait_for_url',
       params: { url: '/employer/jobs' },
       next: 'verify_published',
+      onFail: { type: 'fallback_agent', reason: 'jobs list redirect did not complete' },
     },
     {
       id: 'verify_published',
       type: 'condition',
       check: { id: 'job_title_visible', type: 'text_contains', text: '{{input.title}}' },
       ifTrue: { next: 'done' },
-      ifFalse: { next: 'failed' },
+      onFail: { type: 'fallback_agent', reason: 'published job title is not visible' },
     },
     { id: 'done', type: 'end' },
     { id: 'failed', type: 'end' },

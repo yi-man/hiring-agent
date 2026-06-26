@@ -8,14 +8,6 @@ import type {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DOM_SNAPSHOT_MAX_CHARS = 8_000;
 
-export function shouldProxyApiRequest(url: string): boolean {
-  return new URL(url).pathname.startsWith('/api/');
-}
-
-export function isRouteContextDisposedError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('Request context disposed');
-}
-
 export function resolveHeadlessOption(headless: boolean | undefined): boolean {
   return headless ?? false;
 }
@@ -37,7 +29,6 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     private readonly options: {
       headless?: boolean;
       timeoutMs?: number;
-      apiBaseUrl?: string;
     } = {},
   ) {}
 
@@ -52,24 +43,6 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
       headless: resolveHeadlessOption(this.options.headless),
     });
     const context = await this.browser.newContext();
-    const apiBaseUrl = this.options.apiBaseUrl?.replace(/\/+$/, '');
-    if (apiBaseUrl) {
-      await context.route('**/*', async (route, request) => {
-        if (!shouldProxyApiRequest(request.url())) {
-          await route.continue();
-          return;
-        }
-        const sourceUrl = new URL(request.url());
-        const targetUrl = `${apiBaseUrl}${sourceUrl.pathname}${sourceUrl.search}`;
-        try {
-          const response = await route.fetch({ url: targetUrl });
-          await route.fulfill({ response });
-        } catch (error) {
-          if (isRouteContextDisposedError(error)) return;
-          await route.abort('failed').catch(() => undefined);
-        }
-      });
-    }
     this.page = await context.newPage();
     this.page.setDefaultTimeout(this.timeoutMs);
     return this.page;
@@ -163,6 +136,10 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
       const page = await this.getPage();
       await page.getByText(text, { exact: false }).first().waitFor({ timeout: this.timeoutMs });
     });
+  }
+
+  async snapshot(): Promise<string> {
+    return this.domSnapshot();
   }
 
   async addKeywords(

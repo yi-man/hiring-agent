@@ -1,26 +1,9 @@
 /**
  * @jest-environment node
  */
-import {
-  isRouteContextDisposedError,
-  PlaywrightBrowserExecutor,
-  resolveHeadlessOption,
-  shouldProxyApiRequest,
-} from './playwright-executor';
+import { PlaywrightBrowserExecutor, resolveHeadlessOption } from './playwright-executor';
 
 describe('PlaywrightBrowserExecutor', () => {
-  it('only proxies root API requests and leaves frontend modules alone', () => {
-    expect(shouldProxyApiRequest('http://localhost:6183/api/auth/login')).toBe(true);
-    expect(shouldProxyApiRequest('http://localhost:6183/src/api/index.ts')).toBe(false);
-  });
-
-  it('recognizes route errors caused by browser context shutdown', () => {
-    expect(isRouteContextDisposedError(new Error('route.fetch: Request context disposed.'))).toBe(
-      true,
-    );
-    expect(isRouteContextDisposedError(new Error('route.fetch: ECONNREFUSED'))).toBe(false);
-  });
-
   it('defaults to a headed browser unless headless mode is explicitly requested', () => {
     expect(resolveHeadlessOption(undefined)).toBe(false);
     expect(resolveHeadlessOption(false)).toBe(false);
@@ -108,6 +91,31 @@ describe('PlaywrightBrowserExecutor', () => {
       await expect(
         executor.check({ type: 'text_contains', text: 'button clicked', timeout: 500 }),
       ).resolves.toBe(true);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  it('returns a bounded DOM snapshot for diagnostics', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <main>
+              <label>职位名称</label>
+              <input type="text" value="高级前端工程师" />
+            </main>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const snapshot = await executor.snapshot();
+
+      expect(snapshot).toContain('职位名称');
+      expect(snapshot.length).toBeLessThanOrEqual(8_000);
     } finally {
       await executor.close();
     }

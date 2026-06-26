@@ -1,4 +1,4 @@
-import { runPublishingSkill } from './skill-executor';
+import { executePublishingStep, runPublishingSkill } from './skill-executor';
 import type { BrowserExecutor, BrowserStepResult, PublishSkill } from './types';
 
 class RecordingExecutor implements BrowserExecutor {
@@ -105,6 +105,110 @@ const skill: PublishSkill = {
 };
 
 describe('runPublishingSkill', () => {
+  it('executes one action step and returns the next step for graph routing', async () => {
+    const executor = new RecordingExecutor();
+
+    const result = await executePublishingStep({
+      stepId: 'open',
+      skill,
+      executor,
+      context: {
+        input: { title: '高级前端工程师' },
+        credentials: { username: 'admin', password: 'boss123' },
+        target: {
+          loginUrl: 'http://127.0.0.1:6183/employer/login',
+          newJobUrl: 'http://127.0.0.1:6183/employer/jobs/new',
+        },
+      },
+    });
+
+    expect(result.status).toBe('running');
+    expect(result.nextStepId).toBe('check_login');
+    expect(result.traceStep).toEqual({
+      stepId: 'open',
+      action: 'navigate',
+      params: { url: 'http://127.0.0.1:6183/employer/login' },
+      result: { success: true },
+    });
+  });
+
+  it('returns fallback status when a failed action asks for fallback_agent', async () => {
+    const executor = new RecordingExecutor();
+    executor.fill = async () => ({
+      success: false,
+      error: 'selector not found',
+      domSnapshot: '<form />',
+    });
+
+    const result = await executePublishingStep({
+      stepId: 'fill_title',
+      skill: {
+        ...skill,
+        steps: [
+          {
+            id: 'fill_title',
+            type: 'action',
+            action: 'fill',
+            params: { locator: '职位名称', value: '{{input.title}}' },
+            next: 'done',
+            onFail: { type: 'fallback_agent', reason: 'title field changed' },
+          },
+          { id: 'done', type: 'end' },
+        ],
+      },
+      executor,
+      context: {
+        input: { title: '高级前端工程师' },
+        credentials: {},
+        target: {},
+      },
+    });
+
+    expect(result.status).toBe('fallback');
+    expect(result.nextStepId).toBeNull();
+    expect(result.onFail).toEqual({ type: 'fallback_agent', reason: 'title field changed' });
+    expect(result.traceStep?.result).toEqual({
+      success: false,
+      error: 'selector not found',
+      domSnapshot: '<form />',
+    });
+  });
+
+  it('routes a failed condition to fallback_agent when no false branch exists', async () => {
+    const executor = new RecordingExecutor({ title_visible: false });
+
+    const result = await executePublishingStep({
+      stepId: 'verify_title',
+      skill: {
+        ...skill,
+        steps: [
+          {
+            id: 'verify_title',
+            type: 'condition',
+            check: { id: 'title_visible', type: 'text_contains', text: '{{input.title}}' },
+            ifTrue: { next: 'done' },
+            onFail: { type: 'fallback_agent', reason: 'published title not visible' },
+          },
+          { id: 'done', type: 'end' },
+        ],
+      },
+      executor,
+      context: {
+        input: { title: '高级前端工程师' },
+        credentials: {},
+        target: {},
+      },
+    });
+
+    expect(result.status).toBe('fallback');
+    expect(result.traceStep).toEqual({
+      stepId: 'verify_title',
+      action: 'condition',
+      params: { id: 'title_visible', type: 'text_contains', text: '高级前端工程师' },
+      result: { success: false },
+    });
+  });
+
   it('executes action and condition steps through a browser executor interface', async () => {
     const executor = new RecordingExecutor();
 
