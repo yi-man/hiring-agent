@@ -12,6 +12,7 @@ import {
   ListFilter,
   Plus,
   RefreshCw,
+  Rocket,
   Save,
   Sparkles,
 } from 'lucide-react';
@@ -19,10 +20,13 @@ import { Button, Chip } from '@/components/ui';
 import {
   createJobDescriptionFromInput,
   fetchJobDescription,
+  fetchJobDescriptionPublishTasks,
   fetchJobDescriptions,
+  publishJobDescriptionResource,
   regenerateJobDescription,
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
+import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
 import { JD_STATUSES } from '@/types';
 import type { JD, JDStatus, JDTone, JobDescriptionDto } from '@/types';
 
@@ -157,6 +161,14 @@ function formToJd(form: JDForm): JD {
     bonus: linesToList(form.bonus),
     highlights: linesToList(form.highlights),
   };
+}
+
+function parseKeywordInput(value: string): string[] {
+  return value
+    .split(/[,，\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -445,16 +457,28 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishCompany, setPublishCompany] = useState('星河智能');
+  const [publishSalary, setPublishSalary] = useState('25-40K');
+  const [publishLocation, setPublishLocation] = useState('上海');
+  const [publishKeywords, setPublishKeywords] = useState('TypeScript, React');
+  const [publishTasks, setPublishTasks] = useState<PublishTaskDto[]>([]);
+  const [publishTrace, setPublishTrace] = useState<PublishTaskResult['trace'] | null>(null);
   const [error, setError] = useState('');
 
   async function loadJobDescription() {
     setIsLoading(true);
     setError('');
     try {
-      const data = await fetchJobDescription(jobDescriptionId);
+      const [data, tasks] = await Promise.all([
+        fetchJobDescription(jobDescriptionId),
+        fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
+      ]);
       setJobDescription(data);
       setForm(jdToForm(data.content));
       setStatus(data.status);
+      setPublishTasks(tasks);
+      setPublishTrace(tasks.find((task) => task.trace)?.trace ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载 JD 失败');
     } finally {
@@ -503,6 +527,64 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setError(e instanceof Error ? e.message : '重新生成 JD 失败');
     } finally {
       setIsRegenerating(false);
+    }
+  }
+
+  async function handlePublish() {
+    if (!jobDescription || !form) return;
+    setIsPublishing(true);
+    setError('');
+    setPublishTrace(null);
+    try {
+      const saved = await updateJobDescriptionResource(jobDescription.id, {
+        status: 'ready_to_publish',
+        content: formToJd(form),
+      });
+      setJobDescription(saved);
+      setForm(jdToForm(saved.content));
+      setStatus(saved.status);
+
+      const result = await publishJobDescriptionResource(saved.id, {
+        platform: 'boss-like',
+        company: publishCompany.trim(),
+        salary: publishSalary.trim(),
+        location: publishLocation.trim(),
+        keywords: parseKeywordInput(publishKeywords),
+      });
+      setJobDescription(result.jobDescription);
+      setForm(jdToForm(result.jobDescription.content));
+      setStatus(result.jobDescription.status);
+      setPublishTrace(result.task.trace);
+      setPublishTasks((current) => [
+        {
+          id: result.task.taskId,
+          userId: result.jobDescription.userId,
+          jobDescriptionId: result.jobDescription.id,
+          skillId: result.task.skillId,
+          platform: 'boss-like',
+          input: {},
+          currentStep: null,
+          status: result.task.status,
+          errorMessage: result.task.trace.steps.at(-1)?.result.error ?? null,
+          trace: result.task.trace,
+          createdAt: result.task.trace.createdAt,
+          updatedAt: result.task.trace.createdAt,
+        },
+        ...current,
+      ]);
+    } catch (e) {
+      const publishError = e as Error &
+        Partial<{ jobDescription: JobDescriptionDto; task: PublishTaskResult }>;
+      if (publishError.jobDescription) {
+        setJobDescription(publishError.jobDescription);
+        setStatus(publishError.jobDescription.status);
+      }
+      if (publishError.task) {
+        setPublishTrace(publishError.task.trace);
+      }
+      setError(e instanceof Error ? e.message : '发布 JD 失败');
+    } finally {
+      setIsPublishing(false);
     }
   }
 
@@ -653,6 +735,100 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 ))}
               </select>
             </label>
+
+            <div className="border-border space-y-3 border-t pt-3">
+              <div className="flex items-center gap-2">
+                <Rocket className="text-muted-foreground h-4 w-4" aria-hidden />
+                <div className="text-foreground text-sm font-medium">Boss-like 发布</div>
+              </div>
+              <label className="block space-y-2">
+                <FieldLabel>公司名称</FieldLabel>
+                <input
+                  aria-label="发布公司名称"
+                  className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                  value={publishCompany}
+                  onChange={(event) => setPublishCompany(event.target.value)}
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block space-y-2">
+                  <FieldLabel>薪资范围</FieldLabel>
+                  <input
+                    aria-label="发布薪资范围"
+                    className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                    value={publishSalary}
+                    onChange={(event) => setPublishSalary(event.target.value)}
+                  />
+                </label>
+                <label className="block space-y-2">
+                  <FieldLabel>工作地点</FieldLabel>
+                  <input
+                    aria-label="发布工作地点"
+                    className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                    value={publishLocation}
+                    onChange={(event) => setPublishLocation(event.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="block space-y-2">
+                <FieldLabel>技能标签</FieldLabel>
+                <input
+                  aria-label="发布技能标签"
+                  className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                  value={publishKeywords}
+                  onChange={(event) => setPublishKeywords(event.target.value)}
+                />
+              </label>
+              <Button
+                className="w-full gap-2"
+                color="primary"
+                disableRipple
+                isDisabled={
+                  isPublishing ||
+                  !publishCompany.trim() ||
+                  !publishSalary.trim() ||
+                  !publishLocation.trim()
+                }
+                type="button"
+                onClick={() => void handlePublish()}
+              >
+                <Rocket className="h-4 w-4" aria-hidden />
+                {isPublishing ? '发布中' : '发布到 Boss-like'}
+              </Button>
+              {publishTrace ? (
+                <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
+                  <div className="text-foreground flex items-center justify-between gap-2 font-medium">
+                    <span>执行结果：{publishTrace.status}</span>
+                    <span className="text-muted-foreground">{publishTrace.steps.length} steps</span>
+                  </div>
+                  {publishTrace.steps.at(-1)?.result.error ? (
+                    <p className="text-destructive mt-1 break-words">
+                      {publishTrace.steps.at(-1)?.result.error}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {publishTasks.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-muted-foreground text-xs">最近发布记录</div>
+                  <div className="space-y-1">
+                    {publishTasks.slice(0, 3).map((task) => (
+                      <button
+                        key={task.id}
+                        className="border-border hover:bg-muted/40 flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-xs"
+                        type="button"
+                        onClick={() => setPublishTrace(task.trace)}
+                      >
+                        <span className="text-foreground">{task.status}</span>
+                        <span className="text-muted-foreground">
+                          {new Date(task.createdAt).toLocaleString('zh-CN')}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </section>
 
           <section className="border-border space-y-3 rounded-lg border p-4">

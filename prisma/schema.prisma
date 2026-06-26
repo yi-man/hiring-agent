@@ -36,6 +36,7 @@ model User {
   sessions                Session[]
   conversations           Conversation[]
   jobDescriptions         JobDescription[]
+  jobPublishTasks         JobPublishTask[]
   knowledgeDocuments      KnowledgeDocument[]
   knowledgeDocumentChunks KnowledgeDocumentChunk[]
 
@@ -43,25 +44,86 @@ model User {
 }
 
 model JobDescription {
-  id                  String   @id @default(uuid())
-  userId              String   @map("user_id")
+  id                  String           @id @default(uuid())
+  userId              String           @map("user_id")
   department          String
   position            String
-  positionDescription String   @map("position_description")
-  tone                String   @default("tech")
-  status              String   @default("created")
+  positionDescription String           @map("position_description")
+  tone                String           @default("tech")
+  status              String           @default("created")
   content             Json
   evaluation          Json?
-  generationMeta      Json?    @map("generation_meta")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  generationMeta      Json?            @map("generation_meta")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  publishTasks        JobPublishTask[]
 
   @@index([userId], map: "idx_job_descriptions_user_id")
   @@index([status], map: "idx_job_descriptions_status")
   @@index([updatedAt(sort: Desc)], map: "idx_job_descriptions_updated_at")
   @@index([userId, status], map: "idx_job_descriptions_user_status")
   @@map("job_descriptions")
+}
+
+model PublishSkill {
+  id          String            @id @default(uuid())
+  name        String
+  platform    String
+  description String
+  version     Int
+  isActive    Boolean           @default(true) @map("is_active")
+  inputSchema Json              @map("input_schema")
+  variables   Json
+  steps       Json
+  meta        Json?
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+  tasks       JobPublishTask[]
+  traces      JobPublishTrace[]
+
+  @@unique([name, platform, version], map: "publish_skills_name_platform_version_key")
+  @@index([name, platform, isActive, version], map: "idx_publish_skills_lookup")
+  @@index([platform, isActive], map: "idx_publish_skills_platform_active")
+  @@map("publish_skills")
+}
+
+model JobPublishTask {
+  id               String           @id @default(uuid())
+  userId           String           @map("user_id")
+  jobDescriptionId String           @map("job_description_id")
+  skillId          String           @map("skill_id")
+  platform         String
+  input            Json
+  currentStep      String?          @map("current_step")
+  status           String           @default("running")
+  errorMessage     String?          @map("error_message")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription   @relation(fields: [jobDescriptionId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  skill            PublishSkill     @relation(fields: [skillId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  trace            JobPublishTrace?
+
+  @@index([userId, jobDescriptionId, createdAt(sort: Desc)], map: "idx_job_publish_tasks_user_jd_created")
+  @@index([status], map: "idx_job_publish_tasks_status")
+  @@index([skillId], map: "idx_job_publish_tasks_skill_id")
+  @@map("job_publish_tasks")
+}
+
+model JobPublishTrace {
+  id        String         @id @default(uuid())
+  taskId    String         @unique @map("task_id")
+  skillId   String         @map("skill_id")
+  status    String
+  steps     Json
+  createdAt DateTime       @default(now()) @map("created_at")
+  task      JobPublishTask @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  skill     PublishSkill   @relation(fields: [skillId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([skillId], map: "idx_job_publish_traces_skill_id")
+  @@index([status], map: "idx_job_publish_traces_status")
+  @@map("job_publish_traces")
 }
 
 model Session {

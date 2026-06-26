@@ -125,6 +125,10 @@ describe('JD pages', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({
           jobDescription: {
             ...sampleJobDescription,

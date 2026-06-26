@@ -4,6 +4,8 @@ import type {
   RegenerateJobDescriptionRequest,
   UpdateJobDescriptionRequest,
 } from '@/types';
+import type { PublishJobDescriptionSettings, PublishTaskResult } from '@/lib/jd-publishing/types';
+import type { PublishTaskDto } from '@/lib/jd-publishing/types';
 
 async function readJson<T>(response: Response): Promise<T & { error?: string }> {
   return (await response.json().catch(() => ({}))) as T & { error?: string };
@@ -72,4 +74,38 @@ export async function regenerateJobDescription(
     throw new Error(data.error || '重新生成 JD 失败');
   }
   return data.jobDescription;
+}
+
+export type PublishJobDescriptionResponse = {
+  jobDescription: JobDescriptionDto;
+  task: PublishTaskResult;
+};
+
+export async function publishJobDescriptionResource(
+  id: string,
+  payload: PublishJobDescriptionSettings,
+): Promise<PublishJobDescriptionResponse> {
+  const response = await fetch(`/api/jd/${id}/publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson<Partial<PublishJobDescriptionResponse>>(response);
+  if (!response.ok || !data.jobDescription || !data.task) {
+    const error = new Error(data.error || '发布 JD 失败') as Error &
+      Partial<PublishJobDescriptionResponse>;
+    error.jobDescription = data.jobDescription;
+    error.task = data.task;
+    throw error;
+  }
+  return { jobDescription: data.jobDescription, task: data.task };
+}
+
+export async function fetchJobDescriptionPublishTasks(id: string): Promise<PublishTaskDto[]> {
+  const response = await fetch(`/api/jd/${id}/publish`);
+  const data = await readJson<{ tasks?: PublishTaskDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.tasks)) {
+    throw new Error(data.error || '加载发布记录失败');
+  }
+  return data.tasks;
 }
