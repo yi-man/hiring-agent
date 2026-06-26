@@ -61,8 +61,6 @@ const envSchema = z.object({
    * true / false 可强制开关；multimodal 请求体为 input: [{ type: "text", text }]，每段文本单独请求以得到独立向量。
    */
   OPENAI_EMBEDDING_USE_MULTIMODAL: z.enum(['auto', 'true', 'false']).default('auto'),
-  /** 为 true 时强制走本地 mock，不调用外部模型 */
-  JD_LLM_MOCK: envBoolean(false),
   /** 部分兼容接口不支持 json_object，可设为 false */
   OPENAI_JSON_MODE: envBoolean(true),
   /** JD Agent 调用上游 LLM 的超时（毫秒），与通用 API_TIMEOUT 分离，避免慢模型被 10s 截断 */

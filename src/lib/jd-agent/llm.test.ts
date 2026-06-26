@@ -2,7 +2,6 @@ import { runLLM, shouldUseMockLlm } from '@/lib/jd-agent/llm';
 
 jest.mock('@/lib/env', () => ({
   env: {
-    JD_LLM_MOCK: false,
     OPENAI_API_KEY: 'test-key',
     OPENAI_BASE_URL: 'https://api.openai.com/v1',
     OPENAI_MODEL: 'gpt-4o-mini',
@@ -29,6 +28,13 @@ jest.mock('@/lib/llm-observability/log-service', () => ({
   recordLlmCallEnd: jest.fn().mockResolvedValue(undefined),
 }));
 
+const mockEnv = jest.requireMock('@/lib/env').env as {
+  JD_LLM_MOCK?: boolean;
+  OPENAI_API_KEY?: string;
+  OPENAI_BASE_URL: string;
+  OPENAI_MODEL: string;
+};
+
 const { openaiGenerateJD, openaiEvaluateJD, openaiImproveJD } = jest.requireMock(
   '@/lib/jd-agent/openai-adapter',
 ) as {
@@ -45,8 +51,37 @@ const { recordLlmCallStart, recordLlmCallEnd } = jest.requireMock(
 };
 
 describe('shouldUseMockLlm', () => {
+  let envReplacer: ReturnType<typeof jest.replaceProperty> | null = null;
+
+  afterEach(() => {
+    envReplacer?.restore();
+    envReplacer = null;
+    delete mockEnv.JD_LLM_MOCK;
+    mockEnv.OPENAI_API_KEY = 'test-key';
+  });
+
   it('uses mock in test environment', () => {
     expect(shouldUseMockLlm()).toBe(true);
+  });
+
+  it('does not use mock outside test environment even when legacy mock flag is set', () => {
+    envReplacer = jest.replaceProperty(process, 'env', {
+      ...process.env,
+      NODE_ENV: 'development',
+    });
+    mockEnv.JD_LLM_MOCK = true;
+
+    expect(shouldUseMockLlm()).toBe(false);
+  });
+
+  it('does not use mock outside test environment when api key is missing', () => {
+    envReplacer = jest.replaceProperty(process, 'env', {
+      ...process.env,
+      NODE_ENV: 'development',
+    });
+    mockEnv.OPENAI_API_KEY = '';
+
+    expect(shouldUseMockLlm()).toBe(false);
   });
 });
 
@@ -68,6 +103,17 @@ describe('runLLM observability wiring', () => {
   afterEach(() => {
     envReplacer?.restore();
     envReplacer = null;
+    mockEnv.OPENAI_API_KEY = 'test-key';
+    delete mockEnv.JD_LLM_MOCK;
+  });
+
+  it('fails fast with a clear configuration error when api key is missing', async () => {
+    mockEnv.OPENAI_API_KEY = '';
+
+    await expect(
+      runLLM({ stage: 'generate', schema: { title: 'Engineer' } as never }),
+    ).rejects.toThrow('OPENAI_API_KEY is not configured');
+    expect(openaiGenerateJD).not.toHaveBeenCalled();
   });
 
   it('records call start/end with request and response metadata on success', async () => {

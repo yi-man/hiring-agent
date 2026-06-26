@@ -59,16 +59,13 @@ type ErrorWithMeta = {
 };
 
 export function shouldUseMockLlm(): boolean {
-  if (process.env.NODE_ENV === 'test') {
-    return true;
-  }
-  if (env.JD_LLM_MOCK) {
-    return true;
-  }
+  return process.env.NODE_ENV === 'test';
+}
+
+function assertOpenAiConfigured(): void {
   if (!env.OPENAI_API_KEY?.trim()) {
-    return true;
+    throw new Error('OPENAI_API_KEY is not configured');
   }
-  return false;
 }
 
 async function safeRecordLlmCallEnd(
@@ -177,6 +174,7 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
   if (shouldUseMockLlm()) {
     return runMockLlm(input);
   }
+  assertOpenAiConfigured();
 
   if (input.stage === 'generate') {
     const user = await buildGenerateUserPrompt(input.schema, input.companyContext);
