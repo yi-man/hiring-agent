@@ -1,0 +1,247 @@
+/**
+ * @jest-environment node
+ */
+import { GET, POST } from './route';
+import { publishJobDescriptionToBossLike } from '@/lib/jd-publishing/service';
+import { listPublishTasksForJobDescription } from '@/lib/jd-publishing/publish-repo';
+import type { JD, JobDescriptionDto } from '@/types';
+
+const requireAuthMock = jest.fn();
+const getJobDescriptionByIdMock = jest.fn();
+const updateJobDescriptionMock = jest.fn();
+const listPublishTasksForJobDescriptionMock =
+  listPublishTasksForJobDescription as jest.MockedFunction<
+    typeof listPublishTasksForJobDescription
+  >;
+
+jest.mock('next/server', () => ({
+  NextResponse: {
+    json: (body: unknown, init?: { status?: number }) => ({
+      status: init?.status ?? 200,
+      json: async () => body,
+    }),
+  },
+}));
+
+jest.mock('@/lib/auth/session', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
+  UnauthorizedError: class UnauthorizedError extends Error {
+    status = 401;
+    constructor(message = 'Unauthorized') {
+      super(message);
+      this.name = 'UnauthorizedError';
+    }
+  },
+}));
+
+jest.mock('@/lib/jd/job-description-repo', () => ({
+  getJobDescriptionById: (...args: unknown[]) => getJobDescriptionByIdMock(...args),
+  updateJobDescription: (...args: unknown[]) => updateJobDescriptionMock(...args),
+}));
+
+jest.mock('@/lib/jd-publishing/service', () => ({
+  publishJobDescriptionToBossLike: jest.fn(),
+}));
+
+jest.mock('@/lib/jd-publishing/publish-repo', () => ({
+  listPublishTasksForJobDescription: jest.fn(),
+}));
+
+const publishJobDescriptionToBossLikeMock = publishJobDescriptionToBossLike as jest.MockedFunction<
+  typeof publishJobDescriptionToBossLike
+>;
+
+const sampleJd: JD = {
+  title: '高级前端工程师',
+  summary: '负责招聘产品前端体验',
+  responsibilities: ['建设发布流程'],
+  requirements: ['熟悉 TypeScript'],
+  bonus: [],
+  highlights: [],
+};
+
+const sampleJobDescription: JobDescriptionDto = {
+  id: 'jd-1',
+  userId: 'u1',
+  department: '技术部',
+  position: '前端工程师',
+  positionDescription: '负责招聘产品前端体验',
+  tone: 'tech',
+  status: 'ready_to_publish',
+  content: sampleJd,
+  evaluation: null,
+  generationMeta: null,
+  createdAt: '2026-06-26T00:00:00.000Z',
+  updatedAt: '2026-06-26T00:00:00.000Z',
+};
+
+describe('POST /api/jd/[id]/publish', () => {
+  beforeEach(() => {
+    requireAuthMock.mockReset();
+    getJobDescriptionByIdMock.mockReset();
+    updateJobDescriptionMock.mockReset();
+    listPublishTasksForJobDescriptionMock.mockReset();
+    publishJobDescriptionToBossLikeMock.mockReset();
+
+    requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
+    getJobDescriptionByIdMock.mockResolvedValue(sampleJobDescription);
+    updateJobDescriptionMock.mockImplementation(async (params) => ({
+      ...sampleJobDescription,
+      status: params.status,
+    }));
+    publishJobDescriptionToBossLikeMock.mockResolvedValue({
+      taskId: 'task-1',
+      skillId: 'boss-like-publish-jd',
+      status: 'success',
+      trace: {
+        taskId: 'task-1',
+        skillId: 'boss-like-publish-jd',
+        steps: [],
+        status: 'success',
+        createdAt: '2026-06-26T00:00:00.000Z',
+      },
+    });
+  });
+
+  it('lists recent publish tasks for a JD', async () => {
+    listPublishTasksForJobDescriptionMock.mockResolvedValueOnce([
+      {
+        id: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        skillId: 'boss-like-publish-jd',
+        platform: 'boss-like',
+        input: { title: '高级前端工程师' },
+        currentStep: null,
+        status: 'success',
+        errorMessage: null,
+        trace: {
+          taskId: 'task-1',
+          skillId: 'boss-like-publish-jd',
+          status: 'success',
+          steps: [],
+          createdAt: '2026-06-26T00:00:00.000Z',
+        },
+        createdAt: '2026-06-26T00:00:00.000Z',
+        updatedAt: '2026-06-26T00:00:01.000Z',
+      },
+    ]);
+
+    const response = await GET(new Request('http://localhost/api/jd/jd-1/publish'), {
+      params: Promise.resolve({ id: 'jd-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.tasks).toHaveLength(1);
+    expect(listPublishTasksForJobDescriptionMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      limit: 5,
+    });
+  });
+
+  it('publishes a JD with boss-like settings and marks it published', async () => {
+    const request = new Request('http://localhost/api/jd/jd-1/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'boss-like',
+        company: '星河智能',
+        salary: '25-40K',
+        location: '上海',
+        keywords: ['TypeScript'],
+      }),
+    });
+
+    const response = await POST(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.task.status).toBe('success');
+    expect(body.jobDescription.status).toBe('published');
+    expect(updateJobDescriptionMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ userId: 'u1', id: 'jd-1', status: 'publishing' }),
+    );
+    expect(publishJobDescriptionToBossLikeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobDescription: sampleJobDescription,
+        settings: expect.objectContaining({
+          company: '星河智能',
+          salary: '25-40K',
+          location: '上海',
+        }),
+      }),
+    );
+    expect(updateJobDescriptionMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ userId: 'u1', id: 'jd-1', status: 'published' }),
+    );
+  });
+
+  it('marks publish_failed and returns task trace when execution fails', async () => {
+    publishJobDescriptionToBossLikeMock.mockResolvedValueOnce({
+      taskId: 'task-1',
+      skillId: 'boss-like-publish-jd',
+      status: 'failed',
+      trace: {
+        taskId: 'task-1',
+        skillId: 'boss-like-publish-jd',
+        steps: [
+          {
+            stepId: 'fill_title',
+            action: 'fill',
+            params: { locator: '职位名称' },
+            result: { success: false, error: 'selector not found' },
+          },
+        ],
+        status: 'failed',
+        createdAt: '2026-06-26T00:00:00.000Z',
+      },
+    });
+    const request = new Request('http://localhost/api/jd/jd-1/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'boss-like',
+        company: '星河智能',
+        salary: '25-40K',
+        location: '上海',
+      }),
+    });
+
+    const response = await POST(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body.task.status).toBe('failed');
+    expect(body.jobDescription.status).toBe('publish_failed');
+    expect(body.error).toBe('JD publish execution failed');
+  });
+
+  it('marks publish_failed when the browser publishing service throws', async () => {
+    publishJobDescriptionToBossLikeMock.mockRejectedValueOnce(new Error('browser launch failed'));
+    const request = new Request('http://localhost/api/jd/jd-1/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'boss-like',
+        company: '星河智能',
+        salary: '25-40K',
+        location: '上海',
+      }),
+    });
+
+    const response = await POST(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error).toBe('browser launch failed');
+    expect(body.jobDescription.status).toBe('publish_failed');
+    expect(updateJobDescriptionMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ userId: 'u1', id: 'jd-1', status: 'publish_failed' }),
+    );
+  });
+});
