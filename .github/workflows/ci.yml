@@ -84,6 +84,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: bunx playwright install chromium --with-deps
       # PRs avoid real external LLM calls; push to main still runs the full suite.
       - name: Run Jest (pull request — without real-deps LLM file)
         if: github.event_name == 'pull_request'
