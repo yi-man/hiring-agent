@@ -8,6 +8,7 @@ import {
   createNextActivePublishSkillVersion,
   createPublishTask,
   getActivePublishSkillFromDb,
+  updatePublishTaskCurrentStep,
 } from './publish-repo';
 import { executePublishingStep } from './skill-executor';
 import type {
@@ -34,6 +35,7 @@ export type PublishingGraphDependencies = {
   }) => Promise<PublishSkill>;
   createExploredSkill?: (skill: PublishSkill) => Promise<PublishSkill>;
   createTask?: typeof createPublishTask;
+  updateTaskCurrentStep?: typeof updatePublishTaskCurrentStep;
   completeTask?: typeof completePublishTask;
   createNextSkillVersion?: (params: {
     previousSkill: PublishSkill;
@@ -177,8 +179,10 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
 
   async function executeStepNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
+    const task = requireTask(state);
     const stepId = state.currentStepId;
     if (!stepId) {
+      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
       return { status: 'success', route: 'finalize' };
     }
 
@@ -191,6 +195,10 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
     const traceSteps = appendTrace(state, result.traceStep);
 
     if (result.status === 'running') {
+      await dependencies.updateTaskCurrentStep({
+        taskId: task.id,
+        currentStep: result.nextStepId ?? null,
+      });
       return {
         traceSteps,
         currentStepId: result.nextStepId ?? undefined,
@@ -198,6 +206,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       };
     }
     if (result.status === 'success') {
+      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
       return {
         traceSteps,
         currentStepId: undefined,
@@ -206,6 +215,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       };
     }
     if (result.status === 'fallback') {
+      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
       return {
         traceSteps,
         currentStepId: undefined,
@@ -217,6 +227,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
         errorMessage: lastError(result.traceStep, result.onFail?.reason),
       };
     }
+    await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
     return {
       traceSteps,
       currentStepId: undefined,
@@ -256,7 +267,8 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
         created_from: 'agent',
         repaired_from_skill_id: skill.id,
         repaired_from_version: skill.version,
-        repaired_reason: state.onFail?.reason ?? state.errorMessage ?? 'step failed',
+        failed_step_id: state.failedTraceStep?.stepId ?? state.currentStepId ?? '',
+        repair_reason: state.onFail?.reason ?? state.errorMessage ?? 'step failed',
       },
     });
     return {
@@ -318,6 +330,7 @@ function withDefaultDependencies(
     exploreSkill: dependencies.exploreSkill ?? exploreBossLikePublishSkill,
     createExploredSkill: dependencies.createExploredSkill ?? createExploredPublishSkill,
     createTask: dependencies.createTask ?? createPublishTask,
+    updateTaskCurrentStep: dependencies.updateTaskCurrentStep ?? updatePublishTaskCurrentStep,
     completeTask: dependencies.completeTask ?? completePublishTask,
     createNextSkillVersion:
       dependencies.createNextSkillVersion ?? createNextActivePublishSkillVersion,

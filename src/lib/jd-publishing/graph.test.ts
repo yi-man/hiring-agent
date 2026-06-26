@@ -134,6 +134,7 @@ describe('runPublishingAgentGraph', () => {
     const exploreSkill = jest.fn().mockResolvedValue(simpleSkill);
     const createExploredSkill = jest.fn().mockResolvedValue({ ...simpleSkill, id: 'db-skill-1' });
     const createTask = jest.fn().mockResolvedValue(taskFor({ ...simpleSkill, id: 'db-skill-1' }));
+    const updateTaskCurrentStep = jest.fn().mockResolvedValue(undefined);
     const completeTask = jest.fn().mockResolvedValue(undefined);
 
     const result = await runPublishingAgentGraph({
@@ -150,6 +151,7 @@ describe('runPublishingAgentGraph', () => {
         exploreSkill,
         createExploredSkill,
         createTask,
+        updateTaskCurrentStep,
         completeTask,
       },
     });
@@ -190,6 +192,7 @@ describe('runPublishingAgentGraph', () => {
     const executor = new GraphExecutor();
     const createTask = jest.fn().mockResolvedValue(taskFor(simpleSkill));
     const completeTask = jest.fn().mockResolvedValue(undefined);
+    const updateTaskCurrentStep = jest.fn().mockResolvedValue(undefined);
 
     const result = await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
@@ -204,6 +207,7 @@ describe('runPublishingAgentGraph', () => {
         getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
         createTask,
         completeTask,
+        updateTaskCurrentStep,
       },
     });
 
@@ -211,6 +215,11 @@ describe('runPublishingAgentGraph', () => {
     expect(executor.calls).toEqual([
       'navigate:http://localhost:6183/employer/jobs/new',
       'fill:职位名称:高级前端工程师',
+    ]);
+    expect(updateTaskCurrentStep.mock.calls.map(([call]) => call.currentStep)).toEqual([
+      'fill_title',
+      'done',
+      null,
     ]);
   });
 
@@ -242,6 +251,7 @@ describe('runPublishingAgentGraph', () => {
       dependencies: {
         getActiveSkill: jest.fn().mockResolvedValue(longSkill),
         createTask: jest.fn().mockResolvedValue(taskFor(longSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
         completeTask: jest.fn().mockResolvedValue(undefined),
       },
     });
@@ -292,6 +302,7 @@ describe('runPublishingAgentGraph', () => {
       version: 2,
       steps: repairedSteps,
     });
+    const updateTaskCurrentStep = jest.fn().mockResolvedValue(undefined);
     const completeTask = jest.fn().mockResolvedValue(undefined);
 
     const result = await runPublishingAgentGraph({
@@ -306,6 +317,7 @@ describe('runPublishingAgentGraph', () => {
       dependencies: {
         getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
         createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+        updateTaskCurrentStep,
         completeTask,
         createNextSkillVersion,
       },
@@ -333,7 +345,13 @@ describe('runPublishingAgentGraph', () => {
     expect(createNextSkillVersion).toHaveBeenCalledWith({
       previousSkill: failingSkill,
       steps: repairedSteps,
-      meta: expect.objectContaining({ created_from: 'agent' }),
+      meta: expect.objectContaining({
+        created_from: 'agent',
+        repaired_from_skill_id: 'skill-1',
+        repaired_from_version: 1,
+        failed_step_id: 'fill_title',
+        repair_reason: 'title selector changed',
+      }),
     });
     expect(completeTask).toHaveBeenCalledWith(
       expect.objectContaining({

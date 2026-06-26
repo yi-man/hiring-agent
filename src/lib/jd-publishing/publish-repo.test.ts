@@ -5,6 +5,7 @@ import {
   createPublishTask,
   getActivePublishSkillFromDb,
   listPublishTasksForJobDescription,
+  updatePublishTaskCurrentStep,
   upsertDefaultPublishSkill,
 } from './publish-repo';
 import { bossLikePublishSkill } from './skill-registry';
@@ -275,6 +276,20 @@ describe('publish repository', () => {
       include: { trace: true },
     });
     expect(result.status).toBe('running');
+  });
+
+  it('updates the publish task current step while the graph advances', async () => {
+    prismaMock.jobPublishTask.update.mockResolvedValueOnce({ id: 'task-1' });
+
+    await updatePublishTaskCurrentStep({
+      taskId: 'task-1',
+      currentStep: 'fill_title',
+    });
+
+    expect(prismaMock.jobPublishTask.update).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: { currentStep: 'fill_title' },
+    });
   });
 
   it('stores task completion and trace steps', async () => {

@@ -29,6 +29,10 @@ export type PublishSkillMeta = Record<string, unknown> & {
   success_rate?: number;
   usage_count?: number;
   created_from?: 'explore' | 'agent';
+  repaired_from_skill_id?: string;
+  repaired_from_version?: number;
+  failed_step_id?: string;
+  repair_reason?: string;
 };
 
 export type PublishStepOnFail = {
