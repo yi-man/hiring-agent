@@ -169,6 +169,54 @@ describe('runJDAgent', () => {
     );
   });
 
+  it('keeps the rewritten JD for explicit continue requests even when automatic scoring ties', async () => {
+    runLLMMock
+      .mockResolvedValueOnce(mockLlmResult(goodEvaluation))
+      .mockResolvedValueOnce(mockLlmResult(improvedJd))
+      .mockResolvedValueOnce(mockLlmResult(goodEvaluation));
+
+    const result = await runJDAgent(
+      {
+        action: 'continue_generate',
+        currentJd: generatedJd,
+        extraInstruction: '换一种表达，强调知识库驱动的招聘协作',
+      },
+      {
+        userId: 'user-1',
+      },
+    );
+
+    expect(result.jd).toEqual(improvedJd);
+    expect(result.decision).toEqual({ improved: true, picked: 'improved' });
+  });
+
+  it('rewrites explicit continue requests even without an extra instruction', async () => {
+    runLLMMock
+      .mockResolvedValueOnce(mockLlmResult(goodEvaluation))
+      .mockResolvedValueOnce(mockLlmResult(improvedJd))
+      .mockResolvedValueOnce(mockLlmResult(betterEvaluation));
+
+    const result = await runJDAgent(
+      {
+        action: 'continue_generate',
+        currentJd: generatedJd,
+      },
+      {
+        userId: 'user-1',
+      },
+    );
+
+    expect(runLLMMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        stage: 'improve',
+        extraInstruction: '',
+      }),
+    );
+    expect(result.jd).toEqual(improvedJd);
+    expect(result.decision).toEqual({ improved: true, picked: 'improved' });
+  });
+
   it('generates with a warning when no company context is retrieved', async () => {
     retrieveUserKnowledgeContextMock.mockResolvedValueOnce({ contextText: '', matches: [] });
     runLLMMock

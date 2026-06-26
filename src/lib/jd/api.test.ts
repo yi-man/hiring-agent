@@ -108,12 +108,12 @@ describe('JD API helpers', () => {
     });
     expect(
       parseRegenerateJobDescriptionPayload(
-        { extraInstruction: ' 强调 AI 招聘经验 ', tone: 'startup' },
+        { currentJd: sampleJd, extraInstruction: ' 强调 AI 招聘经验 ', tone: 'startup' },
         'tech',
       ),
     ).toEqual({
       ok: true,
-      value: { extraInstruction: '强调 AI 招聘经验', tone: 'startup' },
+      value: { currentJd: sampleJd, extraInstruction: '强调 AI 招聘经验', tone: 'startup' },
     });
   });
 

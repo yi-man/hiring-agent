@@ -157,6 +157,7 @@ export type UpdateJobDescriptionRequest = Partial<{
 }>;
 
 export type RegenerateJobDescriptionRequest = {
+  currentJd?: JD;
   extraInstruction?: string;
   tone?: JDTone;
 };

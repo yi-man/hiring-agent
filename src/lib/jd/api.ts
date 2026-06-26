@@ -129,9 +129,14 @@ export function parseRegenerateJobDescriptionPayload(
   if (!isJDTone(tone)) {
     return { ok: false, error: 'tone is invalid' };
   }
+  if (body.currentJd !== undefined && !isJDContent(body.currentJd)) {
+    return { ok: false, error: 'currentJd is invalid' };
+  }
+  const currentJd = body.currentJd === undefined ? undefined : (body.currentJd as JD);
   return {
     ok: true,
     value: {
+      currentJd,
       extraInstruction: cleanText(body.extraInstruction),
       tone,
     },

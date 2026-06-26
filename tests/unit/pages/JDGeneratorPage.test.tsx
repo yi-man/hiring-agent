@@ -163,7 +163,10 @@ describe('JD pages', () => {
         '/api/jd/jd-1/regenerate',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ extraInstruction: '强调 AI 招聘经验' }),
+          body: JSON.stringify({
+            currentJd: { ...sampleJobDescription.content, summary: '手动调整后的 JD' },
+            extraInstruction: '强调 AI 招聘经验',
+          }),
         }),
       );
     });

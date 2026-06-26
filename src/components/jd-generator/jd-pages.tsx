@@ -487,11 +487,12 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   }
 
   async function handleRegenerate() {
-    if (!jobDescription) return;
+    if (!jobDescription || !form) return;
     setIsRegenerating(true);
     setError('');
     try {
       const next = await regenerateJobDescription(jobDescription.id, {
+        currentJd: formToJd(form),
         extraInstruction: extraInstruction.trim(),
       });
       setJobDescription(next);

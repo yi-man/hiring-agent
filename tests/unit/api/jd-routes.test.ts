@@ -190,6 +190,7 @@ describe('JD resource routes', () => {
   });
 
   it('regenerates an existing JD using company context and saves the result', async () => {
+    const editedJd = { ...sampleJd, summary: '页面当前编辑后的 JD' };
     getJobDescriptionByIdMock.mockResolvedValueOnce({
       id: 'jd-1',
       content: sampleJd,
@@ -199,7 +200,7 @@ describe('JD resource routes', () => {
     const request = new Request('http://localhost/api/jd/jd-1/regenerate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ extraInstruction: '强调 AI 招聘经验' }),
+      body: JSON.stringify({ currentJd: editedJd, extraInstruction: '强调 AI 招聘经验' }),
     });
 
     const response = await regenerateJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
@@ -208,7 +209,7 @@ describe('JD resource routes', () => {
     expect(runJDAgentMock).toHaveBeenCalledWith(
       {
         action: 'continue_generate',
-        currentJd: sampleJd,
+        currentJd: editedJd,
         extraInstruction: '强调 AI 招聘经验',
         tone: 'tech',
       },

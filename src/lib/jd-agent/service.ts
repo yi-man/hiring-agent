@@ -272,7 +272,7 @@ function routeAfterContext(state: JDAgentGraphState): 'generate' | 'evaluate_ori
 
 function routeAfterEvaluation(state: JDAgentGraphState): 'improve' | 'finalize' {
   const evaluation = requireOriginalEvaluation(state);
-  if (state.request.action === 'continue_generate' && state.instruction.trim()) {
+  if (state.request.action === 'continue_generate') {
     return 'improve';
   }
   return needImprove(evaluation) || evaluation.rewrite_required ? 'improve' : 'finalize';
@@ -324,6 +324,15 @@ async function finalizeNode(state: JDAgentGraphState): Promise<JDAgentGraphUpdat
   const originalEvaluation = requireOriginalEvaluation(state);
 
   if (state.improvedJd && state.improvedEvaluation) {
+    if (state.request.action === 'continue_generate') {
+      return {
+        finalJd: state.improvedJd,
+        finalEvaluation: state.improvedEvaluation,
+        picked: 'improved',
+        improved: true,
+      };
+    }
+
     const pickedResult = pickBetter(
       originalJd,
       state.improvedJd,

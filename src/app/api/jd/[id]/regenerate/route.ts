@@ -57,7 +57,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const agentResponse = await runJDAgent(
       {
         action: 'continue_generate',
-        currentJd: current.content,
+        currentJd: value.currentJd ?? current.content,
         extraInstruction: value.extraInstruction,
         tone: value.tone,
       },
