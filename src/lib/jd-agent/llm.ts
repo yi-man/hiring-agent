@@ -14,13 +14,14 @@ import {
 } from './prompts';
 
 export type LLMCallInput =
-  | { stage: 'generate'; schema: JobSchema }
-  | { stage: 'evaluate'; jd: JD }
+  | { stage: 'generate'; schema: JobSchema; companyContext?: string }
+  | { stage: 'evaluate'; jd: JD; companyContext?: string }
   | {
       stage: 'improve';
       jd: JD;
       evaluation: EvaluationResult;
       extraInstruction: string;
+      companyContext?: string;
     };
 
 export type LLMCallResult = {
@@ -58,16 +59,13 @@ type ErrorWithMeta = {
 };
 
 export function shouldUseMockLlm(): boolean {
-  if (process.env.NODE_ENV === 'test') {
-    return true;
-  }
-  if (env.JD_LLM_MOCK) {
-    return true;
-  }
+  return process.env.NODE_ENV === 'test';
+}
+
+function assertOpenAiConfigured(): void {
   if (!env.OPENAI_API_KEY?.trim()) {
-    return true;
+    throw new Error('OPENAI_API_KEY is not configured');
   }
-  return false;
 }
 
 async function safeRecordLlmCallEnd(
@@ -176,9 +174,10 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
   if (shouldUseMockLlm()) {
     return runMockLlm(input);
   }
+  assertOpenAiConfigured();
 
   if (input.stage === 'generate') {
-    const user = await buildGenerateUserPrompt(input.schema);
+    const user = await buildGenerateUserPrompt(input.schema, input.companyContext);
     const result = await runLoggedOpenAiCall(
       input.stage,
       {
@@ -194,7 +193,7 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
   }
 
   if (input.stage === 'evaluate') {
-    const user = await buildEvaluateUserPrompt(input.jd);
+    const user = await buildEvaluateUserPrompt(input.jd, input.companyContext);
     const result = await runLoggedOpenAiCall(
       input.stage,
       {
@@ -209,7 +208,12 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
     return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
   }
 
-  const user = await buildImproveUserPrompt(input.jd, input.evaluation, input.extraInstruction);
+  const user = await buildImproveUserPrompt(
+    input.jd,
+    input.evaluation,
+    input.extraInstruction,
+    input.companyContext,
+  );
   const result = await runLoggedOpenAiCall(
     input.stage,
     {

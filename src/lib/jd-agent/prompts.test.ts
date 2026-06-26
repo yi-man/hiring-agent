@@ -34,7 +34,7 @@ const evalResult: EvaluationResult = {
 
 describe('jd-agent prompts', () => {
   it('uses source prompt version', () => {
-    expect(PROMPT_VERSION).toBe('jd_v3.2');
+    expect(PROMPT_VERSION).toBe('jd_v3.3');
   });
 
   it('builds prompts with strict json constraints', async () => {
@@ -43,5 +43,28 @@ describe('jd-agent prompts', () => {
     expect(await buildImproveUserPrompt(jd, evalResult, '更专业')).toContain(
       '返回完整优化后的JSON JD',
     );
+  });
+
+  it('treats extra instructions as hard constraints when improving', async () => {
+    const prompt = await buildImproveUserPrompt(jd, evalResult, '强调 AI 面试评估经验');
+
+    expect(prompt).toContain('用户追加要求是本次改写的强约束');
+    expect(prompt).toContain('必须逐条体现在输出 JD 中');
+    expect(prompt).toContain('强调 AI 面试评估经验');
+  });
+
+  it('injects company context with grounding rules', async () => {
+    const companyContext =
+      '[knowledge source filename="company.md" chunkIndex=0]\n招聘助手服务 HR 团队，提供 AI 对话、知识库和 JD 生成能力。';
+
+    const generatePrompt = await buildGenerateUserPrompt(schema, companyContext);
+    const evaluatePrompt = await buildEvaluateUserPrompt(jd, companyContext);
+    const improvePrompt = await buildImproveUserPrompt(jd, evalResult, '更专业', companyContext);
+
+    expect(generatePrompt).toContain('公司上下文');
+    expect(generatePrompt).toContain('不要编造');
+    expect(generatePrompt).toContain('AI 对话、知识库和 JD 生成能力');
+    expect(evaluatePrompt).toContain('公司上下文校验');
+    expect(improvePrompt).toContain('AI 对话、知识库和 JD 生成能力');
   });
 });

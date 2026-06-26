@@ -1,5 +1,17 @@
 export type JDTone = 'startup' | 'tech' | 'formal';
 
+export const JD_STATUSES = [
+  'created',
+  'ready_to_publish',
+  'publishing',
+  'published',
+  'publish_failed',
+  'offline',
+  'archived',
+] as const;
+
+export type JDStatus = (typeof JD_STATUSES)[number];
+
 export type JobSchema = {
   title: string;
   seniority: string;
@@ -78,6 +90,24 @@ export type JDAgentTokenMeta = {
   stages: JDAgentStageTokenUsage[];
 };
 
+export type JDAgentContextMatch = {
+  score: number;
+  documentId: string;
+  chunkId: string;
+  chunkIndex: number;
+  filename: string;
+  title: string | null;
+  sourceLabel: string | null;
+};
+
+export type JDAgentContextMeta = {
+  used: boolean;
+  query: string;
+  textLength: number;
+  matches: JDAgentContextMatch[];
+  warnings: string[];
+};
+
 export type JDAgentResponse = {
   jd: JD;
   evaluation: EvaluationResult;
@@ -88,6 +118,46 @@ export type JDAgentResponse = {
     action: JDAgentAction;
     timing?: JDAgentTimingMeta;
     tokens?: JDAgentTokenMeta;
+    context?: JDAgentContextMeta;
   };
   warnings?: string[];
+};
+
+export type JobDescriptionDto = {
+  id: string;
+  userId: string;
+  department: string;
+  position: string;
+  positionDescription: string;
+  tone: JDTone;
+  status: JDStatus;
+  content: JD;
+  evaluation: EvaluationResult | null;
+  generationMeta: JDAgentResponse['meta'] | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateJobDescriptionRequest = {
+  department: string;
+  position: string;
+  positionDescription: string;
+  tone?: JDTone;
+};
+
+export type UpdateJobDescriptionRequest = Partial<{
+  department: string;
+  position: string;
+  positionDescription: string;
+  tone: JDTone;
+  status: JDStatus;
+  content: JD;
+  evaluation: EvaluationResult | null;
+  generationMeta: JDAgentResponse['meta'] | null;
+}>;
+
+export type RegenerateJobDescriptionRequest = {
+  currentJd?: JD;
+  extraInstruction?: string;
+  tone?: JDTone;
 };

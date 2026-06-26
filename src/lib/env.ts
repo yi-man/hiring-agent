@@ -5,6 +5,25 @@ import { config } from 'dotenv';
 config({ path: path.resolve(process.cwd(), '.env.local') });
 config({ path: path.resolve(process.cwd(), '.env.development') });
 
+const envBoolean = (defaultValue: boolean) =>
+  z
+    .preprocess((value) => {
+      if (typeof value !== 'string') {
+        return value;
+      }
+
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'on'].includes(normalized)) {
+        return true;
+      }
+      if (['false', '0', 'no', 'off'].includes(normalized)) {
+        return false;
+      }
+
+      return value;
+    }, z.boolean())
+    .default(defaultValue);
+
 const envSchema = z.object({
   // 应用配置
   NEXT_PUBLIC_APP_NAME: z.string().default('Hiring Agent'),
@@ -19,18 +38,18 @@ const envSchema = z.object({
 
   // 主题配置
   NEXT_PUBLIC_DEFAULT_THEME: z.enum(['light', 'dark', 'system']).default('light'),
-  NEXT_PUBLIC_ENABLE_THEME_SWITCHER: z.coerce.boolean().default(true),
+  NEXT_PUBLIC_ENABLE_THEME_SWITCHER: envBoolean(true),
 
   // 分析和监控
-  NEXT_PUBLIC_ENABLE_ANALYTICS: z.coerce.boolean().default(false),
+  NEXT_PUBLIC_ENABLE_ANALYTICS: envBoolean(false),
   NEXT_PUBLIC_GA_TRACKING_ID: z.string().optional(),
 
   // 性能优化
-  NEXT_PUBLIC_ENABLE_IMAGE_OPTIMIZATION: z.coerce.boolean().default(true),
-  NEXT_PUBLIC_ENABLE_CACHE: z.coerce.boolean().default(true),
+  NEXT_PUBLIC_ENABLE_IMAGE_OPTIMIZATION: envBoolean(true),
+  NEXT_PUBLIC_ENABLE_CACHE: envBoolean(true),
 
   // 开发配置
-  NEXT_PUBLIC_ENABLE_DEBUG: z.coerce.boolean().default(false),
+  NEXT_PUBLIC_ENABLE_DEBUG: envBoolean(false),
 
   // JD Agent LLM（OpenAI 兼容接口，仅服务端使用）
   OPENAI_API_KEY: z.string().optional(),
@@ -42,10 +61,8 @@ const envSchema = z.object({
    * true / false 可强制开关；multimodal 请求体为 input: [{ type: "text", text }]，每段文本单独请求以得到独立向量。
    */
   OPENAI_EMBEDDING_USE_MULTIMODAL: z.enum(['auto', 'true', 'false']).default('auto'),
-  /** 为 true 时强制走本地 mock，不调用外部模型 */
-  JD_LLM_MOCK: z.coerce.boolean().default(false),
   /** 部分兼容接口不支持 json_object，可设为 false */
-  OPENAI_JSON_MODE: z.coerce.boolean().default(true),
+  OPENAI_JSON_MODE: envBoolean(true),
   /** JD Agent 调用上游 LLM 的超时（毫秒），与通用 API_TIMEOUT 分离，避免慢模型被 10s 截断 */
   JD_LLM_TIMEOUT_MS: z.coerce.number().default(120000),
   /** LLM 聚合准实时任务水位线（分钟） */

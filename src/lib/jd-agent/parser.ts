@@ -9,13 +9,17 @@ function normalizeList(input: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeTitle(input: string): string {
+  return input.replace(/^职位[:：]\s*/, '').trim() || '岗位待定';
+}
+
 export function parseJobInput(input: string, tone: JDTone = 'tech'): JobSchema {
   const trimmed = input.trim();
   const lines = trimmed
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
-  const title = lines[0] || '岗位待定';
+  const title = normalizeTitle(lines[0] || '岗位待定');
   const combined = lines.join(' ');
   const skills = normalizeList(combined).slice(0, 8);
 

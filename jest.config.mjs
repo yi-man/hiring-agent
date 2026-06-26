@@ -31,6 +31,7 @@ const config = {
 
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^@langchain/langgraph$': '<rootDir>/node_modules/@langchain/langgraph/dist/index.cjs',
     '^react$': '<rootDir>/node_modules/react',
     '^react-dom$': '<rootDir>/node_modules/react-dom',
     '^react/jsx-runtime$': '<rootDir>/node_modules/react/jsx-runtime',
@@ -49,7 +50,9 @@ const config = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.tsx'],
 
   testPathIgnorePatterns: ['<rootDir>/.next/', '<rootDir>/out/', '<rootDir>/coverage/'],
-  transformIgnorePatterns: ['node_modules/(?!(lucide-react)/)'],
+  transformIgnorePatterns: [
+    'node_modules/(?!(lucide-react|@langchain/langgraph|@langchain/langgraph-checkpoint|@langchain/core)/)',
+  ],
 
   clearMocks: true,
 };

@@ -1,7 +1,14 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { JDAgentResponse, JDAgentTimingMeta, JDAgentTokenMeta, JD, JDTone } from '@/types';
+import type {
+  JDAgentContextMeta,
+  JDAgentResponse,
+  JDAgentTimingMeta,
+  JDAgentTokenMeta,
+  JD,
+  JDTone,
+} from '@/types';
 
 type ApiPayload = {
   success: boolean;
@@ -26,6 +33,8 @@ export function JDGeneratorWorkbench() {
   const [error, setError] = useState('');
   const [timing, setTiming] = useState<JDAgentTimingMeta | null>(null);
   const [tokens, setTokens] = useState<JDAgentTokenMeta | null>(null);
+  const [context, setContext] = useState<JDAgentContextMeta | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [loading, setLoading] = useState<'idle' | 'generating' | 'continuing'>('idle');
 
   const hasJd = useMemo(() => Boolean(jd.title || jd.summary), [jd]);
@@ -40,10 +49,14 @@ export function JDGeneratorWorkbench() {
     if (!response.ok || !result.success || !result.data) {
       setTiming(null);
       setTokens(null);
+      setContext(null);
+      setWarnings([]);
       throw new Error(result.message || '请求失败');
     }
     setTiming(result.data.meta.timing ?? null);
     setTokens(result.data.meta.tokens ?? null);
+    setContext(result.data.meta.context ?? null);
+    setWarnings(result.data.warnings ?? result.data.meta.context?.warnings ?? []);
     return result.data.jd;
   }
 
@@ -200,6 +213,49 @@ export function JDGeneratorWorkbench() {
               </li>
             ))}
           </ul>
+        </section>
+      ) : null}
+
+      {context ? (
+        <section className="space-y-3 rounded-lg border border-dashed p-4 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-medium">
+              {context.used ? '已使用公司上下文' : '未使用公司上下文'}
+            </h2>
+            <span className="text-muted-foreground font-mono text-xs">
+              {context.matches.length} sources · {context.textLength} chars
+            </span>
+          </div>
+          <div className="text-muted-foreground rounded-md border px-3 py-2 font-mono text-xs break-words">
+            {context.query || '无检索查询'}
+          </div>
+          {context.matches.length > 0 ? (
+            <ul className="space-y-2">
+              {context.matches.map((match) => (
+                <li
+                  key={`${match.documentId}-${match.chunkId}`}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2"
+                >
+                  <span className="min-w-0 truncate">
+                    {match.title?.trim() || match.filename}
+                    <span className="text-muted-foreground ml-2 font-mono text-xs">
+                      {match.filename} · chunk {match.chunkIndex}
+                    </span>
+                  </span>
+                  <span className="text-muted-foreground font-mono text-xs">
+                    {match.score.toFixed(2)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {warnings.length > 0 ? (
+            <ul className="text-muted-foreground list-inside list-disc space-y-1">
+              {warnings.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          ) : null}
         </section>
       ) : null}
 

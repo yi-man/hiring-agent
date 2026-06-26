@@ -67,4 +67,4 @@ Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；
 - **排错与收尾**：遇到问题优先用 systematic-debugging 思路查清根因再改；**改完后须本地验证并跑完相关/全量测试**再视为完成。
 - **端口**：日常开发默认 **3000**；Playwright 使用 **3100**（见 `playwright.config.ts`），勿随意改动以免 E2E 失效。
 - **数据库与本地依赖**：PostgreSQL / Redis、`DATABASE_URL`、迁移顺序与 Prisma 注意点见 [`docs/references/database-conventions.md`](docs/references/database-conventions.md)。
-- **LLM**：OpenAI 兼容接口；未配置 `OPENAI_API_KEY` 或 `JD_LLM_MOCK=true` 时 JD 等可走内置 mock；`tests/integration/chat/real-deps.e2e.test.ts` 无真实 Key 可能失败。
+- **LLM**：OpenAI 兼容接口；运行时 JD 生成需要配置 `OPENAI_API_KEY`，内置 mock 仅用于测试环境；`tests/integration/chat/real-deps.e2e.test.ts` 无真实 Key 可能失败。
