@@ -20,7 +20,7 @@ function messageContentToString(content: unknown): string {
   return String(content ?? '');
 }
 
-export const PROMPT_VERSION = 'jd_v3.2';
+export const PROMPT_VERSION = 'jd_v3.3';
 
 function buildCompanyContextSection(companyContext?: string): string {
   const trimmed = companyContext?.trim();
@@ -256,6 +256,8 @@ const IMPROVE_USER_TEMPLATE = `请根据评估结果优化JD。
 - 保持JSON结构不变
 - 不删除关键信息
 - 必须解决已指出问题
+- 用户追加要求是本次改写的强约束，必须逐条体现在输出 JD 中
+- 如果追加要求与原 JD 表达冲突，优先按追加要求调整措辞、职责、要求或亮点
 - 增加具体细节（技术 / 场景）
 - 删除空话
 - 避免重复

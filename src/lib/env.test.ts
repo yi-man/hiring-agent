@@ -35,6 +35,14 @@ describe('env.ts - 环境变量解析', () => {
       expect(typeof result.NEXT_PUBLIC_ENABLE_DEBUG).toBe('boolean');
     });
 
+    it('将字符串 false 解析为 false', () => {
+      expect(parseEnv({ JD_LLM_MOCK: 'false' }).JD_LLM_MOCK).toBe(false);
+      expect(parseEnv({ OPENAI_JSON_MODE: 'false' }).OPENAI_JSON_MODE).toBe(false);
+      expect(parseEnv({ NEXT_PUBLIC_ENABLE_ANALYTICS: 'false' }).NEXT_PUBLIC_ENABLE_ANALYTICS).toBe(
+        false,
+      );
+    });
+
     it('正确处理无效环境变量（ZodError）', () => {
       // 捕获 console.error 输出
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();

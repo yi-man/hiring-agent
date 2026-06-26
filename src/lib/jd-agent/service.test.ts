@@ -96,7 +96,7 @@ describe('runJDAgent', () => {
     );
 
     expect(result.jd.title).toBeTruthy();
-    expect(result.meta.promptVersion).toBe('jd_v3.2');
+    expect(result.meta.promptVersion).toBe('jd_v3.3');
     expect(result.meta.context?.used).toBe(true);
     expect(result.meta.context?.matches).toEqual([
       expect.objectContaining({ documentId: 'doc-1', filename: 'company.md' }),
