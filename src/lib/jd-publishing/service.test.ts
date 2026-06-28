@@ -57,6 +57,7 @@ const successfulResult: PublishTaskResult = {
 };
 
 const originalEnv = { ...process.env };
+const originalNodeEnv = process.env.NODE_ENV;
 
 function restoreEnv(name: string): void {
   const value = originalEnv[name];
@@ -65,6 +66,10 @@ function restoreEnv(name: string): void {
     return;
   }
   process.env[name] = value;
+}
+
+function setNodeEnv(value: string): void {
+  (process.env as { NODE_ENV?: string }).NODE_ENV = value;
 }
 
 function createExecutor(): BrowserExecutor & { close: jest.Mock<Promise<void>, []> } {
@@ -91,6 +96,7 @@ function settings() {
 describe('publishJobDescriptionToBossLike', () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    setNodeEnv(originalNodeEnv);
     restoreEnv('BOSS_LIKE_BASE_URL');
     restoreEnv('BOSS_LIKE_API_BASE_URL');
     restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
@@ -99,6 +105,7 @@ describe('publishJobDescriptionToBossLike', () => {
   });
 
   afterAll(() => {
+    setNodeEnv(originalNodeEnv);
     restoreEnv('BOSS_LIKE_BASE_URL');
     restoreEnv('BOSS_LIKE_API_BASE_URL');
     restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
@@ -148,5 +155,39 @@ describe('publishJobDescriptionToBossLike', () => {
     expect(PlaywrightBrowserExecutorMock).toHaveBeenCalledWith();
     expect(JSON.stringify(runPublishingAgentGraphMock.mock.calls[0]?.[0])).not.toContain('6810');
     expect(executor.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires an explicit boss-like base URL outside local test runtimes', async () => {
+    const executor = createExecutor();
+    setNodeEnv('production');
+    delete process.env.BOSS_LIKE_BASE_URL;
+    process.env.BOSS_LIKE_EMPLOYER_USERNAME = 'hr-admin';
+    process.env.BOSS_LIKE_EMPLOYER_PASSWORD = 'secret';
+
+    await expect(
+      publishJobDescriptionToBossLike({
+        jobDescription: sampleJobDescription,
+        settings: settings(),
+        executor,
+      }),
+    ).rejects.toThrow(/BOSS_LIKE_BASE_URL is required/);
+    expect(runPublishingAgentGraphMock).not.toHaveBeenCalled();
+  });
+
+  it('requires explicit boss-like credentials outside local test runtimes', async () => {
+    const executor = createExecutor();
+    setNodeEnv('production');
+    process.env.BOSS_LIKE_BASE_URL = 'https://boss-like.example.com';
+    delete process.env.BOSS_LIKE_EMPLOYER_USERNAME;
+    delete process.env.BOSS_LIKE_EMPLOYER_PASSWORD;
+
+    await expect(
+      publishJobDescriptionToBossLike({
+        jobDescription: sampleJobDescription,
+        settings: settings(),
+        executor,
+      }),
+    ).rejects.toThrow(/BOSS_LIKE_EMPLOYER_USERNAME is required/);
+    expect(runPublishingAgentGraphMock).not.toHaveBeenCalled();
   });
 });

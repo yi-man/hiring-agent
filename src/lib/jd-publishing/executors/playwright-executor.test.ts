@@ -91,6 +91,46 @@ describe('PlaywrightBrowserExecutor', () => {
     }
   });
 
+  it('keeps the match report when a resolved fill action fails during execution', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const target: TargetDescriptor = {
+        kind: 'field',
+        role: 'textbox',
+        name: '职位名称',
+        exact: true,
+        stableAttrs: { name: 'title' },
+      };
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <form aria-label="发布职位">
+              <label>
+                职位名称
+                <input name="title" type="file" />
+              </label>
+            </form>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const result = await executor.fill(target, '高级前端工程师');
+
+      expect(result.success).toBe(false);
+      expect(result.match).toEqual(
+        expect.objectContaining({
+          status: 'unique',
+          target,
+        }),
+      );
+      expect(result.failedTargetKey).toBe('target');
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('waits while checking for delayed visible text', async () => {
     const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
     try {

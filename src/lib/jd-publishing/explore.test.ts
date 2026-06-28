@@ -13,7 +13,10 @@ class ExploringExecutor implements BrowserExecutor {
   readonly resolvedTargets: TargetDescriptor[] = [];
   private formVisible = false;
 
-  constructor(private readonly reportStatus: LocatorMatchReport['status'] = 'unique') {}
+  constructor(
+    private readonly reportStatus: LocatorMatchReport['status'] = 'unique',
+    private readonly structuredSnapshotOverride?: StructuredDomSnapshot,
+  ) {}
 
   private targetName(target: BrowserTargetInput): string {
     return typeof target === 'string' ? target : target.name;
@@ -57,6 +60,7 @@ class ExploringExecutor implements BrowserExecutor {
 
   async snapshotStructured(): Promise<StructuredDomSnapshot> {
     this.calls.push('snapshotStructured');
+    if (this.structuredSnapshotOverride) return this.structuredSnapshotOverride;
     return {
       url: 'http://localhost:6183/employer/jobs/new',
       title: '发布职位',
@@ -141,7 +145,67 @@ class ExploringExecutor implements BrowserExecutor {
 
 describe('exploreBossLikePublishSkill', () => {
   it('uses browser operations to author an explored boss-like publish skill', async () => {
-    const executor = new ExploringExecutor();
+    const executor = new ExploringExecutor('unique', {
+      url: 'http://localhost:6183/employer/jobs/new',
+      title: '发布职位',
+      pageState: 'publish_form',
+      headings: [
+        {
+          tag: 'h1',
+          accessibleName: '发布职位',
+          text: '发布职位',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+      forms: [
+        {
+          name: '发布职位',
+          fields: [
+            ['职位名称', 'job_title_dom'],
+            ['公司名称', 'company_dom'],
+            ['薪资范围', 'salary_dom'],
+            ['工作地点', 'location_dom'],
+            ['职位描述', 'description_dom'],
+            ['技能标签', 'keyword_dom'],
+          ].map(([label, name]) => ({
+            tag: label === '职位描述' ? 'textarea' : 'input',
+            role: 'textbox',
+            accessibleName: label,
+            label,
+            name,
+            visible: true,
+            enabled: true,
+            editable: true,
+          })),
+          buttons: [
+            {
+              tag: 'button',
+              role: 'button',
+              accessibleName: '添加',
+              text: '添加',
+              id: 'keyword-add-dom',
+              visible: true,
+              enabled: true,
+              editable: false,
+            },
+            {
+              tag: 'button',
+              role: 'button',
+              accessibleName: '发布职位',
+              text: '发布职位',
+              id: 'publish-dom',
+              visible: true,
+              enabled: true,
+              editable: false,
+            },
+          ],
+        },
+      ],
+      links: [],
+      textBlocks: [],
+    });
 
     const skill = await exploreBossLikePublishSkill({
       executor,
@@ -183,6 +247,7 @@ describe('exploreBossLikePublishSkill', () => {
               kind: 'field',
               role: 'textbox',
               name: '职位名称',
+              stableAttrs: { name: 'job_title_dom' },
               valueHint: 'title',
               scope: { kind: 'form', name: '发布职位' },
             }),
@@ -191,14 +256,26 @@ describe('exploreBossLikePublishSkill', () => {
         expect.objectContaining({
           id: 'add_keywords',
           params: expect.objectContaining({
-            target: expect.objectContaining({ name: '技能标签', valueHint: 'keyword' }),
-            submitTarget: expect.objectContaining({ kind: 'button', name: '添加' }),
+            target: expect.objectContaining({
+              name: '技能标签',
+              stableAttrs: { name: 'keyword_dom' },
+              valueHint: 'keyword',
+            }),
+            submitTarget: expect.objectContaining({
+              kind: 'button',
+              name: '添加',
+              stableAttrs: { id: 'keyword-add-dom' },
+            }),
           }),
         }),
         expect.objectContaining({
           id: 'submit_job',
           params: expect.objectContaining({
-            target: expect.objectContaining({ kind: 'button', name: '发布职位' }),
+            target: expect.objectContaining({
+              kind: 'button',
+              name: '发布职位',
+              stableAttrs: { id: 'publish-dom' },
+            }),
           }),
         }),
       ]),
@@ -245,15 +322,19 @@ describe('exploreBossLikePublishSkill', () => {
       },
     });
 
-    expect(executor.calls.slice(0, 7)).toEqual([
+    expect(executor.calls.slice(0, 8)).toEqual([
       'navigate:http://localhost:6183/employer/jobs/new',
       'check:text_contains:职位名称',
       'navigate:http://localhost:6183/employer/login',
+      'snapshotStructured',
       'fill:用户名:hr',
       'fill:密码:secret',
       'click:登录',
       'waitForUrl:/employer/resumes',
     ]);
+    expect(executor.resolvedTargets.map((target) => target.name)).toEqual(
+      expect.arrayContaining(['用户名', '密码', '登录']),
+    );
   });
 
   it('refuses to create a skill when target dry-run resolution is not unique', async () => {

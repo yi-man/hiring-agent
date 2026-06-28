@@ -78,6 +78,7 @@ export type LocatorMatchReport = {
   target: TargetDescriptor;
   status: 'unique' | 'not_found' | 'ambiguous' | 'low_confidence';
   strategy: string;
+  strategiesTried?: string[];
   candidateCount: number;
   confidence: number;
   chosen?: DomCandidate;
@@ -86,12 +87,18 @@ export type LocatorMatchReport = {
 };
 
 export type BrowserTargetInput = string | TargetDescriptor;
+export type BrowserStepTargetKey = 'target' | 'submitTarget';
+export type BrowserCommandAction =
+  | PublishSkillAction
+  | 'check'
+  | 'snapshot_structured'
+  | 'resolve_target';
 
 export type BrowserCommand = {
   id: string;
   taskId: string;
   stepId: string;
-  action: PublishSkillAction | 'check';
+  action: BrowserCommandAction;
   target?: TargetDescriptor;
   params: Record<string, unknown>;
   timeoutMs: number;
@@ -103,6 +110,12 @@ export type BrowserCommandResult = {
   error?: string;
   domSnapshot?: StructuredDomSnapshot;
   match?: LocatorMatchReport;
+  failedTargetKey?: BrowserStepTargetKey;
+};
+
+export type BrowserCommandTransport = {
+  send(command: BrowserCommand): Promise<BrowserCommandResult>;
+  close?(): Promise<void>;
 };
 
 export type BrowserResolveOptions = {
@@ -178,6 +191,7 @@ export type BrowserStepResult = {
   error?: string;
   domSnapshot?: string | StructuredDomSnapshot;
   match?: LocatorMatchReport;
+  failedTargetKey?: BrowserStepTargetKey;
 };
 
 export type BrowserExecutor = {

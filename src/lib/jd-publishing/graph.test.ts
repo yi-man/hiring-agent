@@ -49,6 +49,17 @@ class GraphExecutor implements BrowserExecutor {
     return { success: true };
   }
 
+  async addKeywords(
+    target: BrowserTargetInput,
+    values: string[],
+    submitTarget: BrowserTargetInput,
+  ): Promise<BrowserStepResult> {
+    const targetName = this.targetName(target);
+    const submitName = this.targetName(submitTarget);
+    this.calls.push(`addKeywords:${targetName}:${submitName}:${values.join(',')}`);
+    return this.failures[`addKeywords:${targetName}:${submitName}`] ?? { success: true };
+  }
+
   async check(check: { id?: string; text?: string }): Promise<boolean> {
     this.calls.push(`check:${check.id ?? check.text ?? ''}`);
     return true;
@@ -644,5 +655,144 @@ describe('runPublishingAgentGraph', () => {
         }),
       ]),
     );
+  });
+
+  it('re-explores and patches submitTarget when add_keywords fails on the submit button', async () => {
+    const keywordTarget: TargetDescriptor = {
+      kind: 'field',
+      role: 'textbox',
+      name: '技能标签',
+      exact: true,
+      valueHint: 'keyword',
+      scope: { kind: 'form', name: '发布职位' },
+    };
+    const staleSubmitTarget: TargetDescriptor = {
+      kind: 'button',
+      role: 'button',
+      name: '旧添加按钮',
+      exact: true,
+      scope: { kind: 'form', name: '发布职位' },
+    };
+    const repairedSubmitTarget: TargetDescriptor = {
+      ...staleSubmitTarget,
+      name: '添加',
+      stableAttrs: { id: 'add-keyword' },
+    };
+    const repairReport: LocatorMatchReport = {
+      target: repairedSubmitTarget,
+      status: 'unique',
+      strategy: 'stable_attr:id',
+      candidateCount: 1,
+      confidence: 0.98,
+      chosen: {
+        tag: 'button',
+        id: 'add-keyword',
+        accessibleName: '添加',
+        visible: true,
+        enabled: true,
+        editable: false,
+      },
+      candidates: [],
+    };
+    const failingSkill: PublishSkill = {
+      ...simpleSkill,
+      steps: [
+        {
+          id: 'add_keywords',
+          type: 'action',
+          action: 'add_keywords',
+          params: {
+            target: keywordTarget,
+            values: '{{input.keywords}}',
+            submitTarget: staleSubmitTarget,
+          },
+          next: 'done',
+          onFail: {
+            type: 'fallback_agent',
+            reason: 'keyword submit button changed',
+          },
+        },
+        { id: 'done', type: 'end' },
+      ],
+    };
+    const executor = new GraphExecutor({}, repairReport);
+    executor.addKeywords = async (
+      target: BrowserTargetInput,
+      values: string[],
+      submitTarget: BrowserTargetInput,
+    ) => {
+      const targetName = typeof target === 'string' ? target : target.name;
+      const submitName = typeof submitTarget === 'string' ? submitTarget : submitTarget.name;
+      executor.calls.push(`addKeywords:${targetName}:${submitName}:${values.join(',')}`);
+      return {
+        success: false,
+        error: 'not_found_target: old keyword submit',
+        failedTargetKey: 'submitTarget',
+        match: {
+          ...repairReport,
+          target: staleSubmitTarget,
+          status: 'not_found',
+          candidateCount: 0,
+          confidence: 0,
+          chosen: undefined,
+        },
+      };
+    };
+    const createNextSkillVersion = jest.fn().mockResolvedValue({
+      ...failingSkill,
+      id: 'skill-2',
+      version: 2,
+      steps: [
+        {
+          ...failingSkill.steps[0],
+          params: {
+            target: keywordTarget,
+            values: '{{input.keywords}}',
+            submitTarget: repairedSubmitTarget,
+          },
+        },
+        failingSkill.steps[1],
+      ],
+    });
+
+    await runPublishingAgentGraph({
+      jobDescription: sampleJobDescription,
+      settings: settings(),
+      executor,
+      target: {
+        loginUrl: 'http://localhost:6183/employer/login',
+        newJobUrl: 'http://localhost:6183/employer/jobs/new',
+      },
+      credentials: { username: 'admin', password: 'boss123' },
+      dependencies: {
+        getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
+        createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
+        completeTask: jest.fn().mockResolvedValue(undefined),
+        createNextSkillVersion,
+      },
+    });
+
+    expect(executor.calls).toEqual(expect.arrayContaining(['resolveTarget:旧添加按钮']));
+    expect(executor.calls).not.toContain('resolveTarget:技能标签');
+    expect(createNextSkillVersion).toHaveBeenCalledWith({
+      previousSkill: failingSkill,
+      steps: [
+        {
+          ...failingSkill.steps[0],
+          params: {
+            target: keywordTarget,
+            values: '{{input.keywords}}',
+            submitTarget: repairedSubmitTarget,
+          },
+        },
+        failingSkill.steps[1],
+      ],
+      meta: expect.objectContaining({
+        created_from: 'agent',
+        failed_step_id: 'add_keywords',
+        repair_reason: expect.stringContaining('stable_attr:id'),
+      }),
+    });
   });
 });

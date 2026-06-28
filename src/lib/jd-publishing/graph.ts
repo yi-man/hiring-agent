@@ -14,6 +14,7 @@ import { executePublishingStep } from './skill-executor';
 import type {
   BrowserExecutor,
   BrowserResolveOptions,
+  BrowserStepTargetKey,
   BrowserTargetInput,
   LocatorMatchReport,
   PublishExecutionContext,
@@ -124,6 +125,7 @@ function patchFailedStepTarget(params: {
   steps: PublishStep[];
   failedStepId: string;
   target: BrowserTargetInput;
+  targetKey: BrowserStepTargetKey;
 }): PublishStep[] {
   return params.steps.map((step) => {
     if (step.id !== params.failedStepId || step.type !== 'action') return step;
@@ -131,10 +133,29 @@ function patchFailedStepTarget(params: {
       ...step,
       params: {
         ...step.params,
-        target: params.target,
+        [params.targetKey]: params.target,
       },
     };
   });
+}
+
+function readFailedTarget(params: { traceStep?: PublishTraceStep }): {
+  target?: BrowserTargetInput;
+  targetKey: BrowserStepTargetKey;
+} {
+  const traceStep = params.traceStep;
+  const explicitKey = traceStep?.result.failedTargetKey;
+  const targetKey: BrowserStepTargetKey =
+    explicitKey === 'submitTarget' ? 'submitTarget' : 'target';
+  const matchedTarget = traceStep?.result.match?.target;
+  if (matchedTarget) return { target: matchedTarget, targetKey };
+  const paramTarget = traceStep?.params[targetKey];
+  if (isBrowserTargetInput(paramTarget)) return { target: paramTarget, targetKey };
+  const fallbackTarget = traceStep?.params.target;
+  return {
+    target: isBrowserTargetInput(fallbackTarget) ? fallbackTarget : undefined,
+    targetKey: 'target',
+  };
 }
 
 function buildFallbackTraceStep(
@@ -302,7 +323,8 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
   async function fallbackAgentNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
     const failedTraceStep = state.failedTraceStep;
-    const failedTarget = failedTraceStep?.params.target;
+    const failed = readFailedTarget({ traceStep: failedTraceStep });
+    const failedTarget = failed.target;
     let repairSteps = state.repairSteps;
     let repairReason = state.repairReason;
     let fallbackError = state.errorMessage;
@@ -326,6 +348,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
             steps: skill.steps,
             failedStepId: failedTraceStep.stepId,
             target: report.target,
+            targetKey: failed.targetKey,
           });
           repairReason = `target re-explore resolved by ${report.strategy}`;
         } else {

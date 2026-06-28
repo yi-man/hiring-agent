@@ -197,10 +197,12 @@ function decideMatch(params: {
   target: TargetDescriptor;
   strategy: ResolverStrategy;
   candidates: CandidateMatch[];
+  strategiesTried?: ResolverStrategy[];
 }): ResolveTargetResult {
   const { target, strategy } = params;
   const candidates = [...params.candidates].sort((left, right) => right.score - left.score);
   const evidence = candidates.map(candidateEvidence);
+  const strategiesTried = params.strategiesTried ?? [strategy];
 
   if (candidates.length === 0) {
     return {
@@ -209,6 +211,7 @@ function decideMatch(params: {
         target,
         status: 'not_found',
         strategy,
+        strategiesTried,
         candidateCount: 0,
         confidence: 0,
         candidates: [],
@@ -229,6 +232,7 @@ function decideMatch(params: {
       target,
       status,
       strategy,
+      strategiesTried,
       candidateCount: candidates.length,
       confidence: status === 'ambiguous' ? Math.min(confidence, 0.69) : confidence,
       chosen: status === 'ambiguous' ? undefined : candidateEvidence(chosen),
@@ -487,8 +491,10 @@ async function resolveWithStrategy(params: {
   legacyLocator?: string;
 }): Promise<ResolveTargetResult> {
   const { page, target, options, legacyLocator } = params;
+  const strategiesTried: ResolverStrategy[] = [];
 
   for (const stable of stableAttrSelectors(target)) {
+    strategiesTried.push(stable.strategy);
     const candidates = await collectBySelector({
       page,
       selector: stable.selector,
@@ -498,11 +504,12 @@ async function resolveWithStrategy(params: {
       options,
     });
     if (candidates.length > 0) {
-      return decideMatch({ target, strategy: stable.strategy, candidates });
+      return decideMatch({ target, strategy: stable.strategy, candidates, strategiesTried });
     }
   }
 
   if (target.role) {
+    strategiesTried.push('role_name');
     const candidates = await collectFromLocator({
       locator: page.getByRole(target.role, { name: target.name, exact: target.exact ?? false }),
       strategy: 'role_name',
@@ -511,11 +518,12 @@ async function resolveWithStrategy(params: {
       options,
     });
     if (candidates.length > 0) {
-      return decideMatch({ target, strategy: 'role_name', candidates });
+      return decideMatch({ target, strategy: 'role_name', candidates, strategiesTried });
     }
   }
 
   if (target.kind === 'field') {
+    strategiesTried.push('label');
     const candidates = await collectFromLocator({
       locator: page.getByLabel(target.name, { exact: target.exact ?? false }),
       strategy: 'label',
@@ -524,11 +532,12 @@ async function resolveWithStrategy(params: {
       options,
     });
     if (candidates.length > 0) {
-      return decideMatch({ target, strategy: 'label', candidates });
+      return decideMatch({ target, strategy: 'label', candidates, strategiesTried });
     }
   }
 
   if (target.kind === 'field') {
+    strategiesTried.push('placeholder');
     const candidates = await collectFromLocator({
       locator: page.getByPlaceholder(target.name, { exact: target.exact ?? false }),
       strategy: 'placeholder',
@@ -537,11 +546,12 @@ async function resolveWithStrategy(params: {
       options,
     });
     if (candidates.length > 0) {
-      return decideMatch({ target, strategy: 'placeholder', candidates });
+      return decideMatch({ target, strategy: 'placeholder', candidates, strategiesTried });
     }
   }
 
   if (target.kind === 'text') {
+    strategiesTried.push('text');
     const candidates = await collectFromLocator({
       locator: page.getByText(target.name, { exact: target.exact ?? false }),
       strategy: 'text',
@@ -550,25 +560,34 @@ async function resolveWithStrategy(params: {
       options,
     });
     if (candidates.length > 0) {
-      return decideMatch({ target, strategy: 'text', candidates });
+      return decideMatch({ target, strategy: 'text', candidates, strategiesTried });
     }
   }
 
+  strategiesTried.push('semantic_proximity');
   const proximityCandidates = await collectSemanticProximity(page, target, options);
   if (proximityCandidates.length > 0) {
     return decideMatch({
       target,
       strategy: 'semantic_proximity',
       candidates: proximityCandidates,
+      strategiesTried,
     });
   }
 
+  strategiesTried.push('safe_css');
   const safeCssCandidates = await collectSafeCss(page, target, options);
   if (safeCssCandidates.length > 0) {
-    return decideMatch({ target, strategy: 'safe_css', candidates: safeCssCandidates });
+    return decideMatch({
+      target,
+      strategy: 'safe_css',
+      candidates: safeCssCandidates,
+      strategiesTried,
+    });
   }
 
   if (legacyLocator) {
+    strategiesTried.push('legacy_locator');
     const candidates = await collectBySelector({
       page,
       selector: legacyLocator,
@@ -578,11 +597,12 @@ async function resolveWithStrategy(params: {
       options,
     });
     if (candidates.length > 0) {
-      return decideMatch({ target, strategy: 'legacy_locator', candidates });
+      return decideMatch({ target, strategy: 'legacy_locator', candidates, strategiesTried });
     }
   }
 
-  return decideMatch({ target, strategy: 'xpath_diagnostic', candidates: [] });
+  strategiesTried.push('xpath_diagnostic');
+  return decideMatch({ target, strategy: 'xpath_diagnostic', candidates: [], strategiesTried });
 }
 
 async function collectSemanticProximity(

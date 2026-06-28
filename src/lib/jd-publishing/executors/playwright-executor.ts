@@ -7,6 +7,7 @@ import type {
   BrowserExecutor,
   BrowserResolveOptions,
   BrowserStepResult,
+  BrowserStepTargetKey,
   BrowserTargetInput,
   LocatorMatchReport,
   PublishStepCheck,
@@ -104,7 +105,10 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     }
   }
 
-  private async targetFailureResult(report: LocatorMatchReport): Promise<BrowserStepResult> {
+  private async targetFailureResult(
+    report: LocatorMatchReport,
+    failedTargetKey: BrowserStepTargetKey = 'target',
+  ): Promise<BrowserStepResult> {
     const errorCode =
       report.status === 'ambiguous'
         ? 'ambiguous_target'
@@ -116,18 +120,21 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
       error: `${errorCode}: ${report.reason ?? report.target.name}`,
       domSnapshot: await this.structuredDomSnapshot().catch(() => ''),
       match: report,
+      failedTargetKey,
     };
   }
 
   private async targetErrorResult(
     error: unknown,
     match?: LocatorMatchReport,
+    failedTargetKey?: BrowserStepTargetKey,
   ): Promise<BrowserStepResult> {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown browser execution error',
       domSnapshot: await this.structuredDomSnapshot().catch(() => ''),
       match,
+      failedTargetKey,
     };
   }
 
@@ -154,18 +161,20 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
   }
 
   async fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult> {
+    let match: LocatorMatchReport | undefined;
     try {
       const resolved = await this.resolveForAction(target, {
         action: 'fill',
         requireEditable: true,
       });
+      match = resolved.report;
       if (!resolved.locator || resolved.report.status !== 'unique') {
-        return this.targetFailureResult(resolved.report);
+        return this.targetFailureResult(resolved.report, 'target');
       }
       await resolved.locator.fill(value, { timeout: this.timeoutMs });
       return { success: true, match: resolved.report };
     } catch (error) {
-      return this.targetErrorResult(error);
+      return this.targetErrorResult(error, match, 'target');
     }
   }
 
@@ -175,12 +184,12 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
       const resolved = await this.resolveForAction(target, { action: 'click' });
       match = resolved.report;
       if (!resolved.locator || resolved.report.status !== 'unique') {
-        return this.targetFailureResult(resolved.report);
+        return this.targetFailureResult(resolved.report, 'target');
       }
       await resolved.locator.click({ timeout: this.timeoutMs });
       return { success: true, match: resolved.report };
     } catch (error) {
-      return this.targetErrorResult(error, match);
+      return this.targetErrorResult(error, match, 'target');
     }
   }
 
@@ -201,12 +210,12 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
       );
       match = resolved.report;
       if (!resolved.locator || resolved.report.status !== 'unique') {
-        return this.targetFailureResult(resolved.report);
+        return this.targetFailureResult(resolved.report, 'target');
       }
       await resolved.locator.waitFor({ timeout: this.timeoutMs });
       return { success: true, match: resolved.report };
     } catch (error) {
-      return this.targetErrorResult(error, match);
+      return this.targetErrorResult(error, match, 'target');
     }
   }
 
@@ -231,6 +240,7 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     submitTarget: BrowserTargetInput,
   ): Promise<BrowserStepResult> {
     let match: LocatorMatchReport | undefined;
+    let failedTargetKey: BrowserStepTargetKey | undefined;
     try {
       for (const value of values) {
         if (!value.trim()) continue;
@@ -239,19 +249,22 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
           requireEditable: true,
         });
         match = field.report;
+        failedTargetKey = 'target';
         if (!field.locator || field.report.status !== 'unique') {
-          return this.targetFailureResult(field.report);
+          return this.targetFailureResult(field.report, 'target');
         }
         const submit = await this.resolveForAction(submitTarget, { action: 'click' });
         if (!submit.locator || submit.report.status !== 'unique') {
-          return this.targetFailureResult(submit.report);
+          return this.targetFailureResult(submit.report, 'submitTarget');
         }
         await field.locator.fill(value, { timeout: this.timeoutMs });
+        match = submit.report;
+        failedTargetKey = 'submitTarget';
         await submit.locator.click({ timeout: this.timeoutMs });
       }
       return { success: true, match };
     } catch (error) {
-      return this.targetErrorResult(error, match);
+      return this.targetErrorResult(error, match, failedTargetKey);
     }
   }
 

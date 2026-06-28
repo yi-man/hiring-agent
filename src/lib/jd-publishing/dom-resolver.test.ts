@@ -148,6 +148,7 @@ describe('dom resolver', () => {
           status: 'not_found',
           candidateCount: 0,
           confidence: 0,
+          strategiesTried: expect.arrayContaining(['role_name', 'semantic_proximity']),
         }),
       );
     });

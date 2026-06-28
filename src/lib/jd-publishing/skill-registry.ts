@@ -2,6 +2,20 @@ import type { PublishPlatform, PublishSkill, TargetDescriptor } from './types';
 
 const publishFormScope = { kind: 'form', name: '发布职位' } as const;
 
+export type BossLikePublishTargets = {
+  username: TargetDescriptor;
+  password: TargetDescriptor;
+  loginButton: TargetDescriptor;
+  title: TargetDescriptor;
+  company: TargetDescriptor;
+  salary: TargetDescriptor;
+  location: TargetDescriptor;
+  description: TargetDescriptor;
+  keyword: TargetDescriptor;
+  keywordSubmit: TargetDescriptor;
+  submit: TargetDescriptor;
+};
+
 function fieldTarget(params: {
   name: string;
   valueHint?: TargetDescriptor['valueHint'];
@@ -29,9 +43,57 @@ function buttonTarget(name: string, scope?: TargetDescriptor['scope']): TargetDe
   };
 }
 
+export function defaultBossLikePublishTargets(): BossLikePublishTargets {
+  return {
+    username: fieldTarget({ name: '用户名' }),
+    password: fieldTarget({ name: '密码' }),
+    loginButton: buttonTarget('登录'),
+    title: fieldTarget({
+      name: '职位名称',
+      valueHint: 'title',
+      stableName: 'title',
+      scope: publishFormScope,
+    }),
+    company: fieldTarget({
+      name: '公司名称',
+      valueHint: 'company',
+      stableName: 'company',
+      scope: publishFormScope,
+    }),
+    salary: fieldTarget({
+      name: '薪资范围',
+      valueHint: 'salary',
+      stableName: 'salary',
+      scope: publishFormScope,
+    }),
+    location: fieldTarget({
+      name: '工作地点',
+      valueHint: 'location',
+      stableName: 'location',
+      scope: publishFormScope,
+    }),
+    description: fieldTarget({
+      name: '职位描述',
+      valueHint: 'description',
+      stableName: 'description',
+      scope: publishFormScope,
+    }),
+    keyword: fieldTarget({
+      name: '技能标签',
+      valueHint: 'keyword',
+      stableName: 'keyword',
+      scope: publishFormScope,
+    }),
+    keywordSubmit: buttonTarget('添加', publishFormScope),
+    submit: buttonTarget('发布职位', publishFormScope),
+  };
+}
+
 export function buildBossLikeStructuredPublishSkill(
   overrides: Partial<PublishSkill> = {},
+  targetOverrides: Partial<BossLikePublishTargets> = {},
 ): PublishSkill {
+  const targets = { ...defaultBossLikePublishTargets(), ...targetOverrides };
   return {
     id: 'boss-like-publish-jd',
     name: 'publish_jd',
@@ -74,7 +136,7 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'fill',
         params: {
-          target: fieldTarget({ name: '用户名' }),
+          target: targets.username,
           value: '{{credentials.username}}',
         },
         next: 'fill_password',
@@ -85,7 +147,7 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'fill',
         params: {
-          target: fieldTarget({ name: '密码' }),
+          target: targets.password,
           value: '{{credentials.password}}',
         },
         next: 'submit_login',
@@ -95,7 +157,7 @@ export function buildBossLikeStructuredPublishSkill(
         id: 'submit_login',
         type: 'action',
         action: 'click',
-        params: { target: buttonTarget('登录') },
+        params: { target: targets.loginButton },
         next: 'wait_after_login',
         onFail: { type: 'fallback_agent', reason: 'cannot submit login' },
       },
@@ -120,12 +182,7 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'fill',
         params: {
-          target: fieldTarget({
-            name: '职位名称',
-            valueHint: 'title',
-            stableName: 'title',
-            scope: publishFormScope,
-          }),
+          target: targets.title,
           value: '{{input.title}}',
         },
         next: 'fill_company',
@@ -136,12 +193,7 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'fill',
         params: {
-          target: fieldTarget({
-            name: '公司名称',
-            valueHint: 'company',
-            stableName: 'company',
-            scope: publishFormScope,
-          }),
+          target: targets.company,
           value: '{{input.company}}',
         },
         next: 'fill_salary',
@@ -152,12 +204,7 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'fill',
         params: {
-          target: fieldTarget({
-            name: '薪资范围',
-            valueHint: 'salary',
-            stableName: 'salary',
-            scope: publishFormScope,
-          }),
+          target: targets.salary,
           value: '{{input.salary}}',
         },
         next: 'fill_location',
@@ -168,12 +215,7 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'fill',
         params: {
-          target: fieldTarget({
-            name: '工作地点',
-            valueHint: 'location',
-            stableName: 'location',
-            scope: publishFormScope,
-          }),
+          target: targets.location,
           value: '{{input.location}}',
         },
         next: 'fill_description',
@@ -184,12 +226,7 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'fill',
         params: {
-          target: fieldTarget({
-            name: '职位描述',
-            valueHint: 'description',
-            stableName: 'description',
-            scope: publishFormScope,
-          }),
+          target: targets.description,
           value: '{{input.description}}',
         },
         next: 'add_keywords',
@@ -200,14 +237,9 @@ export function buildBossLikeStructuredPublishSkill(
         type: 'action',
         action: 'add_keywords',
         params: {
-          target: fieldTarget({
-            name: '技能标签',
-            valueHint: 'keyword',
-            stableName: 'keyword',
-            scope: publishFormScope,
-          }),
+          target: targets.keyword,
           values: '{{input.keywords}}',
-          submitTarget: buttonTarget('添加', publishFormScope),
+          submitTarget: targets.keywordSubmit,
         },
         next: 'submit_job',
         onFail: { type: 'fallback_agent', reason: 'cannot add skill keywords' },
@@ -216,7 +248,7 @@ export function buildBossLikeStructuredPublishSkill(
         id: 'submit_job',
         type: 'action',
         action: 'click',
-        params: { target: buttonTarget('发布职位', publishFormScope) },
+        params: { target: targets.submit },
         next: 'wait_jobs_list',
         onFail: { type: 'fallback_agent', reason: 'cannot submit job publish form' },
       },
