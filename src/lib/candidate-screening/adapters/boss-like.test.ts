@@ -6,6 +6,7 @@ import type {
   BrowserStepResult,
   BrowserTargetInput,
   PublishStepCheck,
+  StructuredDomSnapshot,
 } from '@/lib/jd-publishing/types';
 import { createBrowserExecutorFromEnv } from '@/lib/jd-publishing/executors/browser-executor-factory';
 import { BossLikeCandidateSourceAdapter, extractBossLikeCandidatesFromHtml } from './boss-like';
@@ -52,6 +53,18 @@ const detailFixture = `
   <p data-field="company">星河智能</p>
   <p data-field="experience">5年</p>
   <p data-field="resume">Java Spring Boot 高并发 微服务 分布式 系统设计</p>
+</article>
+`;
+
+const secondResumeListFixture = `
+<article data-candidate-id="boss-2" data-profile-url="/employer/resumes/boss-2">
+  <h2>李小红</h2>
+  <p data-field="title">Node.js 后端工程师</p>
+  <p data-field="company">云帆科技</p>
+  <p data-field="experience">4年</p>
+  <p data-field="resume">Node.js NestJS PostgreSQL Redis 系统设计</p>
+  <button>收藏</button>
+  <button>打招呼</button>
 </article>
 `;
 
@@ -145,6 +158,47 @@ class FakeBrowserExecutor implements BrowserExecutor {
   }
 }
 
+class StructuredSnapshotFailureExecutor extends FakeBrowserExecutor {
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    this.calls.push('snapshotStructured');
+    throw new Error('structured snapshot unavailable');
+  }
+}
+
+function createSnapshotlessExecutor(): BrowserExecutor & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    async navigate(url: string): Promise<BrowserStepResult> {
+      calls.push(`navigate:${url}`);
+      return { success: true };
+    },
+    async fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult> {
+      calls.push(`fill:${targetName(target)}:${value}`);
+      return { success: true };
+    },
+    async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+      calls.push(`click:${targetName(target)}`);
+      return { success: true };
+    },
+    async waitForUrl(url: string): Promise<BrowserStepResult> {
+      calls.push(`waitForUrl:${url}`);
+      return { success: true };
+    },
+    async check(check: PublishStepCheck): Promise<boolean> {
+      calls.push(`check:${check.id ?? check.text ?? check.selector ?? ''}`);
+      return true;
+    },
+    async waitForText(text: string): Promise<BrowserStepResult> {
+      calls.push(`waitForText:${text}`);
+      return { success: true };
+    },
+    async close(): Promise<void> {
+      calls.push('close');
+    },
+  };
+}
+
 async function collectAsyncBatches(
   batches: AsyncIterable<RawCandidateBatch>,
 ): Promise<RawCandidateBatch[]> {
@@ -189,6 +243,19 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
+  it('keeps structured snapshot failures best-effort during login detection', async () => {
+    const executor = new StructuredSnapshotFailureExecutor(['<main>候选人列表</main>']);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await expect(adapter.loginIfNeeded()).resolves.toBeUndefined();
+
+    expect(executor.calls).toEqual([
+      'navigate:http://localhost:6183/employer/resumes',
+      'snapshot',
+      'snapshotStructured',
+    ]);
+  });
+
   it('extracts candidate cards from a structured resume list snapshot', () => {
     expect(extractBossLikeCandidatesFromHtml(resumeListFixture)).toEqual([
       {
@@ -223,6 +290,49 @@ describe('BossLikeCandidateSourceAdapter', () => {
         resumeText: 'Java Spring Boot 高并发 微服务 分布式 系统设计',
       }),
     ]);
+  });
+
+  it('requires raw browser snapshots for candidate search', async () => {
+    const executor = createSnapshotlessExecutor();
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await expect(
+      collectAsyncBatches(adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).rejects.toThrow(/boss-like candidate search requires raw browser snapshots/);
+  });
+
+  it('restores the resume list before continuing keyword search after detail enrichment', async () => {
+    const executor = new FakeBrowserExecutor([
+      '<main>候选人列表</main>',
+      shortResumeListFixture,
+      detailFixture,
+      secondResumeListFixture,
+    ]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+    const twoKeywordPlan: SearchPlan = {
+      ...searchPlan,
+      keywords: ['Java', 'Node'],
+    };
+
+    const batches = await collectAsyncBatches(
+      adapter.searchCandidates(twoKeywordPlan, { maxCandidates: 2, batchSize: 2 }),
+    );
+
+    const detailNavigationIndex = executor.calls.indexOf(
+      'navigate:http://localhost:6183/employer/resumes/boss-1',
+    );
+    const secondKeywordFillIndex = executor.calls.indexOf('fill:搜索候选人:Node');
+    const restoredListIndex = executor.calls.findIndex(
+      (call, index) =>
+        index > detailNavigationIndex && call === 'navigate:http://localhost:6183/employer/resumes',
+    );
+
+    expect(batches[0]?.candidates.map((candidate) => candidate.platformCandidateId)).toEqual([
+      'boss-1',
+      'boss-2',
+    ]);
+    expect(restoredListIndex).toBeGreaterThan(detailNavigationIndex);
+    expect(restoredListIndex).toBeLessThan(secondKeywordFillIndex);
   });
 
   it('executes collect and chat only through explicit adapter methods', async () => {

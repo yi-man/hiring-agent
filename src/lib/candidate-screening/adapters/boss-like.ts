@@ -1,4 +1,8 @@
-import type { BrowserExecutor, BrowserStepResult } from '@/lib/jd-publishing/types';
+import type {
+  BrowserExecutor,
+  BrowserStepResult,
+  StructuredDomSnapshot,
+} from '@/lib/jd-publishing/types';
 import type { RawCandidate } from '../ingest';
 import type { CandidateActionPlan, CandidateScreeningPlatform, SearchPlan } from '../types';
 import type {
@@ -13,6 +17,7 @@ const DEFAULT_BOSS_LIKE_BASE_URL = 'http://localhost:6183';
 const DEFAULT_BOSS_LIKE_USERNAME = 'admin';
 const DEFAULT_BOSS_LIKE_PASSWORD = 'boss123';
 const SHORT_RESUME_TEXT_MIN_LENGTH = 20;
+const RAW_SNAPSHOT_REQUIRED_ERROR = 'boss-like candidate search requires raw browser snapshots';
 
 type BossLikeCandidateSourceAdapterOptions = {
   executor: BrowserExecutor;
@@ -62,6 +67,16 @@ async function requireSuccessfulStep(
     throw new Error(stepResult.error ?? `${action} failed`);
   }
   return stepResult;
+}
+
+async function readStructuredSnapshotBestEffort(
+  executor: BrowserExecutor,
+): Promise<StructuredDomSnapshot | null> {
+  try {
+    return (await executor.snapshotStructured?.()) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function isLoginSnapshot(html: string | null): boolean {
@@ -156,7 +171,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     await requireSuccessfulStep(this.executor.navigate(this.resumeListUrl()), 'open resume list');
 
     const snapshot = (await this.executor.snapshot?.()) ?? null;
-    const structuredSnapshot = await this.executor.snapshotStructured?.();
+    const structuredSnapshot = await readStructuredSnapshotBestEffort(this.executor);
     const isLoginPage =
       structuredSnapshot?.pageState === 'login' ||
       structuredSnapshot?.url.includes('/login') ||
@@ -196,10 +211,11 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     for (const keyword of keywords) {
       if (emittedCount >= maxCandidates) break;
 
+      await requireSuccessfulStep(this.executor.navigate(this.resumeListUrl()), 'open resume list');
       await requireSuccessfulStep(this.executor.fill('搜索候选人', keyword), 'fill search keyword');
       await this.waitForResumeContent();
 
-      const html = (await this.executor.snapshot?.()) ?? '';
+      const html = await this.readRawSnapshotForSearch();
       const candidates = extractBossLikeCandidatesFromHtml(html);
 
       for (const candidate of candidates) {
@@ -320,6 +336,13 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     }
   }
 
+  private async readRawSnapshotForSearch(): Promise<string> {
+    if (!this.executor.snapshot) {
+      throw new Error(RAW_SNAPSHOT_REQUIRED_ERROR);
+    }
+    return this.executor.snapshot();
+  }
+
   private async enrichCandidateWhenNeeded(candidate: RawCandidate): Promise<RawCandidate> {
     if (!hasShortResumeText(candidate)) return candidate;
 
@@ -327,7 +350,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     if (!profileUrl) return candidate;
 
     await requireSuccessfulStep(this.executor.navigate(profileUrl), 'open candidate detail');
-    const detailHtml = (await this.executor.snapshot?.()) ?? '';
+    const detailHtml = await this.readRawSnapshotForSearch();
     const detailCandidates = extractBossLikeCandidatesFromHtml(detailHtml);
     const detailCandidate =
       detailCandidates.find(
