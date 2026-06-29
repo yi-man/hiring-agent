@@ -653,10 +653,27 @@ export async function executeScreeningRunActions(params: {
     throw new Error('candidate screening run not found');
   }
 
-  const stats = run.stats ? copyStats(run.stats) : createEmptyStats();
+  const currentRun = run;
+  const stats = currentRun.stats ? copyStats(currentRun.stats) : createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
   let chatCount = 0;
   let collectCount = 0;
+
+  async function getAdapterAfterClaim(): Promise<CandidateSourceAdapter> {
+    if (adapter) {
+      return adapter;
+    }
+
+    const nextAdapter = dependencies.createAdapter(currentRun.platform);
+    try {
+      await nextAdapter.loginIfNeeded();
+    } catch (error) {
+      await closeAdapterSafely(nextAdapter);
+      throw error;
+    }
+    adapter = nextAdapter;
+    return adapter;
+  }
 
   try {
     await dependencies.repo.updateRun({
@@ -664,14 +681,14 @@ export async function executeScreeningRunActions(params: {
       runId: params.runId,
       status: 'running',
       currentStage: 'executing_actions',
+      errorMessage: null,
+      finishedAt: null,
       stats: copyStats(stats),
     });
 
-    adapter = dependencies.createAdapter(run.platform);
-    await adapter.loginIfNeeded();
     const results = await dependencies.repo.listResults({
       userId: params.userId,
-      jobDescriptionId: run.jobDescriptionId,
+      jobDescriptionId: currentRun.jobDescriptionId,
       runId: params.runId,
       plannedActions: ['chat', 'collect'],
       limit: params.request.maxChatActions + params.request.maxCollectActions + 100,
@@ -693,7 +710,7 @@ export async function executeScreeningRunActions(params: {
 
       const detail = await dependencies.repo.getDetail({
         userId: params.userId,
-        jobDescriptionId: run.jobDescriptionId,
+        jobDescriptionId: currentRun.jobDescriptionId,
         candidateId: result.candidateId,
       });
       if (!detail) {
@@ -714,11 +731,12 @@ export async function executeScreeningRunActions(params: {
       }
 
       try {
+        const claimedAdapter = await getAdapterAfterClaim();
         const storedCandidate = createStoredCandidateRef(result);
         const executionResult =
           result.actionPlan.action === 'chat'
-            ? await adapter.chatCandidate(storedCandidate, result.actionPlan)
-            : await adapter.collectCandidate(storedCandidate);
+            ? await claimedAdapter.chatCandidate(storedCandidate, result.actionPlan)
+            : await claimedAdapter.collectCandidate(storedCandidate);
 
         await persistExecutionResult({
           dependencies,
@@ -755,6 +773,7 @@ export async function executeScreeningRunActions(params: {
       runId: params.runId,
       status: 'success',
       currentStage: 'finalizing',
+      errorMessage: null,
       finishedAt: new Date(),
       stats: copyStats(stats),
     });

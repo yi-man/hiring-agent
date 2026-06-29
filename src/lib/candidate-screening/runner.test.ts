@@ -666,9 +666,17 @@ describe('candidate screening runner', () => {
       userId: 'user-1',
       id: 'action-log-1',
     });
-    expect(
-      (dependencies.repo.claimActionLog as jest.Mock).mock.invocationCallOrder[0],
-    ).toBeLessThan(adapter.chatCandidate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
+    const claimOrder = (dependencies.repo.claimActionLog as jest.Mock).mock.invocationCallOrder[0];
+    expect(claimOrder).toBeLessThan(
+      (dependencies.createAdapter as jest.Mock).mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY,
+    );
+    expect(claimOrder).toBeLessThan(
+      adapter.loginIfNeeded.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(claimOrder).toBeLessThan(
+      adapter.chatCandidate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(adapter.chatCandidate).toHaveBeenCalledWith(
       {
         candidateId: 'candidate-1',
@@ -721,7 +729,18 @@ describe('candidate screening runner', () => {
         userId: 'user-1',
         runId: 'run-1',
         currentStage: 'finalizing',
+        errorMessage: null,
         stats: expect.objectContaining({ recommendedChat: 1 }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        runId: 'run-1',
+        status: 'running',
+        currentStage: 'executing_actions',
+        errorMessage: null,
+        finishedAt: null,
       }),
     );
     expect(adapter.close).toHaveBeenCalledTimes(1);
@@ -757,6 +776,8 @@ describe('candidate screening runner', () => {
       userId: 'user-1',
       id: 'action-log-1',
     });
+    expect(dependencies.createAdapter).not.toHaveBeenCalled();
+    expect(adapter.loginIfNeeded).not.toHaveBeenCalled();
     expect(adapter.chatCandidate).not.toHaveBeenCalled();
     expect(dependencies.repo.upsertResult).not.toHaveBeenCalled();
   });
@@ -953,6 +974,11 @@ describe('candidate screening runner', () => {
       close: jest.fn().mockRejectedValue(new Error('close failed')),
     });
     const dependencies = makeDependencies(adapter);
+    const plannedResult = makeResult({
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+    });
+    const detail = makeDetail(plannedResult);
     dependencies.repo.getRun = jest.fn().mockResolvedValue(
       makeRun({
         id: 'run-1',
@@ -961,7 +987,9 @@ describe('candidate screening runner', () => {
         evaluationSchema,
       }),
     );
-    dependencies.repo.listResults = jest.fn().mockResolvedValue([]);
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
 
     await expect(
       executeScreeningRunActions({
