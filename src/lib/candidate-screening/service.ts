@@ -1,21 +1,7 @@
-import { runCandidateScreening } from './runner';
+import { createEmptyStats, runCandidateScreening } from './runner';
 import { createCandidateScreeningRun, type CandidateScreeningRunDto } from './repo';
-import type { CreateScreeningRunRequest, ScreeningRunStats } from './types';
+import type { CreateScreeningRunRequest } from './types';
 import type { JobDescriptionDto } from '@/types';
-
-function createEmptyStats(): ScreeningRunStats {
-  return {
-    fetched: 0,
-    deduped: 0,
-    stored: 0,
-    vectorRecalled: 0,
-    evaluated: 0,
-    recommendedChat: 0,
-    recommendedCollect: 0,
-    skipped: 0,
-    failed: 0,
-  };
-}
 
 export async function createAndStartCandidateScreeningRun(params: {
   userId: string;
@@ -36,6 +22,8 @@ export async function createAndStartCandidateScreeningRun(params: {
     userId: params.userId,
     jobDescription: params.jobDescription,
     request: params.request,
+  }).catch((error: unknown) => {
+    console.error('Candidate screening run failed', { runId: run.id, error });
   });
 
   return run;

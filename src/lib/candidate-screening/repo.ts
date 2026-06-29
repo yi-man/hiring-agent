@@ -347,6 +347,7 @@ export type UpsertScreeningResultParams = {
 export type ListCandidateResultsParams = {
   userId: string;
   jobDescriptionId: string;
+  runId?: string;
   limit: number;
   offset?: number;
   interviewStage?: CandidateInterviewStage;
@@ -900,6 +901,17 @@ export async function listCandidateScreeningResults(
       userId: params.userId,
       jobDescriptionId: params.jobDescriptionId,
       ...(params.interviewStage ? { interviewStage: params.interviewStage } : {}),
+      ...(params.runId
+        ? {
+            actionLogs: {
+              some: {
+                userId: params.userId,
+                runId: params.runId,
+                status: 'planned',
+              },
+            },
+          }
+        : {}),
     },
     include: { candidate: true, resume: true },
     orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
@@ -994,5 +1006,28 @@ export async function updateCandidateActionLog(
     return null;
   }
   const row = await prisma.candidateActionLog.findFirst({ where });
+  return row ? mapActionLog(row) : null;
+}
+
+export async function claimCandidateActionLog(params: {
+  userId: string;
+  id: string;
+}): Promise<CandidateActionLogDto | null> {
+  const where = { id: params.id, userId: params.userId, status: 'planned' };
+  const result = await prisma.candidateActionLog.updateMany({
+    where,
+    data: {
+      status: 'running',
+      browserTrace: Prisma.JsonNull,
+      errorMessage: null,
+    },
+  });
+  if (result.count === 0) {
+    return null;
+  }
+
+  const row = await prisma.candidateActionLog.findFirst({
+    where: { id: params.id, userId: params.userId },
+  });
   return row ? mapActionLog(row) : null;
 }

@@ -1,9 +1,11 @@
 /** @jest-environment node */
 
 import {
+  claimCandidateActionLog,
   createCandidateActionLog,
   createCandidateScreeningRun,
   createOrReuseCandidateResume,
+  listCandidateScreeningResults,
   replaceCandidateResumeChunks,
   searchCandidateResumeChunks,
   updateCandidateInterviewProgress,
@@ -33,6 +35,7 @@ type PrismaMock = {
   candidateScreeningResult: {
     create: jest.Mock;
     findFirst: jest.Mock;
+    findMany: jest.Mock;
     upsert: jest.Mock;
     updateMany: jest.Mock;
   };
@@ -69,6 +72,7 @@ jest.mock('@/lib/prisma', () => ({
     candidateScreeningResult: {
       create: jest.fn(),
       findFirst: jest.fn(),
+      findMany: jest.fn(),
       upsert: jest.fn(),
       updateMany: jest.fn(),
     },
@@ -102,6 +106,7 @@ describe('candidate screening repository', () => {
     prismaMock.candidateScreeningRun.updateMany.mockReset();
     prismaMock.candidateScreeningResult.create.mockReset();
     prismaMock.candidateScreeningResult.findFirst.mockReset();
+    prismaMock.candidateScreeningResult.findMany.mockReset();
     prismaMock.candidateScreeningResult.upsert.mockReset();
     prismaMock.candidateScreeningResult.updateMany.mockReset();
     prismaMock.candidateActionLog.findFirst.mockReset();
@@ -856,6 +861,78 @@ describe('candidate screening repository', () => {
         screeningResultId: 'result-1',
       }),
       update: {},
+    });
+  });
+
+  it('claims a planned action log atomically before execution', async () => {
+    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.candidateActionLog.findFirst.mockResolvedValueOnce({
+      id: 'action-1',
+      userId: 'u1',
+      runId: 'run-1',
+      screeningResultId: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'dry_run',
+      action: 'chat',
+      message: 'Hi',
+      status: 'running',
+      idempotencyKey: 'idem-1',
+      browserTrace: null,
+      errorMessage: null,
+      createdAt,
+      updatedAt,
+    });
+
+    const result = await claimCandidateActionLog({ userId: 'u1', id: 'action-1' });
+
+    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: { id: 'action-1', userId: 'u1', status: 'planned' },
+      data: { status: 'running', browserTrace: expect.anything(), errorMessage: null },
+    });
+    expect(prismaMock.candidateActionLog.findFirst).toHaveBeenCalledWith({
+      where: { id: 'action-1', userId: 'u1' },
+    });
+    expect(result?.status).toBe('running');
+  });
+
+  it('returns null when a planned action log cannot be claimed', async () => {
+    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const result = await claimCandidateActionLog({ userId: 'u1', id: 'action-1' });
+
+    expect(result).toBeNull();
+    expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('lists JD-scoped results that have current-run planned action logs', async () => {
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await listCandidateScreeningResults({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      runId: 'run-2',
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        actionLogs: {
+          some: {
+            userId: 'u1',
+            runId: 'run-2',
+            status: 'planned',
+          },
+        },
+      },
+      include: { candidate: true, resume: true },
+      orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
+      skip: 0,
+      take: 10,
     });
   });
 });

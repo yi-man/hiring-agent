@@ -11,6 +11,17 @@ jest.mock('./repo', () => ({
 }));
 
 jest.mock('./runner', () => ({
+  createEmptyStats: jest.fn(() => ({
+    fetched: 0,
+    deduped: 0,
+    stored: 0,
+    vectorRecalled: 0,
+    evaluated: 0,
+    recommendedChat: 0,
+    recommendedCollect: 0,
+    skipped: 0,
+    failed: 0,
+  })),
   runCandidateScreening: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -125,5 +136,31 @@ describe('candidate screening service', () => {
     expect(createRunMock.mock.invocationCallOrder[0]).toBeLessThan(
       runCandidateScreeningMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it('observes background runner rejections from fire-and-forget scheduling', async () => {
+    const run = makeRun();
+    const error = new Error('background failed');
+    const catchMock = jest.fn();
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    createRunMock.mockResolvedValueOnce(run);
+    runCandidateScreeningMock.mockReturnValueOnce({
+      catch: catchMock,
+    } as unknown as Promise<void>);
+
+    await createAndStartCandidateScreeningRun({
+      userId: 'user-1',
+      jobDescription,
+      request,
+    });
+
+    expect(catchMock).toHaveBeenCalledWith(expect.any(Function));
+    const rejectionHandler = catchMock.mock.calls[0]?.[0] as (reason: unknown) => void;
+    rejectionHandler(error);
+    expect(consoleErrorSpy).toHaveBeenCalledWith('Candidate screening run failed', {
+      runId: 'run-1',
+      error,
+    });
+    consoleErrorSpy.mockRestore();
   });
 });

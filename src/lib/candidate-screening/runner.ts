@@ -8,6 +8,7 @@ import { buildScreeningPlanFromJd } from './planner';
 import { mergeAndRankCandidates, type RankInput, type RankedCandidate } from './ranking';
 import { recallCandidatesForJd } from './recall';
 import {
+  claimCandidateActionLog,
   createCandidateActionLog,
   getCandidateScreeningDetail,
   getCandidateScreeningRun,
@@ -57,6 +58,7 @@ export type ScreeningRunnerDependencies = {
     listResults: typeof listCandidateScreeningResults;
     getDetail: typeof getCandidateScreeningDetail;
     upsertCandidate: typeof upsertCandidateWithIdentity;
+    claimActionLog: typeof claimCandidateActionLog;
   };
 };
 
@@ -80,6 +82,7 @@ const defaultDependencies: ScreeningRunnerDependencies = {
     listResults: listCandidateScreeningResults,
     getDetail: getCandidateScreeningDetail,
     upsertCandidate: upsertCandidateWithIdentity,
+    claimActionLog: claimCandidateActionLog,
   },
 };
 
@@ -112,6 +115,16 @@ function resolveDependencies(
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'candidate screening failed';
+}
+
+async function closeAdapterSafely(adapter: CandidateSourceAdapter | null): Promise<void> {
+  if (!adapter) return;
+
+  try {
+    await adapter.close();
+  } catch {
+    // Closing browser resources is best-effort after run/action state is already persisted.
+  }
 }
 
 function incrementDecisionStats(stats: ScreeningRunStats, action: CandidateDecisionAction): void {
@@ -464,7 +477,7 @@ export async function runCandidateScreening(params: {
       stats: copyStats(stats),
     });
   } finally {
-    await adapter?.close();
+    await closeAdapterSafely(adapter);
   }
 }
 
@@ -491,12 +504,10 @@ function createStoredCandidateRef(result: CandidateScreeningResultListItem): Sto
 
 function shouldExecuteAction(params: {
   result: CandidateScreeningResultListItem;
-  runId: string;
   chatCount: number;
   collectCount: number;
   request: ExecuteActionsRequest;
 }): boolean {
-  if (params.result.runId !== params.runId) return false;
   if (!params.result.actionPlan) return false;
   if (params.result.actionStatus !== 'planned') return false;
   if (params.result.actionPlan.action === 'skip') return false;
@@ -526,37 +537,20 @@ async function persistExecutionResult(params: {
   stats: ScreeningRunStats;
 }): Promise<void> {
   if (!params.executionResult.success) {
-    params.stats.failed += 1;
-    await params.dependencies.repo.updateActionLog({
-      userId: params.userId,
-      id: params.actionLog.id,
-      status: 'failed',
-      browserTrace: params.executionResult.browserTrace ?? null,
-      errorMessage: params.executionResult.error ?? 'action execution failed',
-    });
-    await params.dependencies.repo.upsertResult({
+    await markExecutionFailed({
+      dependencies: params.dependencies,
       userId: params.userId,
       runId: params.runId,
-      jobDescriptionId: params.result.jobDescriptionId,
-      candidateId: params.result.candidateId,
-      resumeId: params.result.resumeId,
-      source: params.result.source,
-      tags: params.result.tags,
-      scoreDetail: params.result.scoreDetail,
-      finalScore: params.result.finalScore,
-      rank: params.result.rank,
-      decisionAction: params.result.decisionAction,
-      decisionPriority: params.result.decisionPriority,
-      decisionReason: params.result.decisionReason,
+      result: params.result,
       actionPlan: params.actionPlan,
-      actionStatus: 'failed',
-      interviewStage: params.result.interviewStage,
-      notes: params.result.notes,
+      actionLog: params.actionLog,
+      errorMessage: params.executionResult.error ?? 'action execution failed',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      stats: params.stats,
     });
     return;
   }
 
-  incrementDecisionStats(params.stats, params.actionPlan.action);
   await params.dependencies.repo.updateActionLog({
     userId: params.userId,
     id: params.actionLog.id,
@@ -606,6 +600,46 @@ async function persistExecutionResult(params: {
   }
 }
 
+async function markExecutionFailed(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  result: CandidateScreeningResultListItem;
+  actionPlan: CandidateActionPlan;
+  actionLog: CandidateActionLogDto;
+  errorMessage: string;
+  browserTrace?: Record<string, unknown> | null;
+  stats: ScreeningRunStats;
+}): Promise<void> {
+  params.stats.failed += 1;
+  await params.dependencies.repo.updateActionLog({
+    userId: params.userId,
+    id: params.actionLog.id,
+    status: 'failed',
+    browserTrace: params.browserTrace ?? null,
+    errorMessage: params.errorMessage,
+  });
+  await params.dependencies.repo.upsertResult({
+    userId: params.userId,
+    runId: params.runId,
+    jobDescriptionId: params.result.jobDescriptionId,
+    candidateId: params.result.candidateId,
+    resumeId: params.result.resumeId,
+    source: params.result.source,
+    tags: params.result.tags,
+    scoreDetail: params.result.scoreDetail,
+    finalScore: params.result.finalScore,
+    rank: params.result.rank,
+    decisionAction: params.result.decisionAction,
+    decisionPriority: params.result.decisionPriority,
+    decisionReason: params.result.decisionReason,
+    actionPlan: params.actionPlan,
+    actionStatus: 'failed',
+    interviewStage: params.result.interviewStage,
+    notes: params.result.notes,
+  });
+}
+
 export async function executeScreeningRunActions(params: {
   runId: string;
   userId: string;
@@ -637,6 +671,7 @@ export async function executeScreeningRunActions(params: {
     const results = await dependencies.repo.listResults({
       userId: params.userId,
       jobDescriptionId: run.jobDescriptionId,
+      runId: params.runId,
       limit: params.request.maxChatActions + params.request.maxCollectActions + 100,
       offset: 0,
     });
@@ -645,7 +680,6 @@ export async function executeScreeningRunActions(params: {
       if (
         !shouldExecuteAction({
           result,
-          runId: params.runId,
           chatCount,
           collectCount,
           request: params.request,
@@ -669,30 +703,43 @@ export async function executeScreeningRunActions(params: {
         continue;
       }
 
-      await dependencies.repo.updateActionLog({
+      const claimedActionLog = await dependencies.repo.claimActionLog({
         userId: params.userId,
         id: actionLog.id,
-        status: 'running',
-        browserTrace: null,
-        errorMessage: null,
       });
+      if (!claimedActionLog) {
+        continue;
+      }
 
-      const storedCandidate = createStoredCandidateRef(result);
-      const executionResult =
-        result.actionPlan.action === 'chat'
-          ? await adapter.chatCandidate(storedCandidate, result.actionPlan)
-          : await adapter.collectCandidate(storedCandidate);
+      try {
+        const storedCandidate = createStoredCandidateRef(result);
+        const executionResult =
+          result.actionPlan.action === 'chat'
+            ? await adapter.chatCandidate(storedCandidate, result.actionPlan)
+            : await adapter.collectCandidate(storedCandidate);
 
-      await persistExecutionResult({
-        dependencies,
-        userId: params.userId,
-        runId: params.runId,
-        result,
-        actionPlan: result.actionPlan,
-        actionLog,
-        executionResult,
-        stats,
-      });
+        await persistExecutionResult({
+          dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          actionLog: claimedActionLog,
+          executionResult,
+          stats,
+        });
+      } catch (error) {
+        await markExecutionFailed({
+          dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          actionLog: claimedActionLog,
+          errorMessage: getErrorMessage(error),
+          stats,
+        });
+      }
 
       if (result.actionPlan.action === 'chat') {
         chatCount += 1;
@@ -720,6 +767,6 @@ export async function executeScreeningRunActions(params: {
       stats: copyStats(stats),
     });
   } finally {
-    await adapter?.close();
+    await closeAdapterSafely(adapter);
   }
 }

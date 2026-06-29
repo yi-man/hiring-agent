@@ -320,6 +320,7 @@ function makeDependencies(adapter = makeAdapter()): ScreeningRunnerDependencies 
       listResults: jest.fn().mockResolvedValue([]),
       getDetail: jest.fn().mockResolvedValue(null),
       upsertCandidate: jest.fn().mockResolvedValue(makeResult().candidate),
+      claimActionLog: jest.fn().mockResolvedValue(null),
     },
   };
 }
@@ -576,10 +577,12 @@ describe('candidate screening runner', () => {
         status: 'success',
         searchPlan,
         evaluationSchema,
+        stats: emptyStats({ recommendedChat: 1 }),
       }),
     );
     dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
     dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
     dependencies.repo.updateActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
     dependencies.repo.upsertResult = jest.fn().mockResolvedValue(
       makeResult({
@@ -599,6 +602,20 @@ describe('candidate screening runner', () => {
 
     expect(dependencies.createAdapter).toHaveBeenCalledWith('boss-like');
     expect(adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.listResults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        runId: 'run-1',
+      }),
+    );
+    expect(dependencies.repo.claimActionLog).toHaveBeenCalledWith({
+      userId: 'user-1',
+      id: 'action-log-1',
+    });
+    expect(
+      (dependencies.repo.claimActionLog as jest.Mock).mock.invocationCallOrder[0],
+    ).toBeLessThan(adapter.chatCandidate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
     expect(adapter.chatCandidate).toHaveBeenCalledWith(
       {
         candidateId: 'candidate-1',
@@ -655,5 +672,192 @@ describe('candidate screening runner', () => {
       }),
     );
     expect(adapter.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips execution when the planned action log cannot be atomically claimed', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const plannedResult = makeResult({ actionPlan: chatDecision, actionStatus: 'planned' });
+    const detail = makeDetail(plannedResult);
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(
+      makeRun({
+        id: 'run-1',
+        status: 'success',
+        searchPlan,
+        evaluationSchema,
+      }),
+    );
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(null);
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+
+    expect(dependencies.repo.claimActionLog).toHaveBeenCalledWith({
+      userId: 'user-1',
+      id: 'action-log-1',
+    });
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
+    expect(dependencies.repo.upsertResult).not.toHaveBeenCalled();
+  });
+
+  it('executes current-run planned action logs even when the JD result belongs to an older run', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const plannedResult = makeResult({
+      runId: 'old-run',
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+    });
+    const detail = makeDetail({
+      ...plannedResult,
+      actionLogs: [
+        {
+          id: 'action-log-current-run',
+          userId: 'user-1',
+          runId: 'run-2',
+          screeningResultId: plannedResult.id,
+          candidateId: plannedResult.candidateId,
+          jobDescriptionId: plannedResult.jobDescriptionId,
+          platform: 'boss-like',
+          mode: 'dry_run',
+          action: 'chat',
+          message: 'chat candidate',
+          status: 'planned',
+          idempotencyKey: 'current-run-key',
+          browserTrace: null,
+          errorMessage: null,
+          createdAt,
+          updatedAt,
+        },
+      ],
+    });
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(
+      makeRun({
+        id: 'run-2',
+        status: 'success',
+        searchPlan,
+        evaluationSchema,
+      }),
+    );
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await executeScreeningRunActions({
+      runId: 'run-2',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+
+    expect(dependencies.repo.listResults).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-2' }),
+    );
+    expect(adapter.chatCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-2',
+        candidateId: 'candidate-1',
+        actionStatus: 'success',
+      }),
+    );
+  });
+
+  it('marks a claimed action failed and continues finalization when chat execution throws', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockRejectedValue(new Error('browser crashed')),
+    });
+    const dependencies = makeDependencies(adapter);
+    const plannedResult = makeResult({
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+      interviewStage: 'to_contact',
+      notes: 'keep note',
+    });
+    const detail = makeDetail(plannedResult);
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(
+      makeRun({
+        id: 'run-1',
+        status: 'success',
+        searchPlan,
+        evaluationSchema,
+      }),
+    );
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        id: 'action-log-1',
+        status: 'failed',
+        errorMessage: 'browser crashed',
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionStatus: 'failed',
+        interviewStage: 'to_contact',
+        notes: 'keep note',
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        currentStage: 'finalizing',
+        stats: expect.objectContaining({ failed: 1 }),
+      }),
+    );
+  });
+
+  it('does not let adapter close failures mask finalized execution state', async () => {
+    const adapter = makeAdapter({
+      close: jest.fn().mockRejectedValue(new Error('close failed')),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(
+      makeRun({
+        id: 'run-1',
+        status: 'success',
+        searchPlan,
+        evaluationSchema,
+      }),
+    );
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([]);
+
+    await expect(
+      executeScreeningRunActions({
+        runId: 'run-1',
+        userId: 'user-1',
+        request: executeRequest,
+        dependencies,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(adapter.close).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        currentStage: 'finalizing',
+      }),
+    );
   });
 });
