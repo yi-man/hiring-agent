@@ -319,6 +319,7 @@ function makeDependencies(adapter = makeAdapter()): ScreeningRunnerDependencies 
       updateActionLog: jest.fn().mockResolvedValue(null),
       listResults: jest.fn().mockResolvedValue([]),
       getDetail: jest.fn().mockResolvedValue(null),
+      upsertCandidate: jest.fn().mockResolvedValue(makeResult().candidate),
     },
   };
 }
@@ -625,6 +626,24 @@ describe('candidate screening runner', () => {
         actionStatus: 'success',
         interviewStage: 'contacted',
         actionPlan: chatDecision,
+      }),
+    );
+    expect(dependencies.repo.upsertCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        sourcePlatform: 'boss-like',
+        displayName: 'Ada Lovelace',
+        currentTitle: 'Senior Frontend Engineer',
+        currentCompany: 'Analytical Engines',
+        location: 'Shanghai',
+        experienceYears: 6,
+        platformCandidateId: 'platform-candidate-1',
+        profileUrl: 'https://example.com/ada',
+        identityKey: 'identity-key-1',
+        identityHash: 'identity-hash-1',
+        lastActiveAt: null,
+        contacted: true,
+        lastContactAt: expect.any(Date),
       }),
     );
     expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(

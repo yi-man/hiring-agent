@@ -14,6 +14,7 @@ import {
   listCandidateScreeningResults,
   updateCandidateActionLog,
   updateCandidateScreeningRun,
+  upsertCandidateWithIdentity,
   upsertCandidateScreeningResult,
   type CandidateActionLogDto,
   type CandidateScreeningDetailDto,
@@ -55,6 +56,7 @@ export type ScreeningRunnerDependencies = {
     updateActionLog: typeof updateCandidateActionLog;
     listResults: typeof listCandidateScreeningResults;
     getDetail: typeof getCandidateScreeningDetail;
+    upsertCandidate: typeof upsertCandidateWithIdentity;
   };
 };
 
@@ -77,6 +79,7 @@ const defaultDependencies: ScreeningRunnerDependencies = {
     updateActionLog: updateCandidateActionLog,
     listResults: listCandidateScreeningResults,
     getDetail: getCandidateScreeningDetail,
+    upsertCandidate: upsertCandidateWithIdentity,
   },
 };
 
@@ -580,6 +583,27 @@ async function persistExecutionResult(params: {
     interviewStage: params.actionPlan.action === 'chat' ? 'contacted' : 'collected',
     notes: params.result.notes,
   });
+
+  if (params.actionPlan.action === 'chat') {
+    await params.dependencies.repo.upsertCandidate({
+      userId: params.userId,
+      sourcePlatform: params.result.candidate.sourcePlatform,
+      displayName: params.result.candidate.displayName,
+      currentTitle: params.result.candidate.currentTitle,
+      currentCompany: params.result.candidate.currentCompany,
+      location: params.result.candidate.location,
+      experienceYears: params.result.candidate.experienceYears,
+      platformCandidateId: params.result.candidate.platformCandidateId,
+      profileUrl: params.result.candidate.profileUrl,
+      identityKey: params.result.candidate.identityKey,
+      identityHash: params.result.candidate.identityHash,
+      lastActiveAt: params.result.candidate.lastActiveAt
+        ? new Date(params.result.candidate.lastActiveAt)
+        : null,
+      contacted: true,
+      lastContactAt: new Date(),
+    });
+  }
 }
 
 export async function executeScreeningRunActions(params: {
