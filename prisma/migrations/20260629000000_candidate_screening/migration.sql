@@ -208,6 +208,9 @@ CREATE UNIQUE INDEX "candidate_screening_results_id_user_id_key" ON "public"."ca
 CREATE UNIQUE INDEX "candidate_screening_results_id_user_run_jd_candidate_key" ON "public"."candidate_screening_results"("id", "user_id", "run_id", "job_description_id", "candidate_id");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "candidate_screening_results_id_user_jd_candidate_key" ON "public"."candidate_screening_results"("id", "user_id", "job_description_id", "candidate_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "candidate_screening_results_jd_candidate_key" ON "public"."candidate_screening_results"("job_description_id", "candidate_id");
 
 -- CreateIndex
@@ -277,10 +280,7 @@ ALTER TABLE "public"."candidate_action_logs" ADD CONSTRAINT "candidate_action_lo
 ALTER TABLE "public"."candidate_action_logs" ADD CONSTRAINT "candidate_action_logs_run_id_user_id_job_description_id_fkey" FOREIGN KEY ("run_id", "user_id", "job_description_id") REFERENCES "public"."candidate_screening_runs"("id", "user_id", "job_description_id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "public"."candidate_action_logs" DROP CONSTRAINT IF EXISTS "candidate_action_logs_screening_result_id_user_id_run_id_j_fkey";
-
--- AddForeignKey
-ALTER TABLE "public"."candidate_action_logs" ADD CONSTRAINT "candidate_action_logs_screening_result_id_user_id_fkey" FOREIGN KEY ("screening_result_id", "user_id") REFERENCES "public"."candidate_screening_results"("id", "user_id") ON DELETE CASCADE ON UPDATE RESTRICT;
+ALTER TABLE "public"."candidate_action_logs" ADD CONSTRAINT "candidate_action_logs_screening_result_user_jd_candidate_fkey" FOREIGN KEY ("screening_result_id", "user_id", "job_description_id", "candidate_id") REFERENCES "public"."candidate_screening_results"("id", "user_id", "job_description_id", "candidate_id") ON DELETE CASCADE ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "public"."candidate_action_logs" ADD CONSTRAINT "candidate_action_logs_candidate_id_user_id_fkey" FOREIGN KEY ("candidate_id", "user_id") REFERENCES "public"."candidates"("id", "user_id") ON DELETE CASCADE ON UPDATE RESTRICT;

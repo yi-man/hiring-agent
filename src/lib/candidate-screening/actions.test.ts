@@ -5,6 +5,7 @@ describe('candidate actions', () => {
     expect(
       createActionIdempotencyKey({
         userId: 'u1',
+        runId: 'run-1',
         jobDescriptionId: 'jd1',
         candidateId: 'c1',
         platform: 'boss-like',
@@ -13,12 +14,34 @@ describe('candidate actions', () => {
     ).toBe(
       createActionIdempotencyKey({
         userId: 'u1',
+        runId: 'run-1',
         jobDescriptionId: 'jd1',
         candidateId: 'c1',
         platform: 'boss-like',
         action: 'chat',
       }),
     );
+  });
+
+  it('scopes idempotency keys to a single screening run', () => {
+    const firstRunKey = createActionIdempotencyKey({
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd1',
+      candidateId: 'c1',
+      platform: 'boss-like',
+      action: 'chat',
+    });
+    const rerunKey = createActionIdempotencyKey({
+      userId: 'u1',
+      runId: 'run-2',
+      jobDescriptionId: 'jd1',
+      candidateId: 'c1',
+      platform: 'boss-like',
+      action: 'chat',
+    });
+
+    expect(firstRunKey).not.toBe(rerunKey);
   });
 
   it('creates a dry-run chat message for recommended candidates', () => {

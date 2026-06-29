@@ -17,6 +17,7 @@ import type {
   SearchPlan,
   ScreeningRunStats,
 } from './types';
+import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
 import {
   executeScreeningRunActions,
   runCandidateScreening,
@@ -557,6 +558,57 @@ describe('candidate screening runner', () => {
     );
   });
 
+  it('creates run-scoped planned action idempotency keys when rerunning the same JD and candidate', async () => {
+    const dependencies = makeDependencies();
+    dependencies.createAdapter = jest.fn(() =>
+      makeAdapter({
+        searchCandidates: jest.fn(() =>
+          batches({
+            candidates: [makeRawCandidate()],
+          }),
+        ),
+      }),
+    );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+    await runCandidateScreening({
+      runId: 'run-2',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    const idempotencyKeys = (dependencies.repo.createActionLog as jest.Mock).mock.calls.map(
+      (call) => call[0].idempotencyKey,
+    );
+    expect(idempotencyKeys).toEqual([
+      createActionIdempotencyKey({
+        userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        action: 'chat',
+      }),
+      createActionIdempotencyKey({
+        userId: 'user-1',
+        runId: 'run-2',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        action: 'chat',
+      }),
+    ]);
+    expect(idempotencyKeys[0]).not.toBe(idempotencyKeys[1]);
+  });
+
   it('executes planned actions only through executeScreeningRunActions and updates contacted state after successful chat action', async () => {
     const adapter = makeAdapter({
       chatCandidate: jest.fn().mockResolvedValue({ success: true }),
@@ -607,6 +659,7 @@ describe('candidate screening runner', () => {
         userId: 'user-1',
         jobDescriptionId: 'jd-1',
         runId: 'run-1',
+        plannedActions: ['chat', 'collect'],
       }),
     );
     expect(dependencies.repo.claimActionLog).toHaveBeenCalledWith({
@@ -770,6 +823,73 @@ describe('candidate screening runner', () => {
         candidateId: 'candidate-1',
         actionStatus: 'success',
       }),
+    );
+  });
+
+  it('requests executable planned actions so skip rows do not block lower-ranked chat execution', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const skipPlan = createDryRunActionPlan({
+      action: 'skip',
+      priority: 'low',
+      candidateName: 'Skipped Candidate',
+      jobTitle: jobDescription.position,
+      reason: 'not relevant',
+    });
+    const skipResult = makeResult({
+      id: 'result-skip',
+      candidateId: 'candidate-skip',
+      finalScore: 99,
+      rank: 1,
+      decisionAction: 'skip',
+      decisionPriority: 'low',
+      decisionReason: 'not relevant',
+      actionPlan: skipPlan,
+      actionStatus: 'planned',
+    });
+    const chatResult = makeResult({
+      id: 'result-chat',
+      candidateId: 'candidate-1',
+      finalScore: 80,
+      rank: 2,
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+    });
+    const detail = makeDetail(chatResult);
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(
+      makeRun({
+        id: 'run-1',
+        status: 'success',
+        searchPlan,
+        evaluationSchema,
+      }),
+    );
+    dependencies.repo.listResults = jest.fn(async (params: { plannedActions?: string[] }) =>
+      params.plannedActions ? [chatResult] : [skipResult],
+    );
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: { confirmExecution: true, maxChatActions: 1, maxCollectActions: 1 },
+      dependencies,
+    });
+
+    expect(dependencies.repo.listResults).toHaveBeenCalledWith(
+      expect.objectContaining({ plannedActions: ['chat', 'collect'] }),
+    );
+    expect(adapter.chatCandidate).toHaveBeenCalledTimes(1);
+    expect(adapter.chatCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: 'candidate-1',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'https://example.com/ada',
+      },
+      chatDecision,
     );
   });
 

@@ -306,6 +306,7 @@ async function createPlannedActions(params: {
       status: 'planned',
       idempotencyKey: createActionIdempotencyKey({
         userId: params.userId,
+        runId: params.runId,
         jobDescriptionId: params.jobDescription.id,
         candidateId: rankedCandidate.candidateId,
         platform: params.request.platform,
@@ -672,6 +673,7 @@ export async function executeScreeningRunActions(params: {
       userId: params.userId,
       jobDescriptionId: run.jobDescriptionId,
       runId: params.runId,
+      plannedActions: ['chat', 'collect'],
       limit: params.request.maxChatActions + params.request.maxCollectActions + 100,
       offset: 0,
     });

@@ -935,4 +935,36 @@ describe('candidate screening repository', () => {
       take: 10,
     });
   });
+
+  it('can restrict current-run planned action results to executable actions', async () => {
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await listCandidateScreeningResults({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      runId: 'run-2',
+      plannedActions: ['chat', 'collect'],
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        actionLogs: {
+          some: {
+            userId: 'u1',
+            runId: 'run-2',
+            status: 'planned',
+            action: { in: ['chat', 'collect'] },
+          },
+        },
+      },
+      include: { candidate: true, resume: true },
+      orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
+      skip: 0,
+      take: 10,
+    });
+  });
 });

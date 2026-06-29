@@ -348,6 +348,7 @@ export type ListCandidateResultsParams = {
   userId: string;
   jobDescriptionId: string;
   runId?: string;
+  plannedActions?: CandidateDecisionAction[];
   limit: number;
   offset?: number;
   interviewStage?: CandidateInterviewStage;
@@ -908,6 +909,9 @@ export async function listCandidateScreeningResults(
                 userId: params.userId,
                 runId: params.runId,
                 status: 'planned',
+                ...(params.plannedActions && params.plannedActions.length > 0
+                  ? { action: { in: params.plannedActions } }
+                  : {}),
               },
             },
           }

@@ -8,6 +8,7 @@ import type {
 
 export type ActionKeyInput = {
   userId: string;
+  runId: string;
   jobDescriptionId: string;
   candidateId: string;
   platform: CandidateScreeningPlatform;
@@ -28,9 +29,14 @@ function sha256(value: string): string {
 
 export function createActionIdempotencyKey(input: ActionKeyInput): string {
   return sha256(
-    [input.userId, input.jobDescriptionId, input.candidateId, input.platform, input.action].join(
-      ':',
-    ),
+    [
+      input.userId,
+      input.runId,
+      input.jobDescriptionId,
+      input.candidateId,
+      input.platform,
+      input.action,
+    ].join(':'),
   );
 }
 
