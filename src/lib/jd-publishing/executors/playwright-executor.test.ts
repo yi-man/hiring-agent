@@ -2,6 +2,7 @@
  * @jest-environment node
  */
 import { PlaywrightBrowserExecutor, resolveHeadlessOption } from './playwright-executor';
+import type { BrowserExecutor, TargetDescriptor } from '@/lib/jd-publishing/types';
 
 describe('PlaywrightBrowserExecutor', () => {
   it('defaults to a headed browser unless headless mode is explicitly requested', () => {
@@ -31,7 +32,100 @@ describe('PlaywrightBrowserExecutor', () => {
       await executor.navigate(`data:text/html;charset=utf-8,${html}`);
       const result = await executor.fill('职位名称', '高级前端工程师');
 
-      expect(result).toEqual({ success: true });
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          match: expect.objectContaining({ status: 'unique' }),
+        }),
+      );
+    } finally {
+      await executor.close();
+    }
+  });
+
+  it('fills a structured target and returns a match report', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const target: TargetDescriptor = {
+        kind: 'field',
+        role: 'textbox',
+        name: '职位名称',
+        exact: true,
+        stableAttrs: { name: 'title' },
+        scope: { kind: 'form', name: '发布职位' },
+      };
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <form aria-label="发布职位">
+              <label>
+                职位名称
+                <input
+                  name="title"
+                  oninput="document.querySelector('#filled-value').textContent = this.value"
+                />
+              </label>
+              <div id="filled-value"></div>
+            </form>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const result = await executor.fill(target as never, '高级前端工程师');
+
+      expect(result.success).toBe(true);
+      expect(result.match).toEqual(
+        expect.objectContaining({
+          status: 'unique',
+          candidateCount: 1,
+          chosen: expect.objectContaining({ name: 'title' }),
+        }),
+      );
+      await expect(
+        executor.check({ type: 'text_contains', text: '高级前端工程师', timeout: 500 }),
+      ).resolves.toBe(true);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  it('keeps the match report when a resolved fill action fails during execution', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const target: TargetDescriptor = {
+        kind: 'field',
+        role: 'textbox',
+        name: '职位名称',
+        exact: true,
+        stableAttrs: { name: 'title' },
+      };
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <form aria-label="发布职位">
+              <label>
+                职位名称
+                <input name="title" type="file" />
+              </label>
+            </form>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const result = await executor.fill(target, '高级前端工程师');
+
+      expect(result.success).toBe(false);
+      expect(result.match).toEqual(
+        expect.objectContaining({
+          status: 'unique',
+          target,
+        }),
+      );
+      expect(result.failedTargetKey).toBe('target');
     } finally {
       await executor.close();
     }
@@ -87,10 +181,47 @@ describe('PlaywrightBrowserExecutor', () => {
       await executor.navigate(`data:text/html;charset=utf-8,${html}`);
       const result = await executor.click('登录');
 
-      expect(result).toEqual({ success: true });
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          match: expect.objectContaining({ status: 'unique' }),
+        }),
+      );
       await expect(
         executor.check({ type: 'text_contains', text: 'button clicked', timeout: 500 }),
       ).resolves.toBe(true);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  it('refuses to click ambiguous duplicate structured buttons', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const target: TargetDescriptor = {
+        kind: 'button',
+        role: 'button',
+        name: '发布职位',
+        exact: true,
+      };
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <button type="button">发布职位</button>
+            <button type="button">发布职位</button>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const result = await executor.click(target as never);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('ambiguous_target');
+      expect(result.match).toEqual(
+        expect.objectContaining({ status: 'ambiguous', candidateCount: 2 }),
+      );
     } finally {
       await executor.close();
     }
@@ -116,6 +247,49 @@ describe('PlaywrightBrowserExecutor', () => {
 
       expect(snapshot).toContain('职位名称');
       expect(snapshot.length).toBeLessThanOrEqual(8_000);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  it('returns a structured snapshot for explore and fallback diagnostics', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <main>
+              <h1>发布职位</h1>
+              <form aria-label="发布职位">
+                <label>职位名称 <input name="title" /></label>
+                <label>公司名称 <input name="company" /></label>
+                <label>薪资范围 <input name="salary" /></label>
+                <label>工作地点 <input name="location" /></label>
+                <label>职位描述 <textarea name="description"></textarea></label>
+                <label>技能标签 <input name="keyword" /></label>
+                <button type="button">发布职位</button>
+              </form>
+            </main>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const snapshot = await (executor as BrowserExecutor).snapshotStructured?.();
+
+      expect(snapshot).toEqual(
+        expect.objectContaining({
+          pageState: 'publish_form',
+          forms: expect.arrayContaining([
+            expect.objectContaining({
+              fields: expect.arrayContaining([
+                expect.objectContaining({ name: 'title', label: '职位名称' }),
+              ]),
+            }),
+          ]),
+        }),
+      );
     } finally {
       await executor.close();
     }

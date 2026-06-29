@@ -1,6 +1,6 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import type { JobDescriptionDto } from '@/types';
-import { exploreBossLikePublishSkill } from './explore';
+import { exploreBossLikePublishSkill, repairBossLikeTargetFromSnapshot } from './explore';
 import { buildBossLikeJobPayload } from './publish-payload';
 import {
   completePublishTask,
@@ -8,10 +8,16 @@ import {
   createNextActivePublishSkillVersion,
   createPublishTask,
   getActivePublishSkillFromDb,
+  updatePublishTaskCurrentStep,
 } from './publish-repo';
 import { executePublishingStep } from './skill-executor';
 import type {
   BrowserExecutor,
+  BrowserCommandContext,
+  BrowserResolveOptions,
+  BrowserStepTargetKey,
+  BrowserTargetInput,
+  LocatorMatchReport,
   PublishExecutionContext,
   PublishJobDescriptionSettings,
   PublishPlatform,
@@ -22,6 +28,7 @@ import type {
   PublishTaskDto,
   PublishTaskResult,
   PublishTraceStep,
+  StructuredDomSnapshot,
 } from './types';
 
 type PublishingRoute = 'execute' | 'fallback' | 'upgrade' | 'finalize';
@@ -34,6 +41,7 @@ export type PublishingGraphDependencies = {
   }) => Promise<PublishSkill>;
   createExploredSkill?: (skill: PublishSkill) => Promise<PublishSkill>;
   createTask?: typeof createPublishTask;
+  updateTaskCurrentStep?: typeof updatePublishTaskCurrentStep;
   completeTask?: typeof completePublishTask;
   createNextSkillVersion?: (params: {
     previousSkill: PublishSkill;
@@ -59,6 +67,7 @@ const PublishingState = Annotation.Root({
   onFail: Annotation<PublishStepOnFail | undefined>(),
   failedTraceStep: Annotation<PublishTraceStep | undefined>(),
   repairSteps: Annotation<PublishStep[] | undefined>(),
+  repairReason: Annotation<string | undefined>(),
   errorMessage: Annotation<string | undefined>(),
 });
 
@@ -86,12 +95,100 @@ function appendTrace(
   return traceStep ? [...state.traceSteps, traceStep] : state.traceSteps;
 }
 
+function setExecutorCommandContext(
+  executor: BrowserExecutor,
+  context: BrowserCommandContext,
+): void {
+  executor.setCommandContext?.(context);
+}
+
 function lastError(traceStep?: PublishTraceStep, fallbackReason?: string): string | undefined {
   return traceStep?.result.error ?? fallbackReason;
 }
 
-function buildFallbackTraceStep(state: PublishingGraphState): PublishTraceStep {
-  const repairAvailable = Boolean(state.repairSteps?.length);
+function isBrowserTargetInput(value: unknown): value is BrowserTargetInput {
+  if (typeof value === 'string') return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.kind === 'string' && typeof record.name === 'string';
+}
+
+function resolveOptionsForTraceStep(traceStep: PublishTraceStep): BrowserResolveOptions {
+  if (traceStep.action === 'fill' || traceStep.action === 'add_keywords') {
+    return { action: traceStep.action, requireEditable: true };
+  }
+  if (traceStep.action === 'click' || traceStep.action === 'wait_for_text') {
+    return { action: traceStep.action };
+  }
+  return {};
+}
+
+function targetFailureCode(report: LocatorMatchReport): string {
+  if (report.status === 'ambiguous') return 'ambiguous_target';
+  if (report.status === 'low_confidence') return 'low_confidence_target';
+  return 'not_found_target';
+}
+
+function patchFailedStepTarget(params: {
+  steps: PublishStep[];
+  failedStepId: string;
+  target: BrowserTargetInput;
+  targetKey: BrowserStepTargetKey;
+}): PublishStep[] {
+  return params.steps.map((step) => {
+    if (step.id !== params.failedStepId || step.type !== 'action') return step;
+    return {
+      ...step,
+      params: {
+        ...step.params,
+        [params.targetKey]: params.target,
+      },
+    };
+  });
+}
+
+function errorFromMatchReport(report: LocatorMatchReport): string {
+  return `${targetFailureCode(report)}: ${report.reason ?? report.target.name}`;
+}
+
+function readFailedTarget(params: { traceStep?: PublishTraceStep }): {
+  target?: BrowserTargetInput;
+  targetKey: BrowserStepTargetKey;
+} {
+  const traceStep = params.traceStep;
+  const explicitKey = traceStep?.result.failedTargetKey;
+  const targetKey: BrowserStepTargetKey =
+    explicitKey === 'submitTarget' ? 'submitTarget' : 'target';
+  const matchedTarget = traceStep?.result.match?.target;
+  if (matchedTarget) return { target: matchedTarget, targetKey };
+  const paramTarget = traceStep?.params[targetKey];
+  if (isBrowserTargetInput(paramTarget)) return { target: paramTarget, targetKey };
+  const fallbackTarget = traceStep?.params.target;
+  return {
+    target: isBrowserTargetInput(fallbackTarget) ? fallbackTarget : undefined,
+    targetKey: 'target',
+  };
+}
+
+async function resolveUniqueRepairTarget(params: {
+  executor: BrowserExecutor;
+  target: BrowserTargetInput;
+  options: BrowserResolveOptions;
+}): Promise<LocatorMatchReport | undefined> {
+  if (!params.executor.resolveTarget) return undefined;
+  return params.executor.resolveTarget(params.target, params.options).catch(() => undefined);
+}
+
+function buildFallbackTraceStep(
+  state: PublishingGraphState,
+  params: {
+    repairSteps?: PublishStep[];
+    errorMessage?: string;
+    domSnapshot?: string | StructuredDomSnapshot;
+    match?: LocatorMatchReport;
+  } = {},
+): PublishTraceStep {
+  const repairAvailable = Boolean(params.repairSteps?.length ?? state.repairSteps?.length);
   return {
     stepId: 'fallback_agent',
     action: 'fallback_agent',
@@ -102,8 +199,11 @@ function buildFallbackTraceStep(state: PublishingGraphState): PublishTraceStep {
     },
     result: {
       success: repairAvailable,
-      error: repairAvailable ? undefined : (state.errorMessage ?? state.onFail?.reason),
-      domSnapshot: state.failedTraceStep?.result.domSnapshot,
+      error: repairAvailable
+        ? undefined
+        : (params.errorMessage ?? state.errorMessage ?? state.onFail?.reason),
+      domSnapshot: params.domSnapshot ?? state.failedTraceStep?.result.domSnapshot,
+      match: params.match,
     },
   };
 }
@@ -143,6 +243,10 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
   async function exploreOrLoadSkillNode(
     state: PublishingGraphState,
   ): Promise<PublishingGraphUpdate> {
+    setExecutorCommandContext(state.executor, {
+      taskId: undefined,
+      stepId: 'explore_or_load_skill',
+    });
     const activeSkill = await dependencies.getActiveSkill(state.settings.platform);
     if (activeSkill) {
       return {
@@ -172,16 +276,23 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       input: state.input,
       currentStep: skill.steps[0]?.id ?? null,
     });
+    setExecutorCommandContext(state.executor, {
+      taskId: task.id,
+      stepId: skill.steps[0]?.id,
+    });
     return { task, currentStepId: skill.steps[0]?.id, traceSteps: [] };
   }
 
   async function executeStepNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
+    const task = requireTask(state);
     const stepId = state.currentStepId;
     if (!stepId) {
+      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
       return { status: 'success', route: 'finalize' };
     }
 
+    setExecutorCommandContext(state.executor, { taskId: task.id, stepId });
     const result = await executePublishingStep({
       stepId,
       skill,
@@ -191,6 +302,10 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
     const traceSteps = appendTrace(state, result.traceStep);
 
     if (result.status === 'running') {
+      await dependencies.updateTaskCurrentStep({
+        taskId: task.id,
+        currentStep: result.nextStepId ?? null,
+      });
       return {
         traceSteps,
         currentStepId: result.nextStepId ?? undefined,
@@ -198,6 +313,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       };
     }
     if (result.status === 'success') {
+      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
       return {
         traceSteps,
         currentStepId: undefined,
@@ -206,6 +322,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       };
     }
     if (result.status === 'fallback') {
+      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
       return {
         traceSteps,
         currentStepId: undefined,
@@ -217,6 +334,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
         errorMessage: lastError(result.traceStep, result.onFail?.reason),
       };
     }
+    await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
     return {
       traceSteps,
       currentStepId: undefined,
@@ -233,10 +351,88 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
   }
 
   async function fallbackAgentNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
-    const fallbackTrace = buildFallbackTraceStep(state);
+    const skill = requireSkill(state);
+    const task = requireTask(state);
+    setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'fallback_agent' });
+    const failedTraceStep = state.failedTraceStep;
+    const failed = readFailedTarget({ traceStep: failedTraceStep });
+    const failedTarget = failed.target;
+    let repairSteps = state.repairSteps;
+    let repairReason = state.repairReason;
+    let fallbackError = state.errorMessage;
+    let fallbackSnapshot = failedTraceStep?.result.domSnapshot;
+    let fallbackMatch: LocatorMatchReport | undefined;
+
+    if (!repairSteps?.length && failedTraceStep && isBrowserTargetInput(failedTarget)) {
+      const structuredSnapshot = state.executor.snapshotStructured
+        ? await state.executor.snapshotStructured().catch(() => undefined)
+        : undefined;
+      fallbackSnapshot = structuredSnapshot ?? fallbackSnapshot;
+      const resolveOptions = resolveOptionsForTraceStep(failedTraceStep);
+      const report = await resolveUniqueRepairTarget({
+        executor: state.executor,
+        target: failedTarget,
+        options: resolveOptions,
+      });
+      if (report) {
+        fallbackMatch = report;
+        if (report.status === 'unique') {
+          repairSteps = patchFailedStepTarget({
+            steps: skill.steps,
+            failedStepId: failedTraceStep.stepId,
+            target: report.target,
+            targetKey: failed.targetKey,
+          });
+          repairReason = `target re-explore resolved by ${report.strategy}`;
+        } else {
+          fallbackError = errorFromMatchReport(report);
+        }
+      }
+
+      if (!repairSteps?.length && structuredSnapshot) {
+        const repairedTarget = repairBossLikeTargetFromSnapshot({
+          snapshot: structuredSnapshot,
+          failedStepId: failedTraceStep.stepId,
+          targetKey: failed.targetKey,
+          failedTarget,
+        });
+        const repairedReport = repairedTarget
+          ? await resolveUniqueRepairTarget({
+              executor: state.executor,
+              target: repairedTarget,
+              options: resolveOptions,
+            })
+          : undefined;
+        if (repairedReport) {
+          fallbackMatch = repairedReport;
+          if (repairedReport.status === 'unique') {
+            repairSteps = patchFailedStepTarget({
+              steps: skill.steps,
+              failedStepId: failedTraceStep.stepId,
+              target: repairedReport.target,
+              targetKey: failed.targetKey,
+            });
+            repairReason = `target re-explore resolved by ${repairedReport.strategy}`;
+            fallbackError = state.errorMessage;
+          } else {
+            fallbackError = errorFromMatchReport(repairedReport);
+          }
+        }
+      }
+    }
+
+    const fallbackTrace = buildFallbackTraceStep(state, {
+      repairSteps,
+      errorMessage: fallbackError,
+      domSnapshot: fallbackSnapshot,
+      match: fallbackMatch,
+    });
     return {
       traceSteps: appendTrace(state, fallbackTrace),
-      route: state.repairSteps?.length ? 'upgrade' : 'finalize',
+      route: repairSteps?.length ? 'upgrade' : 'finalize',
+      repairSteps,
+      repairReason,
+      errorMessage: fallbackError,
     };
   }
 
@@ -244,6 +440,8 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
     state: PublishingGraphState,
   ): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
+    const task = requireTask(state);
+    setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'skill_upgrade' });
     if (!state.repairSteps?.length) {
       return { route: 'finalize' };
     }
@@ -256,7 +454,9 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
         created_from: 'agent',
         repaired_from_skill_id: skill.id,
         repaired_from_version: skill.version,
-        repaired_reason: state.onFail?.reason ?? state.errorMessage ?? 'step failed',
+        failed_step_id: state.failedTraceStep?.stepId ?? state.currentStepId ?? '',
+        repair_reason:
+          state.repairReason ?? state.onFail?.reason ?? state.errorMessage ?? 'step failed',
       },
     });
     return {
@@ -318,6 +518,7 @@ function withDefaultDependencies(
     exploreSkill: dependencies.exploreSkill ?? exploreBossLikePublishSkill,
     createExploredSkill: dependencies.createExploredSkill ?? createExploredPublishSkill,
     createTask: dependencies.createTask ?? createPublishTask,
+    updateTaskCurrentStep: dependencies.updateTaskCurrentStep ?? updatePublishTaskCurrentStep,
     completeTask: dependencies.completeTask ?? completePublishTask,
     createNextSkillVersion:
       dependencies.createNextSkillVersion ?? createNextActivePublishSkillVersion,
@@ -355,6 +556,7 @@ export async function runPublishingAgentGraph(options: {
       onFail: undefined,
       failedTraceStep: undefined,
       repairSteps: undefined,
+      repairReason: undefined,
       errorMessage: undefined,
     },
     { recursionLimit: 200 },

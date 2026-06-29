@@ -1,0 +1,350 @@
+{
+  "id": "boss-like-publish-jd-explore-a3fa6b8a-16fe-4118-9055-f3e81fab698b",
+  "name": "publish_jd",
+  "platform": "boss-like",
+  "description": "Publish a generated JD to the local boss-like employer job form.",
+  "version": 1,
+  "isActive": false,
+  "inputSchema": {
+    "title": "string",
+    "salary": "string",
+    "company": "string",
+    "keywords": "string[]",
+    "location": "string",
+    "description": "string"
+  },
+  "variables": {},
+  "steps": [
+    {
+      "id": "open_new_job",
+      "next": "check_login",
+      "type": "action",
+      "action": "navigate",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot open new job page"
+      },
+      "params": {
+        "url": "{{target.newJobUrl}}"
+      }
+    },
+    {
+      "id": "check_login",
+      "type": "condition",
+      "check": {
+        "id": "new_job_form_visible",
+        "text": "职位名称",
+        "type": "text_contains",
+        "timeout": 5000
+      },
+      "ifTrue": {
+        "next": "fill_title"
+      },
+      "ifFalse": {
+        "next": "fill_username"
+      }
+    },
+    {
+      "id": "fill_username",
+      "next": "fill_password",
+      "type": "action",
+      "action": "fill",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot fill username"
+      },
+      "params": {
+        "value": "{{credentials.username}}",
+        "target": {
+          "kind": "field",
+          "name": "用户名",
+          "role": "textbox",
+          "exact": true
+        }
+      }
+    },
+    {
+      "id": "fill_password",
+      "next": "submit_login",
+      "type": "action",
+      "action": "fill",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot fill password"
+      },
+      "params": {
+        "value": "{{credentials.password}}",
+        "target": {
+          "kind": "field",
+          "name": "密码",
+          "role": "textbox",
+          "exact": true
+        }
+      }
+    },
+    {
+      "id": "submit_login",
+      "next": "wait_after_login",
+      "type": "action",
+      "action": "click",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot submit login"
+      },
+      "params": {
+        "target": {
+          "kind": "button",
+          "name": "登录",
+          "role": "button",
+          "exact": true
+        }
+      }
+    },
+    {
+      "id": "wait_after_login",
+      "next": "open_new_job_after_login",
+      "type": "action",
+      "action": "wait_for_url",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "login redirect did not complete"
+      },
+      "params": {
+        "url": "/employer/resumes"
+      }
+    },
+    {
+      "id": "open_new_job_after_login",
+      "next": "fill_title",
+      "type": "action",
+      "action": "navigate",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot open new job page after login"
+      },
+      "params": {
+        "url": "{{target.newJobUrl}}"
+      }
+    },
+    {
+      "id": "fill_title",
+      "next": "fill_company",
+      "type": "action",
+      "action": "fill",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot fill job title"
+      },
+      "params": {
+        "value": "{{input.title}}",
+        "target": {
+          "kind": "field",
+          "name": "职位名称 *",
+          "role": "textbox",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          },
+          "valueHint": "title"
+        }
+      }
+    },
+    {
+      "id": "fill_company",
+      "next": "fill_salary",
+      "type": "action",
+      "action": "fill",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot fill company name"
+      },
+      "params": {
+        "value": "{{input.company}}",
+        "target": {
+          "kind": "field",
+          "name": "公司名称 *",
+          "role": "textbox",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          },
+          "valueHint": "company"
+        }
+      }
+    },
+    {
+      "id": "fill_salary",
+      "next": "fill_location",
+      "type": "action",
+      "action": "fill",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot fill salary range"
+      },
+      "params": {
+        "value": "{{input.salary}}",
+        "target": {
+          "kind": "field",
+          "name": "薪资范围 *",
+          "role": "textbox",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          },
+          "valueHint": "salary"
+        }
+      }
+    },
+    {
+      "id": "fill_location",
+      "next": "fill_description",
+      "type": "action",
+      "action": "fill",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot fill job location"
+      },
+      "params": {
+        "value": "{{input.location}}",
+        "target": {
+          "kind": "field",
+          "name": "工作地点 *",
+          "role": "textbox",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          },
+          "valueHint": "location"
+        }
+      }
+    },
+    {
+      "id": "fill_description",
+      "next": "add_keywords",
+      "type": "action",
+      "action": "fill",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot fill job description"
+      },
+      "params": {
+        "value": "{{input.description}}",
+        "target": {
+          "kind": "field",
+          "name": "职位描述 *",
+          "role": "textbox",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          },
+          "valueHint": "description"
+        }
+      }
+    },
+    {
+      "id": "add_keywords",
+      "next": "submit_job",
+      "type": "action",
+      "action": "add_keywords",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot add skill keywords"
+      },
+      "params": {
+        "target": {
+          "kind": "field",
+          "name": "输入技能后按回车添加",
+          "role": "textbox",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          },
+          "valueHint": "keyword"
+        },
+        "values": "{{input.keywords}}",
+        "submitTarget": {
+          "kind": "button",
+          "name": "添加",
+          "role": "button",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          }
+        }
+      }
+    },
+    {
+      "id": "submit_job",
+      "next": "wait_jobs_list",
+      "type": "action",
+      "action": "click",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "cannot submit job publish form"
+      },
+      "params": {
+        "target": {
+          "kind": "button",
+          "name": "发布职位",
+          "role": "button",
+          "exact": true,
+          "scope": {
+            "kind": "form",
+            "name": "发布职位"
+          }
+        }
+      }
+    },
+    {
+      "id": "wait_jobs_list",
+      "next": "verify_published",
+      "type": "action",
+      "action": "wait_for_url",
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "jobs list redirect did not complete"
+      },
+      "params": {
+        "url": "/employer/jobs"
+      }
+    },
+    {
+      "id": "verify_published",
+      "type": "condition",
+      "check": {
+        "id": "job_title_visible",
+        "text": "{{input.title}}",
+        "type": "text_contains"
+      },
+      "ifTrue": {
+        "next": "done"
+      },
+      "onFail": {
+        "type": "fallback_agent",
+        "reason": "published job title is not visible"
+      }
+    },
+    {
+      "id": "done",
+      "type": "end"
+    },
+    {
+      "id": "failed",
+      "type": "end"
+    }
+  ],
+  "meta": {
+    "usage_count": 0,
+    "created_from": "explore",
+    "success_rate": 0
+  },
+  "createdAt": "2026-06-29T03:00:18.329Z",
+  "updatedAt": "2026-06-29T03:00:25.486Z"
+}

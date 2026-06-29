@@ -230,6 +230,16 @@ export async function createPublishTask(params: {
   return mapTask(row);
 }
 
+export async function updatePublishTaskCurrentStep(params: {
+  taskId: string;
+  currentStep: string | null;
+}): Promise<void> {
+  await prisma.jobPublishTask.update({
+    where: { id: params.taskId },
+    data: { currentStep: params.currentStep },
+  });
+}
+
 export async function completePublishTask(params: {
   taskId: string;
   skillId: string;

@@ -26,6 +26,7 @@
     "test:e2e:playwright:jd": "playwright test tests/e2e-playwright/jd-generator-real.spec.ts",
     "test:e2e:playwright:workflow": "playwright test tests/e2e-playwright/workflow-learning.spec.ts",
     "test:integration:chat": "bunx jest tests/integration/chat/real-deps.e2e.test.ts --runInBand --coverage=false",
+    "test:integration:jd-publishing": "bunx jest tests/integration/jd-publishing/publish-flow.e2e.test.ts --runInBand --coverage=false",
     "obs:run": "bunx tsx src/scripts/llm-observability-ops.ts",
     "obs:realtime": "bun run obs:run -- realtime",
     "obs:retention": "bun run obs:run -- retention",

@@ -3,6 +3,7 @@ import type { BrowserExecutor, BrowserStepResult, PublishSkill } from './types';
 
 class RecordingExecutor implements BrowserExecutor {
   readonly calls: string[] = [];
+  readonly fillCalls: Array<{ target: unknown; value: string }> = [];
 
   constructor(private readonly checks: Record<string, boolean> = {}) {}
 
@@ -12,6 +13,7 @@ class RecordingExecutor implements BrowserExecutor {
   }
 
   async fill(locator: string, value: string): Promise<BrowserStepResult> {
+    this.fillCalls.push({ target: locator, value });
     this.calls.push(`fill:${locator}:${value}`);
     return { success: true };
   }
@@ -171,6 +173,48 @@ describe('runPublishingSkill', () => {
       success: false,
       error: 'selector not found',
       domSnapshot: '<form />',
+    });
+  });
+
+  it('passes structured target descriptors to browser actions', async () => {
+    const executor = new RecordingExecutor();
+    const target = {
+      kind: 'field',
+      role: 'textbox',
+      name: '职位名称',
+      exact: true,
+      valueHint: 'title',
+      scope: { kind: 'form', name: '发布职位' },
+    };
+
+    const result = await executePublishingStep({
+      stepId: 'fill_title',
+      skill: {
+        ...skill,
+        steps: [
+          {
+            id: 'fill_title',
+            type: 'action',
+            action: 'fill',
+            params: { target, value: '{{input.title}}' },
+            next: 'done',
+          },
+          { id: 'done', type: 'end' },
+        ],
+      },
+      executor,
+      context: {
+        input: { title: '高级前端工程师' },
+        credentials: {},
+        target: {},
+      },
+    });
+
+    expect(result.status).toBe('running');
+    expect(executor.fillCalls).toEqual([{ target, value: '高级前端工程师' }]);
+    expect(result.traceStep?.params).toEqual({
+      target,
+      value: '高级前端工程师',
     });
   });
 

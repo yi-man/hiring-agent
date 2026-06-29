@@ -1,9 +1,26 @@
 import { exploreBossLikePublishSkill } from './explore';
-import type { BrowserExecutor, BrowserStepResult } from './types';
+import type {
+  BrowserExecutor,
+  BrowserStepResult,
+  BrowserTargetInput,
+  LocatorMatchReport,
+  StructuredDomSnapshot,
+  TargetDescriptor,
+} from './types';
 
 class ExploringExecutor implements BrowserExecutor {
   readonly calls: string[] = [];
+  readonly resolvedTargets: TargetDescriptor[] = [];
   private formVisible = false;
+
+  constructor(
+    private readonly reportStatus: LocatorMatchReport['status'] = 'unique',
+    private readonly structuredSnapshotOverride?: StructuredDomSnapshot,
+  ) {}
+
+  private targetName(target: BrowserTargetInput): string {
+    return typeof target === 'string' ? target : target.name;
+  }
 
   async navigate(url: string): Promise<BrowserStepResult> {
     this.calls.push(`navigate:${url}`);
@@ -13,13 +30,13 @@ class ExploringExecutor implements BrowserExecutor {
     return { success: true };
   }
 
-  async fill(locator: string, value: string): Promise<BrowserStepResult> {
-    this.calls.push(`fill:${locator}:${value}`);
+  async fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult> {
+    this.calls.push(`fill:${this.targetName(target)}:${value}`);
     return { success: true };
   }
 
-  async click(locator: string): Promise<BrowserStepResult> {
-    this.calls.push(`click:${locator}`);
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    this.calls.push(`click:${this.targetName(target)}`);
     return { success: true };
   }
 
@@ -40,11 +57,155 @@ class ExploringExecutor implements BrowserExecutor {
     this.calls.push('snapshot');
     return '<form><label>职位名称</label><label>职位描述</label></form>';
   }
+
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    this.calls.push('snapshotStructured');
+    if (this.structuredSnapshotOverride) return this.structuredSnapshotOverride;
+    return {
+      url: 'http://localhost:6183/employer/jobs/new',
+      title: '发布职位',
+      pageState: 'publish_form',
+      headings: [
+        {
+          tag: 'h1',
+          accessibleName: '发布职位',
+          text: '发布职位',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+      forms: [
+        {
+          name: '发布职位',
+          fields: ['职位名称', '公司名称', '薪资范围', '工作地点', '职位描述', '技能标签'].map(
+            (label) => ({
+              tag: label === '职位描述' ? 'textarea' : 'input',
+              role: 'textbox',
+              accessibleName: label,
+              label,
+              name:
+                label === '职位名称'
+                  ? 'title'
+                  : label === '公司名称'
+                    ? 'company'
+                    : label === '薪资范围'
+                      ? 'salary'
+                      : label === '工作地点'
+                        ? 'location'
+                        : label === '职位描述'
+                          ? 'description'
+                          : 'keyword',
+              visible: true,
+              enabled: true,
+              editable: true,
+            }),
+          ),
+          buttons: ['添加', '发布职位'].map((label) => ({
+            tag: 'button',
+            role: 'button',
+            accessibleName: label,
+            text: label,
+            visible: true,
+            enabled: true,
+            editable: false,
+          })),
+        },
+      ],
+      links: [],
+      textBlocks: [],
+    };
+  }
+
+  async resolveTarget(target: BrowserTargetInput): Promise<LocatorMatchReport> {
+    const descriptor =
+      typeof target === 'string' ? { kind: 'field' as const, name: target, exact: false } : target;
+    this.resolvedTargets.push(descriptor);
+    return {
+      target: descriptor,
+      status: this.reportStatus,
+      strategy: 'role_name',
+      candidateCount: this.reportStatus === 'not_found' ? 0 : 1,
+      confidence: this.reportStatus === 'unique' ? 0.94 : 0.5,
+      chosen:
+        this.reportStatus === 'unique'
+          ? {
+              tag: descriptor.kind === 'button' ? 'button' : 'input',
+              accessibleName: descriptor.name,
+              visible: true,
+              enabled: true,
+              editable: descriptor.kind === 'field',
+            }
+          : undefined,
+      candidates: [],
+      reason: this.reportStatus === 'unique' ? undefined : 'fixture target was not unique',
+    };
+  }
 }
 
 describe('exploreBossLikePublishSkill', () => {
   it('uses browser operations to author an explored boss-like publish skill', async () => {
-    const executor = new ExploringExecutor();
+    const executor = new ExploringExecutor('unique', {
+      url: 'http://localhost:6183/employer/jobs/new',
+      title: '发布职位',
+      pageState: 'publish_form',
+      headings: [
+        {
+          tag: 'h1',
+          accessibleName: '发布职位',
+          text: '发布职位',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+      forms: [
+        {
+          name: '发布职位',
+          fields: [
+            ['职位名称', 'job_title_dom'],
+            ['公司名称', 'company_dom'],
+            ['薪资范围', 'salary_dom'],
+            ['工作地点', 'location_dom'],
+            ['职位描述', 'description_dom'],
+            ['技能标签', 'keyword_dom'],
+          ].map(([label, name]) => ({
+            tag: label === '职位描述' ? 'textarea' : 'input',
+            role: 'textbox',
+            accessibleName: label,
+            label,
+            name,
+            visible: true,
+            enabled: true,
+            editable: true,
+          })),
+          buttons: [
+            {
+              tag: 'button',
+              role: 'button',
+              accessibleName: '添加',
+              text: '添加',
+              id: 'keyword-add-dom',
+              visible: true,
+              enabled: true,
+              editable: false,
+            },
+            {
+              tag: 'button',
+              role: 'button',
+              accessibleName: '发布职位',
+              text: '发布职位',
+              id: 'publish-dom',
+              visible: true,
+              enabled: true,
+              editable: false,
+            },
+          ],
+        },
+      ],
+      links: [],
+      textBlocks: [],
+    });
 
     const skill = await exploreBossLikePublishSkill({
       executor,
@@ -58,18 +219,13 @@ describe('exploreBossLikePublishSkill', () => {
       },
     });
 
-    expect(executor.calls).toEqual([
-      'navigate:http://localhost:6183/employer/jobs/new',
-      'check:text_contains:职位名称',
-      'check:text_contains:职位名称',
-      'check:text_contains:公司名称',
-      'check:text_contains:薪资范围',
-      'check:text_contains:工作地点',
-      'check:text_contains:职位描述',
-      'check:text_contains:技能标签',
-      'check:text_contains:发布职位',
-      'snapshot',
-    ]);
+    expect(executor.calls).toEqual(
+      expect.arrayContaining([
+        'navigate:http://localhost:6183/employer/jobs/new',
+        'check:text_contains:职位名称',
+        'snapshotStructured',
+      ]),
+    );
     expect(skill.name).toBe('publish_jd');
     expect(skill.platform).toBe('boss-like');
     expect(skill.version).toBe(1);
@@ -81,6 +237,60 @@ describe('exploreBossLikePublishSkill', () => {
         type: 'action',
         action: 'navigate',
       }),
+    );
+    expect(skill.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'fill_title',
+          params: expect.objectContaining({
+            target: expect.objectContaining({
+              kind: 'field',
+              role: 'textbox',
+              name: '职位名称',
+              stableAttrs: { name: 'job_title_dom' },
+              valueHint: 'title',
+              scope: { kind: 'form', name: '发布职位' },
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          id: 'add_keywords',
+          params: expect.objectContaining({
+            target: expect.objectContaining({
+              name: '技能标签',
+              stableAttrs: { name: 'keyword_dom' },
+              valueHint: 'keyword',
+            }),
+            submitTarget: expect.objectContaining({
+              kind: 'button',
+              name: '添加',
+              stableAttrs: { id: 'keyword-add-dom' },
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          id: 'submit_job',
+          params: expect.objectContaining({
+            target: expect.objectContaining({
+              kind: 'button',
+              name: '发布职位',
+              stableAttrs: { id: 'publish-dom' },
+            }),
+          }),
+        }),
+      ]),
+    );
+    expect(executor.resolvedTargets.map((target) => target.name)).toEqual(
+      expect.arrayContaining([
+        '职位名称',
+        '公司名称',
+        '薪资范围',
+        '工作地点',
+        '职位描述',
+        '技能标签',
+        '添加',
+        '发布职位',
+      ]),
     );
   });
 
@@ -112,14 +322,36 @@ describe('exploreBossLikePublishSkill', () => {
       },
     });
 
-    expect(executor.calls.slice(0, 7)).toEqual([
+    expect(executor.calls.slice(0, 8)).toEqual([
       'navigate:http://localhost:6183/employer/jobs/new',
       'check:text_contains:职位名称',
       'navigate:http://localhost:6183/employer/login',
+      'snapshotStructured',
       'fill:用户名:hr',
       'fill:密码:secret',
       'click:登录',
       'waitForUrl:/employer/resumes',
     ]);
+    expect(executor.resolvedTargets.map((target) => target.name)).toEqual(
+      expect.arrayContaining(['用户名', '密码', '登录']),
+    );
+  });
+
+  it('refuses to create a skill when target dry-run resolution is not unique', async () => {
+    const executor = new ExploringExecutor('ambiguous');
+
+    await expect(
+      exploreBossLikePublishSkill({
+        executor,
+        context: {
+          input: {},
+          credentials: { username: 'admin', password: 'boss123' },
+          target: {
+            loginUrl: 'http://localhost:6183/employer/login',
+            newJobUrl: 'http://localhost:6183/employer/jobs/new',
+          },
+        },
+      }),
+    ).rejects.toThrow(/explore_target_not_unique/);
   });
 });
