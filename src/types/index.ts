@@ -180,3 +180,24 @@ export type {
   Message,
   StreamMessageRequest,
 } from './chat';
+
+export type {
+  CandidateActionPlan,
+  CandidateActionStatus,
+  CandidateDecisionAction,
+  CandidateDecisionPriority,
+  CandidateInterviewStage,
+  CandidateScreeningMode,
+  CandidateScreeningPlatform,
+  CandidateScreeningRunStage,
+  CandidateScreeningRunStatus,
+  CandidateScreeningSource,
+  CandidateTags,
+  CreateScreeningRunRequest,
+  EvaluationSchema,
+  ExecuteActionsRequest,
+  ScoreDetail,
+  ScreeningRunStats,
+  SearchPlan,
+  UpdateCandidateProgressRequest,
+} from '@/lib/candidate-screening/types';
