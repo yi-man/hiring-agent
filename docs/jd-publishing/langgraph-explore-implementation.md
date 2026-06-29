@@ -198,9 +198,57 @@ Explore 和执行共用同一套 resolver。执行器不会直接 `.first()` 操
 - 目标不是 `unique` 时不执行页面动作。
 - 失败结果包含 error、structured DOM snapshot、match report、failed target key。
 
-为了接未来 adapter，已实现 `CommandTransportBrowserExecutor`。它把同一个接口转换成
-`BrowserCommand`，由 transport 发送给 Chrome extension、agent-browser CLI/server 或其它运行时。
+adapter 机制已接入运行时入口。默认配置使用 `PlaywrightBrowserExecutor`；如果配置：
+
+```bash
+JD_PUBLISHING_BROWSER_EXECUTOR=http-command
+JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT=http://127.0.0.1:4100/browser-command
+```
+
+service 会创建 `CommandTransportBrowserExecutor`，并用 `HttpBrowserCommandTransport`
+把每个浏览器动作 POST 到外部浏览器运行时。该外部运行时可以是 Chrome extension、
+agent-browser server 或其它实现，只要接受 `BrowserCommand` 并返回 `BrowserCommandResult`。
 graph 不依赖具体执行器实现。
+
+`BrowserCommand` envelope：
+
+```ts
+type BrowserCommand = {
+  id: string;
+  taskId: string;
+  stepId: string;
+  action:
+    | 'navigate'
+    | 'fill'
+    | 'click'
+    | 'wait_for_url'
+    | 'wait_for_text'
+    | 'add_keywords'
+    | 'check'
+    | 'snapshot_structured'
+    | 'resolve_target';
+  target?: TargetDescriptor;
+  params: Record<string, unknown>;
+  timeoutMs: number;
+};
+```
+
+`BrowserCommandResult` envelope：
+
+```ts
+type BrowserCommandResult = {
+  commandId: string;
+  success: boolean;
+  error?: string;
+  domSnapshot?: StructuredDomSnapshot;
+  match?: LocatorMatchReport;
+  failedTargetKey?: 'target' | 'submitTarget';
+};
+```
+
+LangGraph 会在执行前调用 executor 的 command context hook，把当前 `taskId` 和 `stepId`
+传给 command adapter。Explore 阶段还没有 task，因此会使用空 taskId 和
+`stepId = "explore_or_load_skill"`；task 创建后每个 action command 都带真实 task/step。
 
 ## Fallback 和自动修复
 

@@ -120,4 +120,32 @@ describe('CommandTransportBrowserExecutor', () => {
       'snapshot_structured',
     ]);
   });
+
+  it('uses command context supplied by the publishing graph', async () => {
+    const target: TargetDescriptor = {
+      kind: 'field',
+      role: 'textbox',
+      name: '职位名称',
+      exact: true,
+    };
+    const transport = new RecordingTransport((command) => ({
+      commandId: command.id,
+      success: true,
+      match: command.target ? uniqueReport(command.target) : undefined,
+    }));
+    const executor = new CommandTransportBrowserExecutor({
+      transport,
+      idGenerator: () => `cmd-${transport.commands.length + 1}`,
+    });
+
+    executor.setCommandContext?.({ taskId: 'task-42', stepId: 'fill_title' });
+    await executor.fill(target, '高级前端工程师');
+
+    expect(transport.commands[0]).toEqual(
+      expect.objectContaining({
+        taskId: 'task-42',
+        stepId: 'fill_title',
+      }),
+    );
+  });
 });

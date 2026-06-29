@@ -118,6 +118,11 @@ export type BrowserCommandTransport = {
   close?(): Promise<void>;
 };
 
+export type BrowserCommandContext = {
+  taskId?: string;
+  stepId?: string;
+};
+
 export type BrowserResolveOptions = {
   action?: PublishSkillAction | 'check';
   requireEditable?: boolean;
@@ -195,6 +200,7 @@ export type BrowserStepResult = {
 };
 
 export type BrowserExecutor = {
+  setCommandContext?(context: BrowserCommandContext): void;
   navigate(url: string): Promise<BrowserStepResult>;
   fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult>;
   click(target: BrowserTargetInput): Promise<BrowserStepResult>;

@@ -17,6 +17,7 @@ import type {
 
 class GraphExecutor implements BrowserExecutor {
   readonly calls: string[] = [];
+  readonly commandContexts: Array<{ taskId?: string; stepId?: string }> = [];
 
   constructor(
     private readonly failures: Record<string, BrowserStepResult> = {},
@@ -25,6 +26,10 @@ class GraphExecutor implements BrowserExecutor {
 
   private targetName(target: BrowserTargetInput): string {
     return typeof target === 'string' ? target : target.name;
+  }
+
+  setCommandContext(context: { taskId?: string; stepId?: string }): void {
+    this.commandContexts.push(context);
   }
 
   async navigate(url: string): Promise<BrowserStepResult> {
@@ -280,6 +285,35 @@ describe('runPublishingAgentGraph', () => {
       'done',
       null,
     ]);
+  });
+
+  it('sets task and step command context for browser adapters before execution', async () => {
+    const executor = new GraphExecutor();
+
+    await runPublishingAgentGraph({
+      jobDescription: sampleJobDescription,
+      settings: settings(),
+      executor,
+      target: {
+        loginUrl: 'http://localhost:6183/employer/login',
+        newJobUrl: 'http://localhost:6183/employer/jobs/new',
+      },
+      credentials: { username: 'admin', password: 'boss123' },
+      dependencies: {
+        getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
+        createTask: jest.fn().mockResolvedValue(taskFor(simpleSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
+        completeTask: jest.fn().mockResolvedValue(undefined),
+      },
+    });
+
+    expect(executor.commandContexts).toEqual(
+      expect.arrayContaining([
+        { stepId: 'explore_or_load_skill' },
+        { taskId: 'task-1', stepId: 'open_new_job' },
+        { taskId: 'task-1', stepId: 'fill_title' },
+      ]),
+    );
   });
 
   it('supports long step-by-step skills beyond the default LangGraph recursion limit', async () => {

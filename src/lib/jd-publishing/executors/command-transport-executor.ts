@@ -1,6 +1,7 @@
 import type {
   BrowserCommand,
   BrowserCommandAction,
+  BrowserCommandContext,
   BrowserCommandResult,
   BrowserCommandTransport,
   BrowserExecutor,
@@ -55,11 +56,13 @@ function normalizeResult(result: BrowserCommandResult): BrowserStepResult {
 }
 
 export class CommandTransportBrowserExecutor implements BrowserExecutor {
+  private commandContext: BrowserCommandContext = {};
+
   constructor(
     private readonly options: {
       transport: BrowserCommandTransport;
-      taskId: string;
-      stepId?: string | (() => string);
+      taskId?: string | (() => string | undefined);
+      stepId?: string | (() => string | undefined);
       timeoutMs?: number;
       idGenerator?: () => string;
     },
@@ -69,10 +72,33 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
     return this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
+  setCommandContext(context: BrowserCommandContext): void {
+    if (Object.prototype.hasOwnProperty.call(context, 'taskId')) {
+      if (context.taskId) {
+        this.commandContext.taskId = context.taskId;
+      } else {
+        delete this.commandContext.taskId;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(context, 'stepId')) {
+      if (context.stepId) {
+        this.commandContext.stepId = context.stepId;
+      } else {
+        delete this.commandContext.stepId;
+      }
+    }
+  }
+
+  private currentTaskId(): string {
+    const configured =
+      typeof this.options.taskId === 'function' ? this.options.taskId() : this.options.taskId;
+    return configured ?? this.commandContext.taskId ?? '';
+  }
+
   private currentStepId(): string {
-    return typeof this.options.stepId === 'function'
-      ? this.options.stepId()
-      : (this.options.stepId ?? '');
+    const configured =
+      typeof this.options.stepId === 'function' ? this.options.stepId() : this.options.stepId;
+    return configured ?? this.commandContext.stepId ?? '';
   }
 
   private async send(
@@ -82,7 +108,7 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
   ): Promise<BrowserCommandResult> {
     const command: BrowserCommand = {
       id: this.options.idGenerator?.() ?? randomCommandId(),
-      taskId: this.options.taskId,
+      taskId: this.currentTaskId(),
       stepId: this.currentStepId(),
       action,
       target: normalizeTarget(target, action),

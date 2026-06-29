@@ -13,6 +13,7 @@ import {
 import { executePublishingStep } from './skill-executor';
 import type {
   BrowserExecutor,
+  BrowserCommandContext,
   BrowserResolveOptions,
   BrowserStepTargetKey,
   BrowserTargetInput,
@@ -92,6 +93,13 @@ function appendTrace(
   traceStep: PublishTraceStep | undefined,
 ): PublishTraceStep[] {
   return traceStep ? [...state.traceSteps, traceStep] : state.traceSteps;
+}
+
+function setExecutorCommandContext(
+  executor: BrowserExecutor,
+  context: BrowserCommandContext,
+): void {
+  executor.setCommandContext?.(context);
 }
 
 function lastError(traceStep?: PublishTraceStep, fallbackReason?: string): string | undefined {
@@ -235,6 +243,10 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
   async function exploreOrLoadSkillNode(
     state: PublishingGraphState,
   ): Promise<PublishingGraphUpdate> {
+    setExecutorCommandContext(state.executor, {
+      taskId: undefined,
+      stepId: 'explore_or_load_skill',
+    });
     const activeSkill = await dependencies.getActiveSkill(state.settings.platform);
     if (activeSkill) {
       return {
@@ -264,6 +276,10 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       input: state.input,
       currentStep: skill.steps[0]?.id ?? null,
     });
+    setExecutorCommandContext(state.executor, {
+      taskId: task.id,
+      stepId: skill.steps[0]?.id,
+    });
     return { task, currentStepId: skill.steps[0]?.id, traceSteps: [] };
   }
 
@@ -276,6 +292,7 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       return { status: 'success', route: 'finalize' };
     }
 
+    setExecutorCommandContext(state.executor, { taskId: task.id, stepId });
     const result = await executePublishingStep({
       stepId,
       skill,
@@ -335,6 +352,8 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
 
   async function fallbackAgentNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
+    const task = requireTask(state);
+    setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'fallback_agent' });
     const failedTraceStep = state.failedTraceStep;
     const failed = readFailedTarget({ traceStep: failedTraceStep });
     const failedTarget = failed.target;
@@ -421,6 +440,8 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
     state: PublishingGraphState,
   ): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
+    const task = requireTask(state);
+    setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'skill_upgrade' });
     if (!state.repairSteps?.length) {
       return { route: 'finalize' };
     }

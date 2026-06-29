@@ -1,4 +1,5 @@
 import type { JobDescriptionDto, JD } from '@/types';
+import { CommandTransportBrowserExecutor } from './executors/command-transport-executor';
 import { PlaywrightBrowserExecutor } from './executors/playwright-executor';
 import { runPublishingAgentGraph } from './graph';
 import { publishJobDescriptionToBossLike } from './service';
@@ -101,6 +102,9 @@ describe('publishJobDescriptionToBossLike', () => {
     restoreEnv('BOSS_LIKE_API_BASE_URL');
     restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
     restoreEnv('BOSS_LIKE_EMPLOYER_PASSWORD');
+    restoreEnv('JD_PUBLISHING_BROWSER_EXECUTOR');
+    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT');
+    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_TIMEOUT_MS');
     runPublishingAgentGraphMock.mockResolvedValue(successfulResult);
   });
 
@@ -110,6 +114,9 @@ describe('publishJobDescriptionToBossLike', () => {
     restoreEnv('BOSS_LIKE_API_BASE_URL');
     restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
     restoreEnv('BOSS_LIKE_EMPLOYER_PASSWORD');
+    restoreEnv('JD_PUBLISHING_BROWSER_EXECUTOR');
+    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT');
+    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_TIMEOUT_MS');
   });
 
   it('delegates publishing to the LangGraph agent with page target URLs', async () => {
@@ -155,6 +162,20 @@ describe('publishJobDescriptionToBossLike', () => {
     expect(PlaywrightBrowserExecutorMock).toHaveBeenCalledWith();
     expect(JSON.stringify(runPublishingAgentGraphMock.mock.calls[0]?.[0])).not.toContain('6810');
     expect(executor.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates a configured command transport browser executor adapter', async () => {
+    process.env.JD_PUBLISHING_BROWSER_EXECUTOR = 'http-command';
+    process.env.JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT = 'http://127.0.0.1:4100/browser-command';
+
+    await publishJobDescriptionToBossLike({
+      jobDescription: sampleJobDescription,
+      settings: settings(),
+    });
+
+    expect(runPublishingAgentGraphMock.mock.calls[0]?.[0].executor).toBeInstanceOf(
+      CommandTransportBrowserExecutor,
+    );
   });
 
   it('requires an explicit boss-like base URL outside local test runtimes', async () => {

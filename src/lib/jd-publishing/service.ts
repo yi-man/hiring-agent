@@ -1,5 +1,5 @@
 import type { JobDescriptionDto } from '@/types';
-import { PlaywrightBrowserExecutor } from './executors/playwright-executor';
+import { createBrowserExecutorFromEnv } from './executors/browser-executor-factory';
 import { runPublishingAgentGraph } from './graph';
 import type { BrowserExecutor, PublishJobDescriptionSettings, PublishTaskResult } from './types';
 
@@ -41,7 +41,7 @@ export async function publishJobDescriptionToBossLike(options: {
     username: readBossLikeConfig('BOSS_LIKE_EMPLOYER_USERNAME', DEFAULT_BOSS_LIKE_USERNAME),
     password: readBossLikeConfig('BOSS_LIKE_EMPLOYER_PASSWORD', DEFAULT_BOSS_LIKE_PASSWORD),
   };
-  const executor = options.executor ?? new PlaywrightBrowserExecutor();
+  const executor = options.executor ?? createBrowserExecutorFromEnv();
   const shouldCloseExecutor = !options.executor;
 
   try {
