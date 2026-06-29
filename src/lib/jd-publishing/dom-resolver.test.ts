@@ -111,6 +111,54 @@ describe('dom resolver', () => {
     });
   });
 
+  it('resolves sibling label form fields without selecting broader containers', async () => {
+    await withPage(
+      `
+        <main>
+          <div>
+            <h1>招聘端登录</h1>
+            <form>
+              <div>
+                <label>用户名</label>
+                <input type="text" />
+              </div>
+              <div>
+                <label>密码</label>
+                <input type="password" />
+              </div>
+              <button type="submit">登录</button>
+            </form>
+            <p><a href="/">返回首页</a></p>
+          </div>
+        </main>
+      `,
+      async (page) => {
+        const result = await resolveTarget(
+          page,
+          { kind: 'field', name: '密码', exact: false },
+          { action: 'fill' },
+        );
+
+        expect(result.report.status).toBe('unique');
+        expect(result.report.strategy).toBe('semantic_proximity');
+        expect(result.report.chosen).toEqual(
+          expect.objectContaining({ tag: 'input', label: '密码' }),
+        );
+        await result.locator?.fill('boss123');
+        await expect(page.locator('input[type="password"]').inputValue()).resolves.toBe('boss123');
+
+        const snapshot = await createStructuredDomSnapshot(page);
+        expect(snapshot.pageState).toBe('login');
+        expect(snapshot.forms[0]?.fields).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ label: '用户名' }),
+            expect.objectContaining({ label: '密码' }),
+          ]),
+        );
+      },
+    );
+  });
+
   it('refuses ambiguous equal-score candidates', async () => {
     await withPage(
       '<button type="button">发布职位</button><button type="button">发布职位</button>',

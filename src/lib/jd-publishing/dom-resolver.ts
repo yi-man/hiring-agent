@@ -33,6 +33,29 @@ type CandidateMatch = DomCandidate & {
   scopeName?: string;
 };
 
+type CandidateLocatorDom = Omit<DomCandidate, 'visible' | 'enabled' | 'editable'> & {
+  visibleByDom: boolean;
+  scopeKind?: string;
+  scopeName?: string;
+};
+
+type SemanticProximityInput = {
+  name: string;
+  exact: boolean;
+  fieldSelector: string;
+};
+
+type StructuredSnapshotDom = Pick<
+  StructuredDomSnapshot,
+  'headings' | 'forms' | 'links' | 'textBlocks'
+>;
+
+type StructuredSnapshotInput = {
+  fieldSelector: string;
+  buttonSelector: string;
+  linkSelector: string;
+};
+
 export type ResolveTargetResult = {
   locator: Locator | null;
   report: LocatorMatchReport;
@@ -44,6 +67,382 @@ const BUTTON_SELECTOR =
   'button, input[type="button"], input[type="submit"], input[type="reset"], [role="button"]';
 const LINK_SELECTOR = 'a[href], [role="link"]';
 const CLEAR_SCORE_MARGIN = 12;
+
+// Playwright serializes these functions into the browser. Keep them as runtime-built plain JS so
+// tsx/esbuild cannot wrap named functions with Node-only helpers such as __name.
+const CANDIDATE_LOCATOR_EVALUATOR = new Function(
+  'element',
+  `
+    function textOf(node) {
+      var text = ((node && node.textContent) || '').replace(/\\s+/g, ' ').trim();
+      return text || undefined;
+    }
+
+    function cssPathFor(elementNode) {
+      var stableId = elementNode.getAttribute('id');
+      if (stableId) return '[id=' + JSON.stringify(stableId) + ']';
+      var stableTestId =
+        elementNode.getAttribute('data-testid') || elementNode.getAttribute('data-e2e');
+      if (stableTestId) return '[data-testid=' + JSON.stringify(stableTestId) + ']';
+      var stableName = elementNode.getAttribute('name');
+      if (stableName) {
+        return elementNode.tagName.toLowerCase() + '[name=' + JSON.stringify(stableName) + ']';
+      }
+      var parts = [];
+      var current = elementNode;
+      while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
+        var tag = current.tagName.toLowerCase();
+        var parent = current.parentElement;
+        if (!parent) {
+          parts.unshift(tag);
+          break;
+        }
+        var siblings = Array.from(parent.children).filter(function (child) {
+          return child.tagName === current.tagName;
+        });
+        var index = siblings.indexOf(current) + 1;
+        parts.unshift(tag + ':nth-of-type(' + index + ')');
+        current = parent;
+      }
+      return parts.join(' > ');
+    }
+
+    function labelTextFor(elementNode) {
+      var labels = 'labels' in elementNode ? Array.from(elementNode.labels || []) : [];
+      var label = labels.map(textOf).find(Boolean);
+      if (label) return label;
+      var labelledBy = elementNode.getAttribute('aria-labelledby');
+      if (labelledBy) {
+        return labelledBy
+          .split(/\\s+/)
+          .map(function (id) {
+            return textOf(document.getElementById(id));
+          })
+          .filter(Boolean)
+          .join(' ');
+      }
+      var parentLabel = elementNode.closest('label');
+      if (parentLabel && parentLabel !== elementNode) {
+        var parentLabelText = textOf(parentLabel);
+        if (parentLabelText) return parentLabelText;
+      }
+      var previous = elementNode.previousElementSibling;
+      while (previous) {
+        if (previous.tagName && previous.tagName.toLowerCase() === 'label') {
+          var siblingLabel = textOf(previous);
+          if (siblingLabel) return siblingLabel;
+        }
+        if (previous.matches && previous.matches('input,textarea,select,button,[role="textbox"]')) {
+          break;
+        }
+        previous = previous.previousElementSibling;
+      }
+      return undefined;
+    }
+
+    function inferRole(elementNode) {
+      var explicitRole = elementNode.getAttribute('role');
+      if (explicitRole) return explicitRole;
+      var tag = elementNode.tagName.toLowerCase();
+      if (tag === 'textarea') return 'textbox';
+      if (tag === 'select') return 'combobox';
+      if (tag === 'button') return 'button';
+      if (tag === 'a') return 'link';
+      if (tag === 'form') return 'form';
+      if (tag === 'input') {
+        var type = (elementNode.getAttribute('type') || 'text').toLowerCase();
+        if (['button', 'submit', 'reset'].includes(type)) return 'button';
+        return 'textbox';
+      }
+      return undefined;
+    }
+
+    function isFieldLike(elementNode) {
+      var tag = elementNode.tagName.toLowerCase();
+      if (tag === 'textarea' || tag === 'select') return true;
+      if (tag === 'input') {
+        var type = (elementNode.getAttribute('type') || 'text').toLowerCase();
+        return !['button', 'submit', 'reset', 'hidden'].includes(type);
+      }
+      var role = elementNode.getAttribute('role');
+      return role === 'textbox' || role === 'combobox' || elementNode.getAttribute('contenteditable') === 'true';
+    }
+
+    function formName(form) {
+      if (!form) return undefined;
+      var labelledBy = form.getAttribute('aria-labelledby');
+      return (
+        form.getAttribute('aria-label') ||
+        (labelledBy ? textOf(document.getElementById(labelledBy)) : undefined) ||
+        textOf(form.querySelector('h1,h2,h3,legend')) ||
+        textOf((form.closest('main,body') || document).querySelector('h1,h2,h3'))
+      );
+    }
+
+    var htmlElement = element;
+    var tag = element.tagName.toLowerCase();
+    var label = isFieldLike(element) ? labelTextFor(element) : undefined;
+    var text = textOf(element);
+    var ariaLabel = element.getAttribute('aria-label') || undefined;
+    var placeholder = element.getAttribute('placeholder') || undefined;
+    var accessibleName = ariaLabel || label || placeholder || text;
+    var closestDialog = element.closest('dialog,[role="dialog"]');
+    var closestForm = element.closest('form');
+    var closestSection = element.closest('section');
+    var scopeElement = closestForm || closestDialog || closestSection;
+    var scopeKind = closestForm ? 'form' : closestDialog ? 'dialog' : closestSection ? 'section' : undefined;
+    var scopeName =
+      scopeKind === 'form'
+        ? formName(scopeElement)
+        : scopeElement
+          ? scopeElement.getAttribute('aria-label') || textOf(scopeElement.querySelector('h1,h2,h3'))
+          : undefined;
+
+    return {
+      tag: tag,
+      role: inferRole(element),
+      accessibleName: accessibleName,
+      label: label,
+      placeholder: placeholder,
+      id: element.getAttribute('id') || undefined,
+      name: element.getAttribute('name') || undefined,
+      testId: element.getAttribute('data-testid') || element.getAttribute('data-e2e') || undefined,
+      text: text,
+      cssPath: cssPathFor(element),
+      scopeKind: scopeKind,
+      scopeName: scopeName,
+      visibleByDom: Boolean(
+        htmlElement.offsetWidth || htmlElement.offsetHeight || htmlElement.getClientRects().length
+      ),
+    };
+  `,
+) as (element: Element) => CandidateLocatorDom;
+
+const SEMANTIC_PROXIMITY_EVALUATOR = new Function(
+  'input',
+  `
+    var name = input.name;
+    var exact = input.exact;
+    var fieldSelector = input.fieldSelector;
+
+    function normalize(value) {
+      return (value || '').replace(/\\s+/g, ' ').trim();
+    }
+
+    function matches(value) {
+      var source = normalize(value);
+      var wanted = normalize(name);
+      return exact ? source === wanted : source.includes(wanted);
+    }
+
+    function cssPathFor(elementNode) {
+      var stableId = elementNode.getAttribute('id');
+      if (stableId) return '[id=' + JSON.stringify(stableId) + ']';
+      var stableName = elementNode.getAttribute('name');
+      if (stableName) {
+        return elementNode.tagName.toLowerCase() + '[name=' + JSON.stringify(stableName) + ']';
+      }
+      var parts = [];
+      var current = elementNode;
+      while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
+        var tag = current.tagName.toLowerCase();
+        var parent = current.parentElement;
+        if (!parent) {
+          parts.unshift(tag);
+          break;
+        }
+        var siblings = Array.from(parent.children).filter(function (child) {
+          return child.tagName === current.tagName;
+        });
+        parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
+        current = parent;
+      }
+      return parts.join(' > ');
+    }
+
+    function isReasonableTextAnchor(element) {
+      var tag = element.tagName ? element.tagName.toLowerCase() : '';
+      if (tag === 'label') return true;
+      if (element.hasAttribute && element.hasAttribute('aria-label')) return true;
+      return element.querySelectorAll(fieldSelector).length <= 1;
+    }
+
+    var labelNodes = Array.from(document.querySelectorAll('label,*[aria-label],span,div,p'))
+      .filter(function (element) {
+        return (
+          matches(element.getAttribute('aria-label') || element.textContent) &&
+          isReasonableTextAnchor(element)
+        );
+      })
+      .slice(0, 20);
+    var paths = [];
+    for (var index = 0; index < labelNodes.length; index += 1) {
+      var label = labelNodes[index];
+      var nested = label.querySelector(fieldSelector);
+      var sibling = label.nextElementSibling;
+      var control = nested || (sibling && sibling.matches(fieldSelector) ? sibling : null);
+      if (control) paths.push(cssPathFor(control));
+    }
+    return Array.from(new Set(paths));
+  `,
+) as (input: SemanticProximityInput) => string[];
+
+const STRUCTURED_DOM_EVALUATOR = new Function(
+  'input',
+  `
+    var fieldSelector = input.fieldSelector;
+    var buttonSelector = input.buttonSelector;
+    var linkSelector = input.linkSelector;
+
+    function normalize(value) {
+      var text = (value || '').replace(/\\s+/g, ' ').trim();
+      return text || undefined;
+    }
+
+    function textOf(node) {
+      return normalize(node && node.textContent);
+    }
+
+    function cssPathFor(elementNode) {
+      var stableId = elementNode.getAttribute('id');
+      if (stableId) return '[id=' + JSON.stringify(stableId) + ']';
+      var stableTestId =
+        elementNode.getAttribute('data-testid') || elementNode.getAttribute('data-e2e');
+      if (stableTestId) return '[data-testid=' + JSON.stringify(stableTestId) + ']';
+      var stableName = elementNode.getAttribute('name');
+      if (stableName) {
+        return elementNode.tagName.toLowerCase() + '[name=' + JSON.stringify(stableName) + ']';
+      }
+      var parts = [];
+      var current = elementNode;
+      while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
+        var tag = current.tagName.toLowerCase();
+        var parent = current.parentElement;
+        if (!parent) {
+          parts.unshift(tag);
+          break;
+        }
+        var siblings = Array.from(parent.children).filter(function (child) {
+          return child.tagName === current.tagName;
+        });
+        parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')');
+        current = parent;
+      }
+      return parts.join(' > ');
+    }
+
+    function labelTextFor(elementNode) {
+      var labels = 'labels' in elementNode ? Array.from(elementNode.labels || []) : [];
+      var label = labels.map(textOf).find(Boolean);
+      if (label) return label;
+      var labelledBy = elementNode.getAttribute('aria-labelledby');
+      if (labelledBy) {
+        return normalize(
+          labelledBy
+            .split(/\\s+/)
+            .map(function (id) {
+              return textOf(document.getElementById(id));
+            })
+            .filter(Boolean)
+            .join(' ')
+        );
+      }
+      var parentLabel = elementNode.closest('label');
+      if (parentLabel && parentLabel !== elementNode) {
+        var parentLabelText = textOf(parentLabel);
+        if (parentLabelText) return parentLabelText;
+      }
+      var previous = elementNode.previousElementSibling;
+      while (previous) {
+        if (previous.tagName && previous.tagName.toLowerCase() === 'label') {
+          var siblingLabel = textOf(previous);
+          if (siblingLabel) return siblingLabel;
+        }
+        if (previous.matches && previous.matches('input,textarea,select,button,[role="textbox"]')) {
+          break;
+        }
+        previous = previous.previousElementSibling;
+      }
+      return undefined;
+    }
+
+    function inferRole(elementNode) {
+      var explicitRole = elementNode.getAttribute('role');
+      if (explicitRole) return explicitRole;
+      var tag = elementNode.tagName.toLowerCase();
+      if (tag === 'textarea') return 'textbox';
+      if (tag === 'select') return 'combobox';
+      if (tag === 'button') return 'button';
+      if (tag === 'a') return 'link';
+      if (tag === 'form') return 'form';
+      if (tag === 'input') {
+        var type = (elementNode.getAttribute('type') || 'text').toLowerCase();
+        if (['button', 'submit', 'reset'].includes(type)) return 'button';
+        return 'textbox';
+      }
+      return undefined;
+    }
+
+    function candidateFor(elementNode) {
+      var htmlElement = elementNode;
+      var tag = elementNode.tagName.toLowerCase();
+      var text = textOf(elementNode);
+      var ariaLabel = elementNode.getAttribute('aria-label') || undefined;
+      var placeholder = elementNode.getAttribute('placeholder') || undefined;
+      var disabled = 'disabled' in htmlElement && Boolean(htmlElement.disabled);
+      var readOnly = 'readOnly' in htmlElement && Boolean(htmlElement.readOnly);
+      var editable = elementNode.matches(fieldSelector) && !disabled && !readOnly;
+      var label = editable ? labelTextFor(elementNode) : undefined;
+      return {
+        tag: tag,
+        role: inferRole(elementNode),
+        accessibleName: ariaLabel || label || placeholder || text,
+        label: label,
+        placeholder: placeholder,
+        id: elementNode.getAttribute('id') || undefined,
+        name: elementNode.getAttribute('name') || undefined,
+        testId: elementNode.getAttribute('data-testid') || elementNode.getAttribute('data-e2e') || undefined,
+        text: text,
+        visible: Boolean(
+          htmlElement.offsetWidth || htmlElement.offsetHeight || htmlElement.getClientRects().length
+        ),
+        enabled: !disabled,
+        editable: editable,
+        cssPath: cssPathFor(elementNode),
+      };
+    }
+
+    function formName(form) {
+      var labelledBy = form.getAttribute('aria-labelledby');
+      return (
+        form.getAttribute('aria-label') ||
+        (labelledBy ? textOf(document.getElementById(labelledBy)) : undefined) ||
+        textOf(form.querySelector('h1,h2,h3,legend')) ||
+        textOf((form.closest('main,body') || document).querySelector('h1,h2,h3'))
+      );
+    }
+
+    var forms = Array.from(document.querySelectorAll('form')).map(function (form) {
+      return {
+        name: formName(form),
+        fields: Array.from(form.querySelectorAll(fieldSelector)).map(candidateFor),
+        buttons: Array.from(form.querySelectorAll(buttonSelector)).map(candidateFor),
+      };
+    });
+
+    return {
+      headings: Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]')).map(candidateFor),
+      forms: forms,
+      links: Array.from(document.querySelectorAll(linkSelector)).map(candidateFor),
+      textBlocks: Array.from(document.querySelectorAll('main p, main article, main li, main div'))
+        .map(candidateFor)
+        .filter(function (candidate) {
+          return Boolean(candidate.text);
+        })
+        .slice(0, 80),
+    };
+  `,
+) as (input: StructuredSnapshotInput) => StructuredSnapshotDom;
 
 function normalizeText(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
@@ -261,132 +660,7 @@ async function candidateFromLocator(params: {
     locator.isVisible().catch(() => false),
     locator.isEnabled().catch(() => true),
     locator.isEditable().catch(() => false),
-    locator.evaluate(
-      /* istanbul ignore next -- serialized into the browser context. */
-      (element) => {
-        function textOf(node: Element | null): string | undefined {
-          const text = (node?.textContent ?? '').replace(/\s+/g, ' ').trim();
-          return text || undefined;
-        }
-
-        function cssPathFor(elementNode: Element): string {
-          const stableId = elementNode.getAttribute('id');
-          if (stableId) return `[id=${JSON.stringify(stableId)}]`;
-          const stableTestId =
-            elementNode.getAttribute('data-testid') ?? elementNode.getAttribute('data-e2e');
-          if (stableTestId) return `[data-testid=${JSON.stringify(stableTestId)}]`;
-          const stableName = elementNode.getAttribute('name');
-          if (stableName)
-            return `${elementNode.tagName.toLowerCase()}[name=${JSON.stringify(stableName)}]`;
-          const parts: string[] = [];
-          let current: Element | null = elementNode;
-          while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
-            const tag = current.tagName.toLowerCase();
-            const parent: Element | null = current.parentElement;
-            if (!parent) {
-              parts.unshift(tag);
-              break;
-            }
-            const siblings = (Array.from(parent.children) as Element[]).filter(
-              (child) => child.tagName === current?.tagName,
-            );
-            const index = siblings.indexOf(current) + 1;
-            parts.unshift(`${tag}:nth-of-type(${index})`);
-            current = parent;
-          }
-          return parts.join(' > ');
-        }
-
-        function labelTextFor(elementNode: Element): string | undefined {
-          const control = elementNode as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-          const labels = 'labels' in control ? Array.from(control.labels ?? []) : [];
-          const label = labels.map(textOf).find(Boolean);
-          if (label) return label;
-          const labelledBy = elementNode.getAttribute('aria-labelledby');
-          if (labelledBy) {
-            return labelledBy
-              .split(/\s+/)
-              .map((id) => textOf(document.getElementById(id)))
-              .filter(Boolean)
-              .join(' ');
-          }
-          return undefined;
-        }
-
-        function inferRole(elementNode: Element): string | undefined {
-          const explicitRole = elementNode.getAttribute('role');
-          if (explicitRole) return explicitRole;
-          const tag = elementNode.tagName.toLowerCase();
-          if (tag === 'textarea') return 'textbox';
-          if (tag === 'select') return 'combobox';
-          if (tag === 'button') return 'button';
-          if (tag === 'a') return 'link';
-          if (tag === 'form') return 'form';
-          if (tag === 'input') {
-            const type = (elementNode.getAttribute('type') ?? 'text').toLowerCase();
-            if (['button', 'submit', 'reset'].includes(type)) return 'button';
-            return 'textbox';
-          }
-          return undefined;
-        }
-
-        function formName(form: Element | null): string | undefined {
-          if (!form) return undefined;
-          const labelledBy = form.getAttribute('aria-labelledby');
-          return (
-            form.getAttribute('aria-label') ??
-            (labelledBy ? textOf(document.getElementById(labelledBy)) : undefined) ??
-            textOf(form.querySelector('h1,h2,h3,legend')) ??
-            textOf(form.closest('main,body')?.querySelector('h1,h2,h3') ?? null)
-          );
-        }
-
-        const htmlElement = element as HTMLElement;
-        const tag = element.tagName.toLowerCase();
-        const label = labelTextFor(element);
-        const text = textOf(element);
-        const ariaLabel = element.getAttribute('aria-label') ?? undefined;
-        const placeholder = element.getAttribute('placeholder') ?? undefined;
-        const accessibleName = ariaLabel ?? label ?? placeholder ?? text;
-        const closestDialog = element.closest('dialog,[role="dialog"]');
-        const closestForm = element.closest('form');
-        const closestSection = element.closest('section');
-        const scopeElement = closestForm ?? closestDialog ?? closestSection;
-        const scopeKind = closestForm
-          ? 'form'
-          : closestDialog
-            ? 'dialog'
-            : closestSection
-              ? 'section'
-              : undefined;
-        const scopeName =
-          scopeKind === 'form'
-            ? formName(scopeElement)
-            : (scopeElement?.getAttribute('aria-label') ??
-              textOf(scopeElement?.querySelector('h1,h2,h3') ?? null));
-
-        return {
-          tag,
-          role: inferRole(element),
-          accessibleName,
-          label,
-          placeholder,
-          id: element.getAttribute('id') ?? undefined,
-          name: element.getAttribute('name') ?? undefined,
-          testId:
-            element.getAttribute('data-testid') ?? element.getAttribute('data-e2e') ?? undefined,
-          text,
-          cssPath: cssPathFor(element),
-          scopeKind,
-          scopeName,
-          visibleByDom: Boolean(
-            htmlElement.offsetWidth ||
-            htmlElement.offsetHeight ||
-            htmlElement.getClientRects().length,
-          ),
-        };
-      },
-    ),
+    locator.evaluate(CANDIDATE_LOCATOR_EVALUATOR),
   ]);
 
   return {
@@ -611,61 +885,11 @@ async function collectSemanticProximity(
   options: BrowserResolveOptions,
 ): Promise<CandidateMatch[]> {
   if (target.kind !== 'field') return [];
-  const cssPaths = await page.evaluate(
-    /* istanbul ignore next -- serialized into the browser context. */
-    ({ name, exact, fieldSelector }) => {
-      function normalize(value: string | null | undefined): string {
-        return (value ?? '').replace(/\s+/g, ' ').trim();
-      }
-
-      function matches(value: string | null | undefined): boolean {
-        const source = normalize(value);
-        const wanted = normalize(name);
-        return exact ? source === wanted : source.includes(wanted);
-      }
-
-      function cssPathFor(elementNode: Element): string {
-        const stableId = elementNode.getAttribute('id');
-        if (stableId) return `[id=${JSON.stringify(stableId)}]`;
-        const stableName = elementNode.getAttribute('name');
-        if (stableName)
-          return `${elementNode.tagName.toLowerCase()}[name=${JSON.stringify(stableName)}]`;
-        const parts: string[] = [];
-        let current: Element | null = elementNode;
-        while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
-          const tag = current.tagName.toLowerCase();
-          const parent: Element | null = current.parentElement;
-          if (!parent) {
-            parts.unshift(tag);
-            break;
-          }
-          const siblings = (Array.from(parent.children) as Element[]).filter(
-            (child) => child.tagName === current?.tagName,
-          );
-          parts.unshift(`${tag}:nth-of-type(${siblings.indexOf(current) + 1})`);
-          current = parent;
-        }
-        return parts.join(' > ');
-      }
-
-      const labelNodes = Array.from(document.querySelectorAll('label,*[aria-label],span,div,p'))
-        .filter((element) => matches(element.getAttribute('aria-label') ?? element.textContent))
-        .slice(0, 20);
-      const paths: string[] = [];
-      for (const label of labelNodes) {
-        const nested = label.querySelector(fieldSelector);
-        const sibling = label.nextElementSibling;
-        const control = nested ?? (sibling?.matches(fieldSelector) ? sibling : null);
-        if (control) paths.push(cssPathFor(control));
-      }
-      return Array.from(new Set(paths));
-    },
-    {
-      name: target.name,
-      exact: target.exact ?? false,
-      fieldSelector: FIELD_SELECTOR,
-    },
-  );
+  const cssPaths = await page.evaluate(SEMANTIC_PROXIMITY_EVALUATOR, {
+    name: target.name,
+    exact: target.exact ?? false,
+    fieldSelector: FIELD_SELECTOR,
+  });
 
   const candidates: CandidateMatch[] = [];
   for (const cssPath of cssPaths) {
@@ -779,154 +1003,11 @@ export async function createStructuredDomSnapshot(page: Page): Promise<Structure
   const [url, title, dom] = await Promise.all([
     Promise.resolve(page.url()),
     page.title().catch(() => ''),
-    page.evaluate(
-      /* istanbul ignore next -- serialized into the browser context. */
-      ({ fieldSelector, buttonSelector, linkSelector }) => {
-        type SnapshotCandidate = DomCandidate;
-
-        function normalize(value: string | null | undefined): string | undefined {
-          const text = (value ?? '').replace(/\s+/g, ' ').trim();
-          return text || undefined;
-        }
-
-        function textOf(node: Element | null): string | undefined {
-          return normalize(node?.textContent);
-        }
-
-        function cssPathFor(elementNode: Element): string {
-          const stableId = elementNode.getAttribute('id');
-          if (stableId) return `[id=${JSON.stringify(stableId)}]`;
-          const stableTestId =
-            elementNode.getAttribute('data-testid') ?? elementNode.getAttribute('data-e2e');
-          if (stableTestId) return `[data-testid=${JSON.stringify(stableTestId)}]`;
-          const stableName = elementNode.getAttribute('name');
-          if (stableName)
-            return `${elementNode.tagName.toLowerCase()}[name=${JSON.stringify(stableName)}]`;
-          const parts: string[] = [];
-          let current: Element | null = elementNode;
-          while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
-            const tag = current.tagName.toLowerCase();
-            const parent: Element | null = current.parentElement;
-            if (!parent) {
-              parts.unshift(tag);
-              break;
-            }
-            const siblings = (Array.from(parent.children) as Element[]).filter(
-              (child) => child.tagName === current?.tagName,
-            );
-            parts.unshift(`${tag}:nth-of-type(${siblings.indexOf(current) + 1})`);
-            current = parent;
-          }
-          return parts.join(' > ');
-        }
-
-        function labelTextFor(elementNode: Element): string | undefined {
-          const control = elementNode as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-          const labels = 'labels' in control ? Array.from(control.labels ?? []) : [];
-          const label = labels.map(textOf).find(Boolean);
-          if (label) return label;
-          const labelledBy = elementNode.getAttribute('aria-labelledby');
-          if (labelledBy) {
-            return normalize(
-              labelledBy
-                .split(/\s+/)
-                .map((id) => textOf(document.getElementById(id)))
-                .filter(Boolean)
-                .join(' '),
-            );
-          }
-          return undefined;
-        }
-
-        function inferRole(elementNode: Element): string | undefined {
-          const explicitRole = elementNode.getAttribute('role');
-          if (explicitRole) return explicitRole;
-          const tag = elementNode.tagName.toLowerCase();
-          if (tag === 'textarea') return 'textbox';
-          if (tag === 'select') return 'combobox';
-          if (tag === 'button') return 'button';
-          if (tag === 'a') return 'link';
-          if (tag === 'form') return 'form';
-          if (tag === 'input') {
-            const type = (elementNode.getAttribute('type') ?? 'text').toLowerCase();
-            if (['button', 'submit', 'reset'].includes(type)) return 'button';
-            return 'textbox';
-          }
-          return undefined;
-        }
-
-        function candidateFor(elementNode: Element): SnapshotCandidate {
-          const htmlElement = elementNode as HTMLElement;
-          const tag = elementNode.tagName.toLowerCase();
-          const label = labelTextFor(elementNode);
-          const text = textOf(elementNode);
-          const ariaLabel = elementNode.getAttribute('aria-label') ?? undefined;
-          const placeholder = elementNode.getAttribute('placeholder') ?? undefined;
-          const disabled =
-            'disabled' in htmlElement && Boolean((htmlElement as HTMLButtonElement).disabled);
-          const readOnly =
-            'readOnly' in htmlElement && Boolean((htmlElement as HTMLInputElement).readOnly);
-          const editable = elementNode.matches(fieldSelector) && !disabled && !readOnly;
-          return {
-            tag,
-            role: inferRole(elementNode),
-            accessibleName: ariaLabel ?? label ?? placeholder ?? text,
-            label,
-            placeholder,
-            id: elementNode.getAttribute('id') ?? undefined,
-            name: elementNode.getAttribute('name') ?? undefined,
-            testId:
-              elementNode.getAttribute('data-testid') ??
-              elementNode.getAttribute('data-e2e') ??
-              undefined,
-            text,
-            visible: Boolean(
-              htmlElement.offsetWidth ||
-              htmlElement.offsetHeight ||
-              htmlElement.getClientRects().length,
-            ),
-            enabled: !disabled,
-            editable,
-            cssPath: cssPathFor(elementNode),
-          };
-        }
-
-        function formName(form: Element): string | undefined {
-          const labelledBy = form.getAttribute('aria-labelledby');
-          return (
-            form.getAttribute('aria-label') ??
-            (labelledBy ? textOf(document.getElementById(labelledBy)) : undefined) ??
-            textOf(form.querySelector('h1,h2,h3,legend')) ??
-            textOf(form.closest('main,body')?.querySelector('h1,h2,h3') ?? null)
-          );
-        }
-
-        const forms = Array.from(document.querySelectorAll('form')).map((form) => ({
-          name: formName(form),
-          fields: Array.from(form.querySelectorAll(fieldSelector)).map(candidateFor),
-          buttons: Array.from(form.querySelectorAll(buttonSelector)).map(candidateFor),
-        }));
-
-        return {
-          headings: Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]')).map(
-            candidateFor,
-          ),
-          forms,
-          links: Array.from(document.querySelectorAll(linkSelector)).map(candidateFor),
-          textBlocks: Array.from(
-            document.querySelectorAll('main p, main article, main li, main div'),
-          )
-            .map(candidateFor)
-            .filter((candidate) => Boolean(candidate.text))
-            .slice(0, 80),
-        };
-      },
-      {
-        fieldSelector: FIELD_SELECTOR,
-        buttonSelector: BUTTON_SELECTOR,
-        linkSelector: LINK_SELECTOR,
-      },
-    ),
+    page.evaluate(STRUCTURED_DOM_EVALUATOR, {
+      fieldSelector: FIELD_SELECTOR,
+      buttonSelector: BUTTON_SELECTOR,
+      linkSelector: LINK_SELECTOR,
+    }),
   ]);
 
   const snapshotWithoutState = {
