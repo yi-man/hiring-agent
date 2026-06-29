@@ -1,6 +1,6 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import type { JobDescriptionDto } from '@/types';
-import { exploreBossLikePublishSkill } from './explore';
+import { exploreBossLikePublishSkill, repairBossLikeTargetFromSnapshot } from './explore';
 import { buildBossLikeJobPayload } from './publish-payload';
 import {
   completePublishTask,
@@ -139,6 +139,10 @@ function patchFailedStepTarget(params: {
   });
 }
 
+function errorFromMatchReport(report: LocatorMatchReport): string {
+  return `${targetFailureCode(report)}: ${report.reason ?? report.target.name}`;
+}
+
 function readFailedTarget(params: { traceStep?: PublishTraceStep }): {
   target?: BrowserTargetInput;
   targetKey: BrowserStepTargetKey;
@@ -156,6 +160,15 @@ function readFailedTarget(params: { traceStep?: PublishTraceStep }): {
     target: isBrowserTargetInput(fallbackTarget) ? fallbackTarget : undefined,
     targetKey: 'target',
   };
+}
+
+async function resolveUniqueRepairTarget(params: {
+  executor: BrowserExecutor;
+  target: BrowserTargetInput;
+  options: BrowserResolveOptions;
+}): Promise<LocatorMatchReport | undefined> {
+  if (!params.executor.resolveTarget) return undefined;
+  return params.executor.resolveTarget(params.target, params.options).catch(() => undefined);
 }
 
 function buildFallbackTraceStep(
@@ -336,11 +349,12 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
         ? await state.executor.snapshotStructured().catch(() => undefined)
         : undefined;
       fallbackSnapshot = structuredSnapshot ?? fallbackSnapshot;
-      const report = state.executor.resolveTarget
-        ? await state.executor
-            .resolveTarget(failedTarget, resolveOptionsForTraceStep(failedTraceStep))
-            .catch(() => undefined)
-        : undefined;
+      const resolveOptions = resolveOptionsForTraceStep(failedTraceStep);
+      const report = await resolveUniqueRepairTarget({
+        executor: state.executor,
+        target: failedTarget,
+        options: resolveOptions,
+      });
       if (report) {
         fallbackMatch = report;
         if (report.status === 'unique') {
@@ -352,7 +366,38 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
           });
           repairReason = `target re-explore resolved by ${report.strategy}`;
         } else {
-          fallbackError = `${targetFailureCode(report)}: ${report.reason ?? report.target.name}`;
+          fallbackError = errorFromMatchReport(report);
+        }
+      }
+
+      if (!repairSteps?.length && structuredSnapshot) {
+        const repairedTarget = repairBossLikeTargetFromSnapshot({
+          snapshot: structuredSnapshot,
+          failedStepId: failedTraceStep.stepId,
+          targetKey: failed.targetKey,
+          failedTarget,
+        });
+        const repairedReport = repairedTarget
+          ? await resolveUniqueRepairTarget({
+              executor: state.executor,
+              target: repairedTarget,
+              options: resolveOptions,
+            })
+          : undefined;
+        if (repairedReport) {
+          fallbackMatch = repairedReport;
+          if (repairedReport.status === 'unique') {
+            repairSteps = patchFailedStepTarget({
+              steps: skill.steps,
+              failedStepId: failedTraceStep.stepId,
+              target: repairedReport.target,
+              targetKey: failed.targetKey,
+            });
+            repairReason = `target re-explore resolved by ${repairedReport.strategy}`;
+            fallbackError = state.errorMessage;
+          } else {
+            fallbackError = errorFromMatchReport(repairedReport);
+          }
         }
       }
     }

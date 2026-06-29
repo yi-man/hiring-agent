@@ -7,6 +7,7 @@ import {
 import type {
   BrowserExecutor,
   BrowserResolveOptions,
+  BrowserStepTargetKey,
   BrowserTargetInput,
   BrowserStepResult,
   DomCandidate,
@@ -43,6 +44,8 @@ type FieldRequirement = {
   patterns: RegExp[];
 };
 
+type BossLikeRepairKey = keyof BossLikePublishTargets;
+
 const PUBLISH_FIELD_REQUIREMENTS: FieldRequirement[] = [
   {
     key: 'title',
@@ -76,6 +79,33 @@ const PUBLISH_FIELD_REQUIREMENTS: FieldRequirement[] = [
     patterns: [/技能标签/, /技能/, /标签/, /keyword/i],
   },
 ];
+
+const REPAIR_KEY_BY_STEP: Record<
+  string,
+  Partial<Record<BrowserStepTargetKey, BossLikeRepairKey>>
+> = {
+  fill_username: { target: 'username' },
+  fill_password: { target: 'password' },
+  submit_login: { target: 'loginButton' },
+  fill_title: { target: 'title' },
+  fill_company: { target: 'company' },
+  fill_salary: { target: 'salary' },
+  fill_location: { target: 'location' },
+  fill_description: { target: 'description' },
+  add_keywords: { target: 'keyword', submitTarget: 'keywordSubmit' },
+  submit_job: { target: 'submit' },
+};
+
+const FIELD_KEY_BY_VALUE_HINT: Partial<
+  Record<NonNullable<TargetDescriptor['valueHint']>, BossLikeRepairKey>
+> = {
+  title: 'title',
+  company: 'company',
+  salary: 'salary',
+  location: 'location',
+  description: 'description',
+  keyword: 'keyword',
+};
 
 function candidateSearchText(candidate: DomCandidate): string {
   return [
@@ -227,6 +257,59 @@ function buildPublishTargetsFromSnapshot(
   return targets;
 }
 
+function buildPublishTargetFromSnapshot(
+  snapshot: StructuredDomSnapshot,
+  key: BossLikeRepairKey,
+): TargetDescriptor | undefined {
+  if (['username', 'password', 'loginButton'].includes(key)) return undefined;
+  let form: StructuredDomSnapshot['forms'][number];
+  try {
+    form = selectPublishForm(snapshot);
+  } catch {
+    return undefined;
+  }
+  const scope = { kind: 'form', name: form.name ?? '发布职位' } as const;
+
+  const fieldRequirement = PUBLISH_FIELD_REQUIREMENTS.find(
+    (requirement) => requirement.key === key,
+  );
+  if (fieldRequirement) {
+    const candidate = bestCandidate(form.fields, fieldRequirement.patterns);
+    return candidate
+      ? fieldTargetFromCandidate({
+          candidate,
+          fallbackName: fieldRequirement.label,
+          valueHint: fieldRequirement.valueHint,
+          scope,
+        })
+      : undefined;
+  }
+
+  if (key === 'keywordSubmit') {
+    const candidate = bestCandidate(form.buttons, [/添加/, /add/i]);
+    return candidate
+      ? buttonTargetFromCandidate({
+          candidate,
+          fallbackName: '添加',
+          scope,
+        })
+      : undefined;
+  }
+
+  if (key === 'submit') {
+    const candidate = bestCandidate(form.buttons, [/发布职位/, /发布/, /publish/i]);
+    return candidate
+      ? buttonTargetFromCandidate({
+          candidate,
+          fallbackName: '发布职位',
+          scope,
+        })
+      : undefined;
+  }
+
+  return undefined;
+}
+
 function buildLoginTargetsFromSnapshot(
   snapshot?: StructuredDomSnapshot,
 ): Pick<BossLikePublishTargets, 'username' | 'password' | 'loginButton'> {
@@ -261,6 +344,34 @@ function buildLoginTargetsFromSnapshot(
       ? buttonTargetFromCandidate({ candidate: loginButton, fallbackName: '登录' })
       : defaults.loginButton,
   };
+}
+
+function repairKeyFromFailedTarget(params: {
+  failedStepId: string;
+  targetKey: BrowserStepTargetKey;
+  failedTarget: BrowserTargetInput;
+}): BossLikeRepairKey | undefined {
+  const stepKey = REPAIR_KEY_BY_STEP[params.failedStepId]?.[params.targetKey];
+  if (stepKey) return stepKey;
+  if (typeof params.failedTarget === 'string') return undefined;
+  const valueHint = params.failedTarget.valueHint;
+  return valueHint ? FIELD_KEY_BY_VALUE_HINT[valueHint] : undefined;
+}
+
+export function repairBossLikeTargetFromSnapshot(params: {
+  snapshot: StructuredDomSnapshot;
+  failedStepId: string;
+  targetKey: BrowserStepTargetKey;
+  failedTarget: BrowserTargetInput;
+}): TargetDescriptor | undefined {
+  const repairKey = repairKeyFromFailedTarget(params);
+  if (!repairKey) return undefined;
+
+  if (repairKey === 'username' || repairKey === 'password' || repairKey === 'loginButton') {
+    return buildLoginTargetsFromSnapshot(params.snapshot)[repairKey];
+  }
+
+  return buildPublishTargetFromSnapshot(params.snapshot, repairKey);
 }
 
 function readString(record: Record<string, unknown>, key: string): string {

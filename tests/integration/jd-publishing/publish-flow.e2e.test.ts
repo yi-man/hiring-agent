@@ -270,6 +270,38 @@ function brokenSkillWithRepair(): PublishSkill {
   };
 }
 
+function brokenSkillRequiringReExplore(): PublishSkill {
+  return {
+    ...bossLikePublishSkill,
+    id: `boss-like-reexplore-${Date.now()}-${randomBytes(4).toString('hex')}`,
+    version: 1,
+    isActive: true,
+    steps: bossLikePublishSkill.steps.map((step) => {
+      if (step.type !== 'action' || step.id !== 'fill_title') return step;
+      return {
+        ...step,
+        params: {
+          ...step.params,
+          target: {
+            kind: 'field',
+            role: 'textbox',
+            name: '旧版职位名称',
+            exact: true,
+            valueHint: 'title',
+            stableAttrs: { name: 'old_title' },
+            scope: { kind: 'form', name: '发布职位' },
+          },
+        },
+        onFail: {
+          type: 'fallback_agent',
+          reason: 'title target changed',
+        },
+      };
+    }),
+    meta: { success_rate: 0, usage_count: 0, created_from: 'explore' },
+  };
+}
+
 describe('JD publishing integration flow with real postgres and browser UI', () => {
   beforeAll(async () => {
     requireIntegrationEnv('POSTGRES_HOST');
@@ -447,6 +479,75 @@ describe('JD publishing integration flow with real postgres and browser UI', () 
       expect(repaired.status).toBe('success');
       expect(repaired.skillId).toBe(skillsAfterRepair[1]?.id);
       expect(skillsAfterRepairedPublish).toHaveLength(2);
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await bossLike.close();
+    }
+  }, 60000);
+
+  it('re-explores a failed structured target, activates the repaired version, then publishes with it', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+    try {
+      const jobDescription = await createReadyJobDescription(userId, '重探索修复前端工程师');
+      const brokenSkill = await createExploredPublishSkill(brokenSkillRequiringReExplore());
+
+      const failed = await publishWithBrowser(jobDescription, bossLike.baseUrl);
+      const skillsAfterRepair = await prisma.publishSkill.findMany({
+        where: { name: 'publish_jd', platform: 'boss-like' },
+        orderBy: { version: 'asc' },
+      });
+      const failedTask = await prisma.jobPublishTask.findUnique({
+        where: { id: failed.taskId },
+        include: { trace: true },
+      });
+
+      const repaired = await publishWithBrowser(jobDescription, bossLike.baseUrl);
+
+      expect(failed.status).toBe('failed');
+      expect(failed.skillId).toBe(brokenSkill.id);
+      expect(failedTask?.trace?.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            stepId: 'fill_title',
+            action: 'fill',
+            result: expect.objectContaining({
+              match: expect.objectContaining({ status: 'not_found' }),
+            }),
+          }),
+          expect.objectContaining({
+            stepId: 'fallback_agent',
+            action: 'fallback_agent',
+            result: expect.objectContaining({
+              success: true,
+              match: expect.objectContaining({
+                status: 'unique',
+                target: expect.objectContaining({
+                  name: '职位名称',
+                  valueHint: 'title',
+                }),
+              }),
+            }),
+          }),
+          expect.objectContaining({ stepId: 'skill_upgrade', action: 'skill_upgrade' }),
+        ]),
+      );
+      expect(skillsAfterRepair).toHaveLength(2);
+      expect(skillsAfterRepair[0]).toEqual(
+        expect.objectContaining({ version: 1, isActive: false }),
+      );
+      expect(skillsAfterRepair[1]).toEqual(expect.objectContaining({ version: 2, isActive: true }));
+      expect(skillsAfterRepair[1]?.meta).toEqual(
+        expect.objectContaining({
+          created_from: 'agent',
+          repaired_from_skill_id: brokenSkill.id,
+          repaired_from_version: 1,
+          failed_step_id: 'fill_title',
+        }),
+      );
+
+      expect(repaired.status).toBe('success');
+      expect(repaired.skillId).toBe(skillsAfterRepair[1]?.id);
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();
