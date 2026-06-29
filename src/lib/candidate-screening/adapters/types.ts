@@ -32,5 +32,5 @@ export type CandidateSourceAdapter = {
     candidate: StoredCandidateRef,
     plan: CandidateActionPlan,
   ): Promise<ActionExecutionResult>;
-  close?(): Promise<void>;
+  close(): Promise<void>;
 };
