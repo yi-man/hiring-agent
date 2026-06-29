@@ -39,6 +39,13 @@ model User {
   jobPublishTasks         JobPublishTask[]
   knowledgeDocuments      KnowledgeDocument[]
   knowledgeDocumentChunks KnowledgeDocumentChunk[]
+  candidates              Candidate[]
+  candidateResumes        CandidateResume[]
+  candidateResumeChunks   CandidateResumeChunk[]
+  candidateScreeningRuns  CandidateScreeningRun[]
+  candidateScreeningResults CandidateScreeningResult[]
+  candidateActionLogs       CandidateActionLog[]
+  candidateTagStats       CandidateTagStat[]
 
   @@map("users")
 }
@@ -58,11 +65,15 @@ model JobDescription {
   updatedAt           DateTime         @updatedAt @map("updated_at")
   user                User             @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
   publishTasks        JobPublishTask[]
+  candidateScreeningRuns    CandidateScreeningRun[]
+  candidateScreeningResults CandidateScreeningResult[]
+  candidateActionLogs       CandidateActionLog[]
 
   @@index([userId], map: "idx_job_descriptions_user_id")
   @@index([status], map: "idx_job_descriptions_status")
   @@index([updatedAt(sort: Desc)], map: "idx_job_descriptions_updated_at")
   @@index([userId, status], map: "idx_job_descriptions_user_status")
+  @@unique([id, userId], map: "job_descriptions_id_user_id_key")
   @@map("job_descriptions")
 }
 
@@ -268,6 +279,197 @@ model KnowledgeDocumentIndexJob {
   @@index([documentId], map: "idx_knowledge_document_index_jobs_document_id")
   @@index([status], map: "idx_knowledge_document_index_jobs_status")
   @@map("knowledge_document_index_jobs")
+}
+
+model Candidate {
+  id                        String                     @id @default(uuid())
+  userId                    String                     @map("user_id")
+  displayName               String                     @map("display_name")
+  currentTitle              String?                    @map("current_title")
+  currentCompany            String?                    @map("current_company")
+  location                  String?
+  experienceYears           Float?                     @map("experience_years")
+  sourcePlatform            String                     @map("source_platform")
+  platformCandidateId       String?                    @map("platform_candidate_id")
+  profileUrl                String?                    @map("profile_url")
+  identityKey               String                     @map("identity_key")
+  identityHash              String                     @map("identity_hash")
+  lastActiveAt              DateTime?                  @map("last_active_at")
+  contacted                 Boolean                    @default(false)
+  replied                   Boolean                    @default(false)
+  lastContactAt             DateTime?                  @map("last_contact_at")
+  createdAt                 DateTime                   @default(now()) @map("created_at")
+  updatedAt                 DateTime                   @updatedAt @map("updated_at")
+  user                      User                       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  resumes                   CandidateResume[]
+  chunks                    CandidateResumeChunk[]
+  screeningResults          CandidateScreeningResult[]
+  actionLogs                CandidateActionLog[]
+
+  @@unique([id, userId], map: "candidates_id_user_id_key")
+  @@unique([userId, sourcePlatform, identityHash], map: "candidates_user_source_identity_hash_key")
+  @@index([userId, updatedAt(sort: Desc)], map: "idx_candidates_user_updated_at")
+  @@index([userId, contacted, replied], map: "idx_candidates_user_contacted_replied")
+  @@map("candidates")
+}
+
+model CandidateResume {
+  id                String                     @id @default(uuid())
+  userId            String                     @map("user_id")
+  candidateId       String                     @map("candidate_id")
+  sourcePlatform    String                     @map("source_platform")
+  profileUrl        String?                    @map("profile_url")
+  rawText           String                     @map("raw_text")
+  structuredSummary Json?                      @map("structured_summary")
+  resumeHash        String                     @map("resume_hash")
+  fetchedAt         DateTime                   @map("fetched_at")
+  createdAt         DateTime                   @default(now()) @map("created_at")
+  user              User                       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  candidate         Candidate                  @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  chunks            CandidateResumeChunk[]
+  screeningResults  CandidateScreeningResult[]
+
+  @@unique([id, userId], map: "candidate_resumes_id_user_id_key")
+  @@unique([id, candidateId, userId], map: "candidate_resumes_id_candidate_user_key")
+  @@unique([candidateId, resumeHash], map: "candidate_resumes_candidate_hash_key")
+  @@index([candidateId], map: "idx_candidate_resumes_candidate_id")
+  @@index([userId, candidateId, fetchedAt(sort: Desc)], map: "idx_candidate_resumes_user_candidate_fetched")
+  @@map("candidate_resumes")
+}
+
+model CandidateResumeChunk {
+  id                 String          @id @default(uuid())
+  userId             String          @map("user_id")
+  candidateId        String          @map("candidate_id")
+  resumeId           String          @map("resume_id")
+  chunkIndex         Int             @map("chunk_index")
+  content            String
+  tokenEstimate      Int?            @map("token_estimate")
+  embeddingModel     String          @map("embedding_model")
+  embeddingDimension Int             @map("embedding_dimension")
+  embedding          Unsupported("vector")?
+  createdAt          DateTime        @default(now()) @map("created_at")
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  candidate          Candidate       @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  resume             CandidateResume @relation(fields: [resumeId, candidateId, userId], references: [id, candidateId, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([resumeId, chunkIndex], map: "candidate_resume_chunks_resume_chunk_key")
+  @@index([candidateId], map: "idx_candidate_resume_chunks_candidate_id")
+  @@index([userId, embeddingModel, embeddingDimension], map: "idx_candidate_resume_chunks_user_embedding")
+  @@map("candidate_resume_chunks")
+}
+
+model CandidateScreeningRun {
+  id               String                     @id @default(uuid())
+  userId           String                     @map("user_id")
+  jobDescriptionId String                     @map("job_description_id")
+  platform         String
+  mode             String                     @default("dry_run")
+  status           String                     @default("pending")
+  currentStage     String?                    @map("current_stage")
+  searchPlan       Json?                      @map("search_plan")
+  evaluationSchema Json?                      @map("evaluation_schema")
+  stats            Json?
+  errorMessage     String?                    @map("error_message")
+  startedAt        DateTime?                  @map("started_at")
+  finishedAt       DateTime?                  @map("finished_at")
+  createdAt        DateTime                   @default(now()) @map("created_at")
+  updatedAt        DateTime                   @updatedAt @map("updated_at")
+  user             User                       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription             @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  results          CandidateScreeningResult[]
+  actionLogs       CandidateActionLog[]
+
+  @@unique([id, userId], map: "candidate_screening_runs_id_user_id_key")
+  @@unique([id, userId, jobDescriptionId], map: "candidate_screening_runs_id_user_jd_key")
+  @@index([userId, jobDescriptionId, createdAt(sort: Desc)], map: "idx_candidate_screening_runs_user_jd_created")
+  @@index([status, updatedAt(sort: Desc)], map: "idx_candidate_screening_runs_status_updated")
+  @@map("candidate_screening_runs")
+}
+
+model CandidateScreeningResult {
+  id               String                 @id @default(uuid())
+  userId           String                 @map("user_id")
+  runId            String                 @map("run_id")
+  jobDescriptionId String                 @map("job_description_id")
+  candidateId      String                 @map("candidate_id")
+  resumeId         String?                @map("resume_id")
+  source           String
+  tags             Json
+  scoreDetail      Json                   @map("score_detail")
+  finalScore       Float                  @map("final_score")
+  rank             Int
+  decisionAction   String                 @map("decision_action")
+  decisionPriority String                 @map("decision_priority")
+  decisionReason   String                 @map("decision_reason")
+  actionPlan       Json?                  @map("action_plan")
+  actionStatus     String                 @default("planned") @map("action_status")
+  interviewStage   String                 @default("screened") @map("interview_stage")
+  notes            String?
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  run              CandidateScreeningRun  @relation(fields: [runId, userId, jobDescriptionId], references: [id, userId, jobDescriptionId], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription         @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate        Candidate              @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  resume           CandidateResume?       @relation(fields: [resumeId, candidateId, userId], references: [id, candidateId, userId], onDelete: Restrict, onUpdate: Restrict)
+  actionLogs       CandidateActionLog[]
+
+  @@unique([id, userId], map: "candidate_screening_results_id_user_id_key")
+  @@unique([id, userId, runId, jobDescriptionId, candidateId], map: "candidate_screening_results_id_user_run_jd_candidate_key")
+  @@unique([jobDescriptionId, candidateId], map: "candidate_screening_results_jd_candidate_key")
+  @@index([runId], map: "idx_candidate_screening_results_run_id")
+  @@index([candidateId], map: "idx_candidate_screening_results_candidate_id")
+  @@index([userId, jobDescriptionId, finalScore(sort: Desc)], map: "idx_candidate_screening_results_user_jd_score")
+  @@index([userId, jobDescriptionId, interviewStage], map: "idx_candidate_screening_results_user_jd_stage")
+  @@map("candidate_screening_results")
+}
+
+model CandidateActionLog {
+  id                String                   @id @default(uuid())
+  userId            String                   @map("user_id")
+  runId             String                   @map("run_id")
+  screeningResultId String                   @map("screening_result_id")
+  candidateId       String                   @map("candidate_id")
+  jobDescriptionId  String                   @map("job_description_id")
+  platform          String
+  mode              String
+  action            String
+  message           String?
+  status            String
+  idempotencyKey    String                   @map("idempotency_key")
+  browserTrace      Json?                    @map("browser_trace")
+  errorMessage      String?                  @map("error_message")
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  run               CandidateScreeningRun    @relation(fields: [runId, userId, jobDescriptionId], references: [id, userId, jobDescriptionId], onDelete: Cascade, onUpdate: Restrict)
+  screeningResult   CandidateScreeningResult @relation(fields: [screeningResultId, userId, runId, jobDescriptionId, candidateId], references: [id, userId, runId, jobDescriptionId, candidateId], onDelete: Cascade, onUpdate: Restrict)
+  candidate         Candidate                @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription    JobDescription           @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([userId, idempotencyKey], map: "candidate_action_logs_user_idempotency_key")
+  @@index([runId], map: "idx_candidate_action_logs_run_id")
+  @@index([screeningResultId], map: "idx_candidate_action_logs_screening_result_id")
+  @@index([candidateId], map: "idx_candidate_action_logs_candidate_id")
+  @@index([userId, jobDescriptionId, candidateId, createdAt(sort: Desc)], map: "idx_candidate_action_logs_user_jd_candidate_created")
+  @@map("candidate_action_logs")
+}
+
+model CandidateTagStat {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tagType   String   @map("tag_type")
+  tag       String
+  seen      Int      @default(0)
+  chatted   Int      @default(0)
+  replied   Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([userId, tagType, tag], map: "candidate_tag_stats_user_type_tag_key")
+  @@map("candidate_tag_stats")
 }
 
 model LlmCallLog {
