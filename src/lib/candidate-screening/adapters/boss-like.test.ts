@@ -82,6 +82,13 @@ const chatPlan: CandidateActionPlan = {
   reason: '技能匹配度高',
 };
 
+const unsafeProfileUrls = [
+  'http://[',
+  'https://evil.example.com/employer/resumes/boss-1',
+  'javascript:alert(1)',
+  '/employer/jobs/new',
+];
+
 const originalEnv = { ...process.env };
 const originalNodeEnv = process.env.NODE_ENV;
 
@@ -301,6 +308,28 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ).rejects.toThrow(/boss-like candidate search requires raw browser snapshots/);
   });
 
+  it('rejects blank browser snapshots during candidate search', async () => {
+    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', '   ']);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await expect(
+      collectAsyncBatches(adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).rejects.toThrow(/boss-like candidate search returned an empty browser snapshot/);
+  });
+
+  it('rejects blank browser snapshots during detail enrichment', async () => {
+    const executor = new FakeBrowserExecutor([
+      '<main>候选人列表</main>',
+      shortResumeListFixture,
+      '\n\t ',
+    ]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await expect(
+      collectAsyncBatches(adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).rejects.toThrow(/boss-like candidate search returned an empty browser snapshot/);
+  });
+
   it('restores the resume list before continuing keyword search after detail enrichment', async () => {
     const executor = new FakeBrowserExecutor([
       '<main>候选人列表</main>',
@@ -333,6 +362,28 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
     expect(restoredListIndex).toBeGreaterThan(detailNavigationIndex);
     expect(restoredListIndex).toBeLessThan(secondKeywordFillIndex);
+  });
+
+  it('trims and deduplicates keywords before searching', async () => {
+    const executor = new FakeBrowserExecutor([
+      '<main>候选人列表</main>',
+      resumeListFixture,
+      secondResumeListFixture,
+    ]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+    const noisyKeywordPlan: SearchPlan = {
+      ...searchPlan,
+      keywords: ['  ', ' Java ', 'Java', '\n', 'Node'],
+    };
+
+    await collectAsyncBatches(
+      adapter.searchCandidates(noisyKeywordPlan, { maxCandidates: 2, batchSize: 2 }),
+    );
+
+    expect(executor.calls.filter((call) => call.startsWith('fill:搜索候选人:'))).toEqual([
+      'fill:搜索候选人:Java',
+      'fill:搜索候选人:Node',
+    ]);
   });
 
   it('executes collect and chat only through explicit adapter methods', async () => {
@@ -374,6 +425,47 @@ describe('BossLikeCandidateSourceAdapter', () => {
       `fill:消息:${chatPlan.message}`,
       'click:发送',
     ]);
+  });
+
+  it('rejects unsafe collect and chat profile URLs without navigating', async () => {
+    for (const profileUrl of unsafeProfileUrls) {
+      const collectExecutor = new FakeBrowserExecutor();
+      const collectAdapter = new BossLikeCandidateSourceAdapter({ executor: collectExecutor });
+
+      await expect(
+        collectAdapter.collectCandidate({
+          candidateId: 'candidate-1',
+          displayName: '王小明',
+          profileUrl,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringMatching(/invalid candidate profileUrl/),
+        }),
+      );
+      expect(collectExecutor.calls.some((call) => call.startsWith('navigate:'))).toBe(false);
+
+      const chatExecutor = new FakeBrowserExecutor();
+      const chatAdapter = new BossLikeCandidateSourceAdapter({ executor: chatExecutor });
+
+      await expect(
+        chatAdapter.chatCandidate(
+          {
+            candidateId: 'candidate-1',
+            displayName: '王小明',
+            profileUrl,
+          },
+          chatPlan,
+        ),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringMatching(/invalid candidate profileUrl/),
+        }),
+      );
+      expect(chatExecutor.calls.some((call) => call.startsWith('navigate:'))).toBe(false);
+    }
   });
 
   it('requires boss-like env config outside local runtimes', () => {

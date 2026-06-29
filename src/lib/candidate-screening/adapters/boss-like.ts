@@ -18,6 +18,9 @@ const DEFAULT_BOSS_LIKE_USERNAME = 'admin';
 const DEFAULT_BOSS_LIKE_PASSWORD = 'boss123';
 const SHORT_RESUME_TEXT_MIN_LENGTH = 20;
 const RAW_SNAPSHOT_REQUIRED_ERROR = 'boss-like candidate search requires raw browser snapshots';
+const EMPTY_RAW_SNAPSHOT_ERROR = 'boss-like candidate search returned an empty browser snapshot';
+const INVALID_PROFILE_URL_ERROR =
+  'invalid candidate profileUrl: expected a same-origin boss-like resume URL';
 
 type BossLikeCandidateSourceAdapterOptions = {
   executor: BrowserExecutor;
@@ -29,6 +32,11 @@ type BossLikeCandidateSourceAdapterOptions = {
 type BossLikeCredentials = {
   username: string;
   password: string;
+};
+
+type ProfileUrlResolution = {
+  profileUrl: string | null;
+  error?: string;
 };
 
 function allowsLocalBossLikeDefaults(): boolean {
@@ -116,6 +124,20 @@ function mergeCandidateWithDetail(candidate: RawCandidate, detail: RawCandidate)
   };
 }
 
+function normalizeKeywords(values: string[]): string[] {
+  const seen = new Set<string>();
+  const keywords: string[] = [];
+
+  for (const value of values) {
+    const keyword = value.trim();
+    if (!keyword || seen.has(keyword)) continue;
+    seen.add(keyword);
+    keywords.push(keyword);
+  }
+
+  return keywords;
+}
+
 export function extractBossLikeCandidatesFromHtml(html: string): RawCandidate[] {
   return Array.from(html.matchAll(/<article\b([\s\S]*?)<\/article>/gi)).map((match) => {
     const article = match[0];
@@ -201,8 +223,9 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     await this.loginIfNeeded();
 
     const seen = new Set<string>();
-    const keywords =
-      plan.keywords.length > 0 ? plan.keywords : [plan.retrievalQuery].filter(Boolean);
+    const keywords = normalizeKeywords(
+      plan.keywords.length > 0 ? plan.keywords : [plan.retrievalQuery],
+    );
     const maxCandidates = Math.max(0, options.maxCandidates);
     const batchSize = Math.max(1, options.batchSize);
     let emittedCount = 0;
@@ -242,24 +265,27 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   }
 
   async collectCandidate(candidate: StoredCandidateRef): Promise<ActionExecutionResult> {
-    const profileUrl = this.resolveProfileUrl(candidate.profileUrl);
+    const profileUrlResolution = this.resolveProfileUrl(candidate.profileUrl);
     const browserTrace = {
       action: 'collect',
       candidateId: candidate.candidateId,
       displayName: candidate.displayName,
-      profileUrl,
+      profileUrl: profileUrlResolution.profileUrl,
     };
 
-    if (!profileUrl) {
+    if (!profileUrlResolution.profileUrl) {
       return {
         success: false,
-        error: 'candidate profileUrl is required to collect',
+        error: profileUrlResolution.error ?? 'candidate profileUrl is required to collect',
         browserTrace,
       };
     }
 
     try {
-      await requireSuccessfulStep(this.executor.navigate(profileUrl), 'open candidate profile');
+      await requireSuccessfulStep(
+        this.executor.navigate(profileUrlResolution.profileUrl),
+        'open candidate profile',
+      );
       await requireSuccessfulStep(this.executor.click('收藏'), 'collect candidate');
       return { success: true, browserTrace };
     } catch (error) {
@@ -271,19 +297,19 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     candidate: StoredCandidateRef,
     plan: CandidateActionPlan,
   ): Promise<ActionExecutionResult> {
-    const profileUrl = this.resolveProfileUrl(candidate.profileUrl);
+    const profileUrlResolution = this.resolveProfileUrl(candidate.profileUrl);
     const message = plan.message?.trim();
     const browserTrace = {
       action: 'chat',
       candidateId: candidate.candidateId,
       displayName: candidate.displayName,
-      profileUrl,
+      profileUrl: profileUrlResolution.profileUrl,
     };
 
-    if (!profileUrl) {
+    if (!profileUrlResolution.profileUrl) {
       return {
         success: false,
-        error: 'candidate profileUrl is required to chat',
+        error: profileUrlResolution.error ?? 'candidate profileUrl is required to chat',
         browserTrace,
       };
     }
@@ -296,7 +322,10 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     }
 
     try {
-      await requireSuccessfulStep(this.executor.navigate(profileUrl), 'open candidate profile');
+      await requireSuccessfulStep(
+        this.executor.navigate(profileUrlResolution.profileUrl),
+        'open candidate profile',
+      );
       await requireSuccessfulStep(this.executor.click('打招呼'), 'open chat composer');
       await requireSuccessfulStep(this.executor.fill('消息', message), 'fill chat message');
       await requireSuccessfulStep(this.executor.click('发送'), 'send chat message');
@@ -314,10 +343,27 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     return `${this.baseUrl}/employer/resumes`;
   }
 
-  private resolveProfileUrl(profileUrl?: string | null): string | null {
+  private resolveProfileUrl(profileUrl?: string | null): ProfileUrlResolution {
     const trimmed = profileUrl?.trim();
-    if (!trimmed) return null;
-    return new URL(trimmed, `${this.baseUrl}/`).toString();
+    if (!trimmed) return { profileUrl: null };
+
+    try {
+      const resolvedUrl = new URL(trimmed, `${this.baseUrl}/`);
+      const baseUrl = new URL(this.baseUrl);
+      const isHttpUrl = resolvedUrl.protocol === 'http:' || resolvedUrl.protocol === 'https:';
+      const isSameOrigin = resolvedUrl.origin === baseUrl.origin;
+      const isResumePath =
+        resolvedUrl.pathname === '/employer/resumes' ||
+        resolvedUrl.pathname.startsWith('/employer/resumes/');
+
+      if (!isHttpUrl || !isSameOrigin || !isResumePath) {
+        return { profileUrl: null, error: INVALID_PROFILE_URL_ERROR };
+      }
+
+      return { profileUrl: resolvedUrl.toString() };
+    } catch {
+      return { profileUrl: null, error: INVALID_PROFILE_URL_ERROR };
+    }
   }
 
   private async waitForResumeContent(): Promise<void> {
@@ -340,16 +386,23 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     if (!this.executor.snapshot) {
       throw new Error(RAW_SNAPSHOT_REQUIRED_ERROR);
     }
-    return this.executor.snapshot();
+    const html = await this.executor.snapshot();
+    if (!html.trim()) {
+      throw new Error(EMPTY_RAW_SNAPSHOT_ERROR);
+    }
+    return html;
   }
 
   private async enrichCandidateWhenNeeded(candidate: RawCandidate): Promise<RawCandidate> {
     if (!hasShortResumeText(candidate)) return candidate;
 
-    const profileUrl = this.resolveProfileUrl(candidate.profileUrl);
-    if (!profileUrl) return candidate;
+    const profileUrlResolution = this.resolveProfileUrl(candidate.profileUrl);
+    if (!profileUrlResolution.profileUrl) return candidate;
 
-    await requireSuccessfulStep(this.executor.navigate(profileUrl), 'open candidate detail');
+    await requireSuccessfulStep(
+      this.executor.navigate(profileUrlResolution.profileUrl),
+      'open candidate detail',
+    );
     const detailHtml = await this.readRawSnapshotForSearch();
     const detailCandidates = extractBossLikeCandidatesFromHtml(detailHtml);
     const detailCandidate =
