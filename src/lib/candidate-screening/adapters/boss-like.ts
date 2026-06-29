@@ -138,6 +138,11 @@ function normalizeKeywords(values: string[]): string[] {
   return keywords;
 }
 
+function createSearchKeywords(plan: SearchPlan): string[] {
+  const keywords = normalizeKeywords(plan.keywords);
+  return keywords.length > 0 ? keywords : normalizeKeywords([plan.retrievalQuery]);
+}
+
 export function extractBossLikeCandidatesFromHtml(html: string): RawCandidate[] {
   return Array.from(html.matchAll(/<article\b([\s\S]*?)<\/article>/gi)).map((match) => {
     const article = match[0];
@@ -223,9 +228,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     await this.loginIfNeeded();
 
     const seen = new Set<string>();
-    const keywords = normalizeKeywords(
-      plan.keywords.length > 0 ? plan.keywords : [plan.retrievalQuery],
-    );
+    const keywords = createSearchKeywords(plan);
     const maxCandidates = Math.max(0, options.maxCandidates);
     const batchSize = Math.max(1, options.batchSize);
     let emittedCount = 0;
@@ -352,11 +355,12 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
       const baseUrl = new URL(this.baseUrl);
       const isHttpUrl = resolvedUrl.protocol === 'http:' || resolvedUrl.protocol === 'https:';
       const isSameOrigin = resolvedUrl.origin === baseUrl.origin;
-      const isResumePath =
-        resolvedUrl.pathname === '/employer/resumes' ||
-        resolvedUrl.pathname.startsWith('/employer/resumes/');
+      const resumePathPrefix = '/employer/resumes/';
+      const hasCandidateDetailSegment =
+        resolvedUrl.pathname.startsWith(resumePathPrefix) &&
+        resolvedUrl.pathname.slice(resumePathPrefix.length).length > 0;
 
-      if (!isHttpUrl || !isSameOrigin || !isResumePath) {
+      if (!isHttpUrl || !isSameOrigin || !hasCandidateDetailSegment) {
         return { profileUrl: null, error: INVALID_PROFILE_URL_ERROR };
       }
 

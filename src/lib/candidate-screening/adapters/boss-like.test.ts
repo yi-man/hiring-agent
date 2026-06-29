@@ -86,6 +86,8 @@ const unsafeProfileUrls = [
   'http://[',
   'https://evil.example.com/employer/resumes/boss-1',
   'javascript:alert(1)',
+  '/employer/resumes',
+  '/employer/resumes/',
   '/employer/jobs/new',
 ];
 
@@ -383,6 +385,24 @@ describe('BossLikeCandidateSourceAdapter', () => {
     expect(executor.calls.filter((call) => call.startsWith('fill:搜索候选人:'))).toEqual([
       'fill:搜索候选人:Java',
       'fill:搜索候选人:Node',
+    ]);
+  });
+
+  it('falls back to retrieval query when keywords normalize to empty', async () => {
+    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', resumeListFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+    const blankKeywordPlan: SearchPlan = {
+      ...searchPlan,
+      keywords: [' ', '\n'],
+      retrievalQuery: ' Java 后端 ',
+    };
+
+    await collectAsyncBatches(
+      adapter.searchCandidates(blankKeywordPlan, { maxCandidates: 1, batchSize: 1 }),
+    );
+
+    expect(executor.calls.filter((call) => call.startsWith('fill:搜索候选人:'))).toEqual([
+      'fill:搜索候选人:Java 后端',
     ]);
   });
 
