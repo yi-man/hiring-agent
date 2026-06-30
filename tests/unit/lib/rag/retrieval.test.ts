@@ -18,6 +18,20 @@ describe('RAG env defaults', () => {
     expect(parsed.OPENAI_EMBEDDING_MODEL).toBe('doubao-embedding-vision-250615');
   });
 
+  it('parses dedicated embedding provider configuration', () => {
+    const parsed = parseEnv({
+      EMBEDDING_API_KEY: 'embedding-key',
+      EMBEDDING_BASE_URL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      EMBEDDING_MODEL: 'text-embedding-v3',
+    });
+
+    expect(parsed).toMatchObject({
+      EMBEDDING_API_KEY: 'embedding-key',
+      EMBEDDING_BASE_URL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      EMBEDDING_MODEL: 'text-embedding-v3',
+    });
+  });
+
   it('coerces number-based rag fields from strings', () => {
     const parsed = parseEnv({
       RAG_TOP_K: '10',
@@ -168,6 +182,9 @@ describe('embedding infrastructure', () => {
       OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
       OPENAI_EMBEDDING_USE_MULTIMODAL: 'false',
     };
+    process.env.EMBEDDING_API_KEY = '';
+    process.env.EMBEDDING_BASE_URL = '';
+    process.env.EMBEDDING_MODEL = '';
   });
 
   afterAll(() => {
@@ -216,6 +233,36 @@ describe('embedding infrastructure', () => {
       [0.1, 0.2],
       [0.3, 0.4],
     ]);
+  });
+
+  it('uses dedicated embedding base URL, API key, and model when configured', async () => {
+    process.env.OPENAI_BASE_URL = 'https://chat.example.com/v1';
+    process.env.OPENAI_API_KEY = 'chat-key';
+    process.env.OPENAI_EMBEDDING_MODEL = 'legacy-embedding-model';
+    process.env.EMBEDDING_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+    process.env.EMBEDDING_API_KEY = 'embedding-key';
+    process.env.EMBEDDING_MODEL = 'text-embedding-v3';
+    process.env.OPENAI_EMBEDDING_USE_MULTIMODAL = 'auto';
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [0.7, 0.8] }] }),
+    }) as unknown as typeof fetch;
+    global.fetch = fetchMock;
+
+    const embed = await import('@/lib/rag/embed');
+    await expect(embed.embedQuery('hello')).resolves.toEqual([0.7, 0.8]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings');
+    expect((init as RequestInit)?.headers).toMatchObject({
+      Authorization: 'Bearer embedding-key',
+    });
+    expect(JSON.parse(String((init as RequestInit)?.body))).toMatchObject({
+      model: 'text-embedding-v3',
+      input: 'hello',
+    });
   });
 
   it('uses multimodal endpoint when model name contains embedding-vision', async () => {

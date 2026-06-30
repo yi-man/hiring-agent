@@ -26,6 +26,7 @@ const embedQueryMock = jest.fn();
 jest.mock('@/lib/rag/embed', () => ({
   embedDocuments: (...args: unknown[]) => embedDocumentsMock(...args),
   embedQuery: (...args: unknown[]) => embedQueryMock(...args),
+  getConfiguredEmbeddingModel: () => 'text-embedding-3-small',
 }));
 
 type BossLikeServer = {

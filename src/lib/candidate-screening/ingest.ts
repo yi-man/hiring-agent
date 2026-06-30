@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { env } from '@/lib/env';
-import { embedDocuments } from '@/lib/rag/embed';
+import { embedDocuments, getConfiguredEmbeddingModel } from '@/lib/rag/embed';
 import { splitMarkdownToChunks } from '@/lib/rag/markdown';
 import { createCandidateIdentity } from './dedupe';
 import {
@@ -110,7 +109,7 @@ export async function ingestRawCandidate(params: {
     userId: params.userId,
     candidateId: candidate.id,
     resumeId: resume.id,
-    embeddingModel: env.OPENAI_EMBEDDING_MODEL,
+    embeddingModel: getConfiguredEmbeddingModel(),
     chunks: chunks.map((chunk, index) => ({
       id: randomUUID(),
       chunkIndex: chunk.index,
