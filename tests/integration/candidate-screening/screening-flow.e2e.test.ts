@@ -119,6 +119,7 @@ function renderResumeListPage(): string {
     <main>
       <h1>候选人库</h1>
       <label>搜索候选人 <input name="keyword" type="search" /></label>
+      <button type="button">搜索</button>
       <p>简历</p>
       <section>${candidateFixtures().join('\n')}</section>
     </main>

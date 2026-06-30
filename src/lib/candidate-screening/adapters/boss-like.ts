@@ -199,10 +199,9 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
 
     const snapshot = (await this.executor.snapshot?.()) ?? null;
     const structuredSnapshot = await readStructuredSnapshotBestEffort(this.executor);
-    const isLoginPage =
-      structuredSnapshot?.pageState === 'login' ||
-      structuredSnapshot?.url.includes('/login') ||
-      isLoginSnapshot(snapshot);
+    const isLoginPage = structuredSnapshot
+      ? structuredSnapshot.pageState === 'login' || structuredSnapshot.url.includes('/login')
+      : isLoginSnapshot(snapshot);
 
     if (!isLoginPage) return;
 
@@ -239,6 +238,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
 
       await requireSuccessfulStep(this.executor.navigate(this.resumeListUrl()), 'open resume list');
       await requireSuccessfulStep(this.executor.fill('搜索候选人', keyword), 'fill search keyword');
+      await requireSuccessfulStep(this.executor.click('搜索'), 'submit candidate search');
       await this.waitForResumeContent();
 
       const html = await this.readRawSnapshotForSearch();
@@ -371,17 +371,21 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   }
 
   private async waitForResumeContent(): Promise<void> {
-    if (this.executor.waitForText) {
-      await requireSuccessfulStep(this.executor.waitForText('简历'), 'wait for resume content');
+    const hasCandidateCards = await this.executor.check({
+      type: 'dom_exists',
+      selector: 'article[data-candidate-id]',
+      timeout: 5_000,
+    });
+    if (hasCandidateCards) {
       return;
     }
 
-    const found = await this.executor.check({
+    const hasResumeText = await this.executor.check({
       type: 'text_contains',
       text: '简历',
       timeout: 5_000,
     });
-    if (!found) {
+    if (!hasResumeText) {
       throw new Error('resume content was not visible');
     }
   }

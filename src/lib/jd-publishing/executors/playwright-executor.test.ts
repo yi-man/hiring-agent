@@ -246,7 +246,36 @@ describe('PlaywrightBrowserExecutor', () => {
       const snapshot = await executor.snapshot();
 
       expect(snapshot).toContain('职位名称');
-      expect(snapshot.length).toBeLessThanOrEqual(8_000);
+      expect(snapshot.length).toBeLessThanOrEqual(200_000);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  it('keeps candidate cards that appear after large app bootstrap markup', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const prefix = 'x'.repeat(12_000);
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <script type="application/json">${prefix}</script>
+            <main>
+              <article data-candidate-id="boss-1" data-profile-url="/employer/resumes/boss-1">
+                <h2>王小明</h2>
+                <p data-field="resume">Java 微服务 PostgreSQL</p>
+              </article>
+            </main>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const snapshot = await executor.snapshot();
+
+      expect(snapshot).toContain('data-candidate-id="boss-1"');
+      expect(snapshot).toContain('Java 微服务 PostgreSQL');
     } finally {
       await executor.close();
     }
