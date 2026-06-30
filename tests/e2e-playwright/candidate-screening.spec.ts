@@ -113,6 +113,10 @@ test.describe('candidate screening UI', () => {
       });
       await page.route('**/api/jd/jd-screening-1/candidate-screening/runs', async (route) => {
         if (route.request().method() === 'POST') {
+          expect(route.request().postDataJSON()).toMatchObject({
+            platform: 'boss-like',
+            mode: 'execution',
+          });
           await route.fulfill({
             status: 202,
             json: {
