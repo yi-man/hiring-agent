@@ -274,6 +274,8 @@ async function createPlannedActions(params: {
       candidateName: context.displayName,
       jobTitle: params.jobDescription.position,
     });
+    const actionStatus =
+      params.request.mode === 'execution' && actionPlan.action === 'skip' ? 'skipped' : 'planned';
     incrementDecisionStats(params.stats, actionPlan.action);
 
     const result = await params.dependencies.repo.upsertResult({
@@ -291,7 +293,7 @@ async function createPlannedActions(params: {
       decisionPriority: actionPlan.priority,
       decisionReason: actionPlan.reason,
       actionPlan,
-      actionStatus: 'planned',
+      actionStatus,
       interviewStage: actionPlan.action === 'skip' ? 'screened' : 'to_contact',
       notes: null,
     });
@@ -306,7 +308,7 @@ async function createPlannedActions(params: {
       mode: params.request.mode,
       action: actionPlan.action,
       message: actionPlan.message,
-      status: 'planned',
+      status: actionStatus,
       idempotencyKey: createActionIdempotencyKey({
         userId: params.userId,
         runId: params.runId,

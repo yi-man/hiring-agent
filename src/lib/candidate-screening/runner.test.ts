@@ -74,6 +74,13 @@ const collectDecision: CandidateActionPlan = {
   reason: 'needs resume',
 };
 
+const skipDecision: CandidateActionPlan = {
+  action: 'skip',
+  priority: 'low',
+  message: null,
+  reason: 'not relevant',
+};
+
 const request: CreateScreeningRunRequest = {
   platform: 'boss-like',
   mode: 'dry_run',
@@ -526,6 +533,57 @@ describe('candidate screening runner', () => {
     );
   });
 
+  it('finalizes skip decisions during execution action planning without adapter execution', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [makeRawCandidate()],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.evaluateCandidate = jest.fn().mockResolvedValue({
+      tags,
+      score,
+      decision: skipDecision,
+    });
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValue(
+      makeResult({
+        decisionAction: 'skip',
+        decisionPriority: 'low',
+        decisionReason: 'not relevant',
+        actionPlan: skipDecision,
+        actionStatus: 'skipped',
+        interviewStage: 'screened',
+      }),
+    );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decisionAction: 'skip',
+        actionStatus: 'skipped',
+        interviewStage: 'screened',
+      }),
+    );
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'skip',
+        status: 'skipped',
+        mode: 'execution',
+      }),
+    );
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
+    expect(adapter.collectCandidate).not.toHaveBeenCalled();
+  });
+
   it('automatically executes planned chat actions during an execution screening run', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() =>
@@ -618,6 +676,92 @@ describe('candidate screening runner', () => {
       expect.objectContaining({
         actionStatus: 'success',
         interviewStage: 'contacted',
+      }),
+    );
+  });
+
+  it('automatically executes planned collect actions during an execution screening run', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [makeRawCandidate()],
+        }),
+      ),
+      collectCandidate: jest.fn().mockResolvedValue({
+        success: true,
+        browserTrace: { action: 'collect', candidateId: 'candidate-1' },
+      }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.evaluateCandidate = jest.fn().mockResolvedValue({
+      tags,
+      score,
+      decision: collectDecision,
+    });
+    const plannedResult = makeResult({
+      id: 'result-1',
+      candidateId: 'candidate-1',
+      decisionAction: 'collect',
+      decisionPriority: 'medium',
+      decisionReason: 'needs resume',
+      actionPlan: collectDecision,
+      actionStatus: 'planned',
+      interviewStage: 'to_contact',
+    });
+    const detail = makeDetail({
+      ...plannedResult,
+      actionLogs: [
+        {
+          id: 'action-log-1',
+          userId: 'user-1',
+          runId: 'run-1',
+          screeningResultId: 'result-1',
+          candidateId: 'candidate-1',
+          jobDescriptionId: 'jd-1',
+          platform: 'boss-like',
+          mode: 'execution',
+          action: 'collect',
+          message: null,
+          status: 'planned',
+          idempotencyKey: 'execution-collect-key',
+          browserTrace: null,
+          errorMessage: null,
+          createdAt,
+          updatedAt,
+        },
+      ],
+    });
+
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValue(plannedResult);
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(adapter.collectCandidate).toHaveBeenCalledWith({
+      candidateId: 'candidate-1',
+      displayName: 'Ada Lovelace',
+      profileUrl: 'https://example.com/ada',
+    });
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'action-log-1',
+        status: 'success',
+        browserTrace: { action: 'collect', candidateId: 'candidate-1' },
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionStatus: 'success',
+        interviewStage: 'collected',
       }),
     );
   });

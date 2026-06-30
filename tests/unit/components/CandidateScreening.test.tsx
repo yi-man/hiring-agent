@@ -131,7 +131,7 @@ const sampleRun: CandidateScreeningRunDto = {
   userId: 'u1',
   jobDescriptionId: 'jd-1',
   platform: 'boss-like',
-  mode: 'dry_run',
+  mode: 'execution',
   status: 'pending',
   currentStage: 'planning',
   searchPlan: null,
