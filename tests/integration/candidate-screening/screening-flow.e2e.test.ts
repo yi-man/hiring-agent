@@ -138,8 +138,10 @@ function renderResumeDetailPage(id: string): string {
       ${article}
       <button type="button">收藏</button>
       <button type="button" id="open-chat">打招呼</button>
-      <label>消息 <textarea name="message"></textarea></label>
-      <button type="button">发送</button>
+      <form method="post" action="/employer/resumes/${escapeHtml(id)}/messages">
+        <label>消息 <textarea name="message"></textarea></label>
+        <button type="submit">发送</button>
+      </form>
     </main>
   </body>
 </html>`;
@@ -158,6 +160,14 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     }
     if (url.pathname === '/employer/resumes') {
       response.end(renderResumeListPage());
+      return;
+    }
+    const messageMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)\/messages$/);
+    if (request.method === 'POST' && messageMatch) {
+      request.resume();
+      request.on('end', () => {
+        response.end('<!doctype html><html><body>Message sent</body></html>');
+      });
       return;
     }
     const detailMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)$/);
@@ -401,6 +411,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(result.interviewStage).toBe('contacted');
       expect(bossLike.requests).toContain('GET /employer/resumes');
       expect(bossLike.requests).toContain('GET /employer/resumes/boss-cand-1');
+      expect(bossLike.requests).toContain('POST /employer/resumes/boss-cand-1/messages');
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();
