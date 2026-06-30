@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, BadgeCheck, FileText, Save } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, ExternalLink, FileText, Save } from 'lucide-react';
 import { Button, Card, CardBody, Chip } from '@/components/ui';
 import {
   fetchJdCandidateDetail,
@@ -25,6 +25,11 @@ export function CandidateDetail({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const originalProfileHref =
+    candidate?.candidate.profileUrl || candidate?.resume?.profileUrl
+      ? `/api/jd/${jobDescriptionId}/candidates/${candidateId}/original-profile`
+      : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -124,9 +129,27 @@ export function CandidateDetail({
               .join(' · ') || '候选人信息待补充'}
           </p>
         </div>
-        <div className="text-right">
-          <div className="font-mono text-3xl font-semibold">{Math.round(candidate.finalScore)}</div>
-          <div className="text-muted-foreground text-xs">匹配分</div>
+        <div className="flex flex-col items-start gap-2 lg:items-end">
+          {originalProfileHref ? (
+            <Button
+              as={Link}
+              className="gap-2"
+              href={originalProfileHref}
+              prefetch={false}
+              rel="noreferrer"
+              target="_blank"
+              variant="bordered"
+            >
+              <ExternalLink className="h-4 w-4" aria-hidden />
+              查看原站
+            </Button>
+          ) : null}
+          <div className="text-left lg:text-right">
+            <div className="font-mono text-3xl font-semibold">
+              {Math.round(candidate.finalScore)}
+            </div>
+            <div className="text-muted-foreground text-xs">匹配分</div>
+          </div>
         </div>
       </div>
 

@@ -50,6 +50,8 @@ jest.mock('@/components/ui', () => ({
     href,
     isDisabled,
     onClick,
+    rel,
+    target,
     type = 'button',
   }: {
     as?: React.ElementType;
@@ -57,10 +59,14 @@ jest.mock('@/components/ui', () => ({
     href?: string;
     isDisabled?: boolean;
     onClick?: () => void;
+    rel?: string;
+    target?: string;
     type?: 'button' | 'submit' | 'reset';
   }) => {
     const componentProps =
-      Component === 'button' ? { disabled: isDisabled, onClick, type } : { href, onClick };
+      Component === 'button'
+        ? { disabled: isDisabled, onClick, type }
+        : { href, onClick, rel, role: 'button', target };
     return <Component {...componentProps}>{children}</Component>;
   },
   Card: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,
@@ -260,8 +266,8 @@ describe('candidate screening UI', () => {
   it('JD detail shows screening button and screened candidates link when published', async () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    expect(await screen.findByRole('button', { name: /筛选候选人/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /已筛选候选人/ })).toHaveAttribute(
+    expect(await screen.findByRole('button', { name: '筛选候选人' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /已筛选候选人/ })).toHaveAttribute(
       'href',
       '/jd-generator/jd-1/candidates',
     );
@@ -270,7 +276,7 @@ describe('candidate screening UI', () => {
   it('starts a dry-run screening run and shows the run id', async () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /筛选候选人/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '筛选候选人' }));
 
     await waitFor(() =>
       expect(createCandidateScreeningRunMock).toHaveBeenCalledWith('jd-1', {
@@ -298,6 +304,19 @@ describe('candidate screening UI', () => {
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText(/Java 微服务，分布式系统/)).toBeInTheDocument();
     expect(screen.getByText('Java 微服务和招聘 SaaS 经验匹配')).toBeInTheDocument();
+  });
+
+  it('candidate detail links to the original recruiting site profile', async () => {
+    render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    const originalProfileLink = await screen.findByRole('button', { name: '查看原站' });
+
+    expect(originalProfileLink).toHaveAttribute(
+      'href',
+      '/api/jd/jd-1/candidates/cand-1/original-profile',
+    );
+    expect(originalProfileLink).toHaveAttribute('target', '_blank');
+    expect(originalProfileLink).toHaveAttribute('rel', 'noreferrer');
   });
 
   it('candidate detail updates interview stage', async () => {

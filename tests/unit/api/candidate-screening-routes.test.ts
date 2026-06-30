@@ -13,6 +13,7 @@ import {
   GET as getJdCandidate,
   PATCH as updateJdCandidate,
 } from '@/app/api/jd/[id]/candidates/[candidateId]/route';
+import { GET as openOriginalProfile } from '@/app/api/jd/[id]/candidates/[candidateId]/original-profile/route';
 import type {
   CandidateDto,
   CandidateResumeDto,
@@ -37,7 +38,13 @@ jest.mock('next/server', () => ({
   NextResponse: {
     json: (body: unknown, init?: { status?: number }) => ({
       status: init?.status ?? 200,
+      headers: new Headers(),
       json: async () => body,
+    }),
+    redirect: (url: string | URL, init?: number | { status?: number }) => ({
+      status: typeof init === 'number' ? init : (init?.status ?? 307),
+      headers: new Headers({ location: String(url) }),
+      json: async () => ({}),
     }),
   },
 }));
@@ -534,6 +541,44 @@ describe('candidate screening API routes', () => {
       jobDescriptionId: 'jd-1',
       candidateId: 'cand-1',
     });
+  });
+
+  it('redirects to the original recruiting site profile for a scoped candidate', async () => {
+    const originalBaseUrl = process.env.BOSS_LIKE_BASE_URL;
+    process.env.BOSS_LIKE_BASE_URL = 'https://boss-like.test';
+    getCandidateScreeningDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      candidate: {
+        ...sampleCandidate,
+        profileUrl: '/employer/resumes/cand-1',
+      },
+      resume: {
+        ...sampleResume,
+        profileUrl: '/employer/resumes/cand-1',
+      },
+    });
+
+    try {
+      const response = await openOriginalProfile({} as Request, {
+        params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get('location')).toBe(
+        'https://boss-like.test/employer/resumes/cand-1',
+      );
+      expect(getCandidateScreeningDetailMock).toHaveBeenCalledWith({
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'cand-1',
+      });
+    } finally {
+      if (originalBaseUrl === undefined) {
+        delete process.env.BOSS_LIKE_BASE_URL;
+      } else {
+        process.env.BOSS_LIKE_BASE_URL = originalBaseUrl;
+      }
+    }
   });
 
   it('updates interview progress and notes', async () => {
