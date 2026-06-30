@@ -341,4 +341,69 @@ describe('candidate screening integration flow with real postgres and boss-like 
       await bossLike.close();
     }
   }, 120000);
+
+  it('executes planned chat actions through the browser during execution runs', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const run = await createCandidateScreeningRun({
+        userId,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        mode: 'execution',
+        status: 'pending',
+      });
+
+      await runCandidateScreening({
+        runId: run.id,
+        userId,
+        jobDescription,
+        request: {
+          platform: 'boss-like',
+          mode: 'execution',
+          maxCandidates: 1,
+          batchSize: 1,
+          allowAlreadyContacted: false,
+        },
+        dependencies: {
+          createAdapter: () =>
+            new BossLikeCandidateSourceAdapter({
+              baseUrl: bossLike.baseUrl,
+              executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+              username: 'admin',
+              password: 'boss123',
+            }),
+          evaluateCandidate,
+        },
+      });
+
+      const completedRun = await prisma.candidateScreeningRun.findUniqueOrThrow({
+        where: { id: run.id },
+      });
+      const actionLogs = await prisma.candidateActionLog.findMany({
+        where: { userId, runId: run.id },
+      });
+      const result = await prisma.candidateScreeningResult.findFirstOrThrow({
+        where: { userId, runId: run.id, jobDescriptionId: jobDescription.id },
+      });
+
+      expect(completedRun.status).toBe('success');
+      expect(completedRun.currentStage).toBe('finalizing');
+      expect(actionLogs).toHaveLength(1);
+      expect(actionLogs[0]).toMatchObject({
+        mode: 'execution',
+        action: 'chat',
+        status: 'success',
+      });
+      expect(result.actionStatus).toBe('success');
+      expect(result.interviewStage).toBe('contacted');
+      expect(bossLike.requests).toContain('GET /employer/resumes');
+      expect(bossLike.requests).toContain('GET /employer/resumes/boss-cand-1');
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await bossLike.close();
+    }
+  }, 120000);
 });
