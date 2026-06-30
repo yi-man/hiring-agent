@@ -20,6 +20,16 @@ function serverErrorResponse(error: unknown) {
   return NextResponse.json({ error: message }, { status: 500 });
 }
 
+async function readJsonBody(
+  request: Request,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await request.json() };
+  } catch {
+    return { ok: false, error: 'invalid JSON body' };
+  }
+}
+
 export async function POST(request: Request, context: { params: Promise<{ runId: string }> }) {
   try {
     const auth = await requireAuth();
@@ -28,7 +38,12 @@ export async function POST(request: Request, context: { params: Promise<{ runId:
       return badRequest('candidate screening run id is required');
     }
 
-    const parsed = parseExecuteActionsPayload(await request.json());
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      return badRequest(body.error);
+    }
+
+    const parsed = parseExecuteActionsPayload(body.value);
     if (!parsed.ok) {
       return badRequest(parsed.error);
     }

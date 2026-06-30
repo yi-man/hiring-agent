@@ -243,6 +243,14 @@ function jsonRequest(url: string, body: unknown): Request {
   });
 }
 
+function malformedJsonRequest(url: string, method = 'POST'): Request {
+  return new Request(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: '{',
+  });
+}
+
 function params<T extends Record<string, string>>(value: T): Promise<T> {
   return Promise.resolve(value);
 }
@@ -291,6 +299,20 @@ describe('candidate screening API routes', () => {
     });
   });
 
+  it('returns 400 when create run receives malformed JSON', async () => {
+    const request = malformedJsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs');
+
+    const response = await createScreeningRun(request, {
+      params: params({ id: 'jd-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('invalid JSON body');
+    expect(getJobDescriptionByIdMock).not.toHaveBeenCalled();
+    expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
+  });
+
   it('rejects screening when JD does not exist', async () => {
     getJobDescriptionByIdMock.mockResolvedValueOnce(null);
     const request = jsonRequest('http://localhost/api/jd/jd-missing/candidate-screening/runs', {
@@ -327,6 +349,7 @@ describe('candidate screening API routes', () => {
   });
 
   it('lists runs scoped to the current user and JD', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce(sampleJobDescription);
     listCandidateScreeningRunsMock.mockResolvedValueOnce([sampleRun]);
 
     const response = await listScreeningRuns({} as Request, {
@@ -336,11 +359,26 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(200);
     expect(body.runs).toEqual([sampleRun]);
+    expect(getJobDescriptionByIdMock).toHaveBeenCalledWith('u1', 'jd-1');
     expect(listCandidateScreeningRunsMock).toHaveBeenCalledWith({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
       limit: 10,
     });
+  });
+
+  it('returns 404 when listing runs for a missing scoped JD', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce(null);
+
+    const response = await listScreeningRuns({} as Request, {
+      params: params({ id: 'jd-missing' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error).toBe('job description not found');
+    expect(getJobDescriptionByIdMock).toHaveBeenCalledWith('u1', 'jd-missing');
+    expect(listCandidateScreeningRunsMock).not.toHaveBeenCalled();
   });
 
   it('returns run progress by run id', async () => {
@@ -394,6 +432,22 @@ describe('candidate screening API routes', () => {
     expect(executeScreeningRunActionsMock).not.toHaveBeenCalled();
   });
 
+  it('returns 400 when execute-actions receives malformed JSON', async () => {
+    const request = malformedJsonRequest(
+      'http://localhost/api/candidate-screening/runs/run-1/execute-actions',
+    );
+
+    const response = await executeScreeningRunActionsRoute(request, {
+      params: params({ runId: 'run-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('invalid JSON body');
+    expect(getCandidateScreeningRunMock).not.toHaveBeenCalled();
+    expect(executeScreeningRunActionsMock).not.toHaveBeenCalled();
+  });
+
   it('executes confirmed actions for a scoped run', async () => {
     getCandidateScreeningRunMock.mockResolvedValueOnce(sampleRun);
     executeScreeningRunActionsMock.mockResolvedValueOnce(undefined);
@@ -425,6 +479,7 @@ describe('candidate screening API routes', () => {
   });
 
   it('lists JD candidates with filters', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce(sampleJobDescription);
     listCandidateScreeningResultsMock.mockResolvedValueOnce([sampleCandidateListItem]);
 
     const response = await listJdCandidates(
@@ -437,6 +492,7 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(200);
     expect(body.candidates).toEqual([sampleCandidateListItem]);
+    expect(getJobDescriptionByIdMock).toHaveBeenCalledWith('u1', 'jd-1');
     expect(listCandidateScreeningResultsMock).toHaveBeenCalledWith({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
@@ -444,6 +500,23 @@ describe('candidate screening API routes', () => {
       offset: 5,
       interviewStage: 'to_contact',
     });
+  });
+
+  it('returns 404 when listing candidates for a missing scoped JD', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce(null);
+
+    const response = await listJdCandidates(
+      {
+        url: 'http://localhost/api/jd/jd-missing/candidates?limit=25',
+      } as Request,
+      { params: params({ id: 'jd-missing' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error).toBe('job description not found');
+    expect(getJobDescriptionByIdMock).toHaveBeenCalledWith('u1', 'jd-missing');
+    expect(listCandidateScreeningResultsMock).not.toHaveBeenCalled();
   });
 
   it('returns JD candidate detail', async () => {
@@ -493,6 +566,19 @@ describe('candidate screening API routes', () => {
       interviewStage: 'phone_screen',
       notes: 'Schedule phone screen',
     });
+  });
+
+  it('returns 400 when update candidate progress receives malformed JSON', async () => {
+    const request = malformedJsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', 'PATCH');
+
+    const response = await updateJdCandidate(request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('invalid JSON body');
+    expect(updateCandidateInterviewProgressMock).not.toHaveBeenCalled();
   });
 
   it('rejects invalid interview stage', async () => {

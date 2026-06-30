@@ -22,6 +22,16 @@ function serverErrorResponse(error: unknown) {
   return NextResponse.json({ error: message }, { status: 500 });
 }
 
+async function readJsonBody(
+  request: Request,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await request.json() };
+  } catch {
+    return { ok: false, error: 'invalid JSON body' };
+  }
+}
+
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string; candidateId: string }> },
@@ -65,7 +75,12 @@ export async function PATCH(
       return badRequest('candidate id is required');
     }
 
-    const parsed = parseUpdateCandidateProgressPayload(await request.json());
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      return badRequest(body.error);
+    }
+
+    const parsed = parseUpdateCandidateProgressPayload(body.value);
     if (!parsed.ok) {
       return badRequest(parsed.error);
     }

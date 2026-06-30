@@ -28,6 +28,16 @@ function isEligibleForScreening(status: string): boolean {
   return status === 'published' || status === 'ready_to_publish';
 }
 
+async function readJsonBody(
+  request: Request,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await request.json() };
+  } catch {
+    return { ok: false, error: 'invalid JSON body' };
+  }
+}
+
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireAuth();
@@ -36,7 +46,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return badRequest('job description id is required');
     }
 
-    const parsed = parseCreateScreeningRunPayload(await request.json());
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      return badRequest(body.error);
+    }
+
+    const parsed = parseCreateScreeningRunPayload(body.value);
     if (!parsed.ok) {
       return badRequest(parsed.error);
     }
@@ -70,6 +85,11 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     if (!id?.trim()) {
       return badRequest('job description id is required');
+    }
+
+    const jobDescription = await getJobDescriptionById(auth.user.id, id);
+    if (!jobDescription) {
+      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
     }
 
     const runs: CandidateScreeningRunDto[] = await listCandidateScreeningRuns({

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { CANDIDATE_SCREENING_INTERVIEW_STAGES } from '@/lib/candidate-screening/constants';
 import { listCandidateScreeningResults } from '@/lib/candidate-screening/repo';
+import { getJobDescriptionById } from '@/lib/jd/job-description-repo';
 import type { CandidateInterviewStage } from '@/lib/candidate-screening/types';
 
 const DEFAULT_LIMIT = 50;
@@ -65,6 +66,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         return badRequest('interviewStage is invalid');
       }
       interviewStage = interviewStageParam;
+    }
+
+    const jobDescription = await getJobDescriptionById(auth.user.id, id);
+    if (!jobDescription) {
+      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
     }
 
     const candidates = await listCandidateScreeningResults({
