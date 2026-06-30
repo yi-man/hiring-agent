@@ -1,0 +1,1124 @@
+/** @jest-environment node */
+
+import {
+  claimCandidateActionLog,
+  createCandidateActionLog,
+  createCandidateScreeningRun,
+  createOrReuseCandidateResume,
+  getCandidateTrackingOverview,
+  listCandidateScreeningResults,
+  replaceCandidateResumeChunks,
+  searchCandidateResumeChunks,
+  updateCandidateInterviewProgress,
+  upsertCandidateScreeningResult,
+  upsertCandidateWithIdentity,
+} from './repo';
+
+type PrismaMock = {
+  candidate: {
+    findFirst: jest.Mock;
+    upsert: jest.Mock;
+  };
+  candidateResume: {
+    create: jest.Mock;
+    findFirst: jest.Mock;
+    upsert: jest.Mock;
+  };
+  candidateResumeChunk: {
+    deleteMany: jest.Mock;
+  };
+  candidateScreeningRun: {
+    create: jest.Mock;
+    findFirst: jest.Mock;
+    findMany: jest.Mock;
+    updateMany: jest.Mock;
+  };
+  candidateScreeningResult: {
+    create: jest.Mock;
+    findFirst: jest.Mock;
+    findMany: jest.Mock;
+    upsert: jest.Mock;
+    updateMany: jest.Mock;
+  };
+  candidateActionLog: {
+    findFirst: jest.Mock;
+    upsert: jest.Mock;
+    updateMany: jest.Mock;
+  };
+  $executeRaw: jest.Mock;
+  $queryRaw: jest.Mock;
+  $transaction: jest.Mock;
+};
+
+jest.mock('@/lib/prisma', () => ({
+  prisma: {
+    candidate: {
+      findFirst: jest.fn(),
+      upsert: jest.fn(),
+    },
+    candidateResume: {
+      create: jest.fn(),
+      findFirst: jest.fn(),
+      upsert: jest.fn(),
+    },
+    candidateResumeChunk: {
+      deleteMany: jest.fn(),
+    },
+    candidateScreeningRun: {
+      create: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    candidateScreeningResult: {
+      create: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      upsert: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    candidateActionLog: {
+      findFirst: jest.fn(),
+      upsert: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    $executeRaw: jest.fn(),
+    $queryRaw: jest.fn(),
+    $transaction: jest.fn(),
+  },
+}));
+
+const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as { prisma: PrismaMock };
+
+const createdAt = new Date('2026-01-02T03:04:05.000Z');
+const updatedAt = new Date('2026-01-03T03:04:05.000Z');
+
+describe('candidate screening repository', () => {
+  beforeEach(() => {
+    prismaMock.candidate.findFirst.mockReset();
+    prismaMock.candidate.upsert.mockReset();
+    prismaMock.candidateResume.create.mockReset();
+    prismaMock.candidateResume.findFirst.mockReset();
+    prismaMock.candidateResume.upsert.mockReset();
+    prismaMock.candidateResumeChunk.deleteMany.mockReset();
+    prismaMock.candidateScreeningRun.create.mockReset();
+    prismaMock.candidateScreeningRun.findFirst.mockReset();
+    prismaMock.candidateScreeningRun.findMany.mockReset();
+    prismaMock.candidateScreeningRun.updateMany.mockReset();
+    prismaMock.candidateScreeningResult.create.mockReset();
+    prismaMock.candidateScreeningResult.findFirst.mockReset();
+    prismaMock.candidateScreeningResult.findMany.mockReset();
+    prismaMock.candidateScreeningResult.upsert.mockReset();
+    prismaMock.candidateScreeningResult.updateMany.mockReset();
+    prismaMock.candidateActionLog.findFirst.mockReset();
+    prismaMock.candidateActionLog.upsert.mockReset();
+    prismaMock.candidateActionLog.updateMany.mockReset();
+    prismaMock.$executeRaw.mockReset();
+    prismaMock.$queryRaw.mockReset();
+    prismaMock.$transaction.mockReset();
+  });
+
+  it('creates a screening run scoped to user and JD', async () => {
+    prismaMock.candidateScreeningRun.create.mockResolvedValueOnce({
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'dry_run',
+      status: 'pending',
+      currentStage: 'planning',
+      searchPlan: { keywords: ['React'] },
+      evaluationSchema: { skills: ['React'] },
+      stats: { fetched: 0 },
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt,
+      updatedAt,
+    });
+
+    const result = await createCandidateScreeningRun({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'dry_run',
+      currentStage: 'planning',
+      searchPlan: { keywords: ['React'], filters: {}, priorityTags: [], retrievalQuery: 'React' },
+      evaluationSchema: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+      },
+      stats: {
+        fetched: 0,
+        deduped: 0,
+        stored: 0,
+        vectorRecalled: 0,
+        evaluated: 0,
+        recommendedChat: 0,
+        recommendedCollect: 0,
+        skipped: 0,
+        failed: 0,
+      },
+    });
+
+    expect(prismaMock.candidateScreeningRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        mode: 'dry_run',
+        currentStage: 'planning',
+      }),
+    });
+    expect(result.createdAt).toBe(createdAt.toISOString());
+  });
+
+  it('builds a cross-JD candidate tracking overview scoped to user', async () => {
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([
+      {
+        id: 'result-1',
+        userId: 'u1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        source: 'both',
+        tags: { skills: ['Java'] },
+        scoreDetail: { total: 92 },
+        finalScore: 92,
+        rank: 1,
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        decisionReason: 'Strong backend match',
+        actionPlan: null,
+        actionStatus: 'planned',
+        interviewStage: 'interviewing',
+        notes: '一面中',
+        createdAt,
+        updatedAt,
+        candidate: {
+          id: 'candidate-1',
+          userId: 'u1',
+          displayName: 'Ada',
+          currentTitle: 'Senior Backend Engineer',
+          currentCompany: 'Acme',
+          location: 'Shanghai',
+          experienceYears: 8,
+          sourcePlatform: 'boss-like',
+          platformCandidateId: 'p-1',
+          profileUrl: '/employer/resumes/ada',
+          identityKey: 'Ada|Acme',
+          identityHash: 'hash-1',
+          lastActiveAt: null,
+          contacted: false,
+          replied: false,
+          lastContactAt: null,
+          createdAt,
+          updatedAt,
+        },
+        resume: null,
+        jobDescription: {
+          id: 'jd-1',
+          userId: 'u1',
+          department: '技术部',
+          position: '高级后端工程师',
+          positionDescription: 'Build backend services',
+          tone: 'tech',
+          status: 'published',
+          content: { title: '高级后端工程师' },
+          evaluation: null,
+          generationMeta: null,
+          createdAt,
+          updatedAt,
+        },
+      },
+      {
+        id: 'result-2',
+        userId: 'u1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-2',
+        resumeId: null,
+        source: 'live_search',
+        tags: {},
+        scoreDetail: { total: 55 },
+        finalScore: 55,
+        rank: 2,
+        decisionAction: 'skip',
+        decisionPriority: 'low',
+        decisionReason: 'Too junior',
+        actionPlan: null,
+        actionStatus: 'skipped',
+        interviewStage: 'rejected',
+        notes: null,
+        createdAt,
+        updatedAt,
+        candidate: {
+          id: 'candidate-2',
+          userId: 'u1',
+          displayName: 'Grace',
+          currentTitle: null,
+          currentCompany: null,
+          location: null,
+          experienceYears: null,
+          sourcePlatform: 'boss-like',
+          platformCandidateId: 'p-2',
+          profileUrl: null,
+          identityKey: 'Grace',
+          identityHash: 'hash-2',
+          lastActiveAt: null,
+          contacted: false,
+          replied: false,
+          lastContactAt: null,
+          createdAt,
+          updatedAt,
+        },
+        resume: null,
+        jobDescription: {
+          id: 'jd-1',
+          userId: 'u1',
+          department: '技术部',
+          position: '高级后端工程师',
+          positionDescription: 'Build backend services',
+          tone: 'tech',
+          status: 'published',
+          content: { title: '高级后端工程师' },
+          evaluation: null,
+          generationMeta: null,
+          createdAt,
+          updatedAt,
+        },
+      },
+    ]);
+
+    const overview = await getCandidateTrackingOverview({ userId: 'u1', limit: 100 });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      include: { candidate: true, resume: true, jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+      take: 100,
+    });
+    expect(overview.jobs).toEqual([
+      {
+        jobDescription: {
+          id: 'jd-1',
+          department: '技术部',
+          position: '高级后端工程师',
+          status: 'published',
+          title: '高级后端工程师',
+          updatedAt: updatedAt.toISOString(),
+        },
+        totalCandidates: 2,
+        activeCandidates: 1,
+        interviewingCandidates: 1,
+        skippedCandidates: 1,
+        latestCandidateUpdatedAt: updatedAt.toISOString(),
+      },
+    ]);
+    expect(overview.candidates[0]).toMatchObject({
+      id: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescription: {
+        id: 'jd-1',
+        position: '高级后端工程师',
+      },
+    });
+  });
+
+  it('upserts candidates by user, platform, and identity hash', async () => {
+    prismaMock.candidate.upsert.mockResolvedValueOnce({
+      id: 'candidate-1',
+      userId: 'u1',
+      displayName: 'Ada',
+      currentTitle: 'Frontend Engineer',
+      currentCompany: 'Acme',
+      location: 'Shanghai',
+      experienceYears: 5,
+      sourcePlatform: 'boss-like',
+      platformCandidateId: 'p-1',
+      profileUrl: 'https://example.test/ada',
+      identityKey: 'Ada|Acme',
+      identityHash: 'hash-1',
+      lastActiveAt: null,
+      contacted: false,
+      replied: false,
+      lastContactAt: null,
+      createdAt,
+      updatedAt,
+    });
+
+    await upsertCandidateWithIdentity({
+      userId: 'u1',
+      displayName: 'Ada',
+      currentTitle: 'Frontend Engineer',
+      currentCompany: 'Acme',
+      location: 'Shanghai',
+      experienceYears: 5,
+      sourcePlatform: 'boss-like',
+      platformCandidateId: 'p-1',
+      profileUrl: 'https://example.test/ada',
+      identityKey: 'Ada|Acme',
+      identityHash: 'hash-1',
+      lastActiveAt: null,
+    });
+
+    expect(prismaMock.candidate.upsert).toHaveBeenCalledWith({
+      where: {
+        userId_sourcePlatform_identityHash: {
+          userId: 'u1',
+          sourcePlatform: 'boss-like',
+          identityHash: 'hash-1',
+        },
+      },
+      create: expect.objectContaining({
+        userId: 'u1',
+        sourcePlatform: 'boss-like',
+        identityHash: 'hash-1',
+      }),
+      update: expect.objectContaining({
+        displayName: 'Ada',
+        currentTitle: 'Frontend Engineer',
+        platformCandidateId: 'p-1',
+      }),
+    });
+  });
+
+  it('does not clear omitted candidate optional fields on identity refresh', async () => {
+    prismaMock.candidate.upsert.mockResolvedValueOnce({
+      id: 'candidate-1',
+      userId: 'u1',
+      displayName: 'Ada',
+      currentTitle: null,
+      currentCompany: 'Existing Co',
+      location: 'Shanghai',
+      experienceYears: 5,
+      sourcePlatform: 'boss-like',
+      platformCandidateId: null,
+      profileUrl: 'https://example.test/ada',
+      identityKey: 'Ada|Existing Co',
+      identityHash: 'hash-1',
+      lastActiveAt: null,
+      contacted: false,
+      replied: false,
+      lastContactAt: null,
+      createdAt,
+      updatedAt,
+    });
+
+    await upsertCandidateWithIdentity({
+      userId: 'u1',
+      displayName: 'Ada',
+      sourcePlatform: 'boss-like',
+      identityKey: 'Ada|Existing Co',
+      identityHash: 'hash-1',
+      currentTitle: null,
+    });
+
+    const call = prismaMock.candidate.upsert.mock.calls[0]?.[0] as {
+      update: Record<string, unknown>;
+    };
+    expect(call.update).toMatchObject({
+      displayName: 'Ada',
+      currentTitle: null,
+      identityKey: 'Ada|Existing Co',
+    });
+    expect(call.update).not.toHaveProperty('currentCompany');
+    expect(call.update).not.toHaveProperty('profileUrl');
+    expect(call.update).not.toHaveProperty('experienceYears');
+  });
+
+  it('reuses identical resume snapshots by candidate and resume hash', async () => {
+    prismaMock.candidateResume.findFirst.mockResolvedValueOnce({
+      id: 'resume-1',
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      sourcePlatform: 'boss-like',
+      profileUrl: 'https://example.test/ada',
+      rawText: 'resume text',
+      structuredSummary: { skills: ['React'] },
+      resumeHash: 'resume-hash-1',
+      fetchedAt: createdAt,
+      createdAt,
+    });
+
+    const result = await createOrReuseCandidateResume({
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      sourcePlatform: 'boss-like',
+      profileUrl: 'https://example.test/ada',
+      rawText: 'resume text',
+      structuredSummary: { skills: ['React'] },
+      resumeHash: 'resume-hash-1',
+      fetchedAt: createdAt,
+    });
+
+    expect(prismaMock.candidateResume.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', candidateId: 'candidate-1', resumeHash: 'resume-hash-1' },
+    });
+    expect(prismaMock.candidateResume.create).not.toHaveBeenCalled();
+    expect(prismaMock.candidateResume.upsert).not.toHaveBeenCalled();
+    expect(result.fetchedAt).toBe(createdAt.toISOString());
+  });
+
+  it('creates resume snapshots only after scoped same-user reuse lookup', async () => {
+    prismaMock.candidateResume.findFirst.mockResolvedValueOnce(null);
+    prismaMock.candidateResume.create.mockResolvedValueOnce({
+      id: 'resume-1',
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      sourcePlatform: 'boss-like',
+      profileUrl: 'https://example.test/ada',
+      rawText: 'resume text',
+      structuredSummary: { skills: ['React'] },
+      resumeHash: 'resume-hash-1',
+      fetchedAt: createdAt,
+      createdAt,
+    });
+    await createOrReuseCandidateResume({
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      sourcePlatform: 'boss-like',
+      profileUrl: 'https://example.test/ada',
+      rawText: 'resume text',
+      structuredSummary: { skills: ['React'] },
+      resumeHash: 'resume-hash-1',
+      fetchedAt: createdAt,
+    });
+
+    expect(prismaMock.candidateResume.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', candidateId: 'candidate-1', resumeHash: 'resume-hash-1' },
+    });
+    expect(prismaMock.candidateResume.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'u1',
+        candidateId: 'candidate-1',
+        resumeHash: 'resume-hash-1',
+      }),
+    });
+    expect(prismaMock.candidateResume.upsert).not.toHaveBeenCalled();
+  });
+
+  it('retries scoped resume reuse when create races on unique constraint', async () => {
+    const uniqueError = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+    const racedResume = {
+      id: 'resume-1',
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      sourcePlatform: 'boss-like',
+      profileUrl: 'https://example.test/ada',
+      rawText: 'resume text',
+      structuredSummary: { skills: ['React'] },
+      resumeHash: 'resume-hash-1',
+      fetchedAt: createdAt,
+      createdAt,
+    };
+    prismaMock.candidateResume.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(racedResume);
+    prismaMock.candidateResume.create.mockRejectedValueOnce(uniqueError);
+
+    const result = await createOrReuseCandidateResume({
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      sourcePlatform: 'boss-like',
+      profileUrl: 'https://example.test/ada',
+      rawText: 'resume text',
+      structuredSummary: { skills: ['React'] },
+      resumeHash: 'resume-hash-1',
+      fetchedAt: createdAt,
+    });
+
+    expect(result.id).toBe('resume-1');
+    expect(prismaMock.candidateResume.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { userId: 'u1', candidateId: 'candidate-1', resumeHash: 'resume-hash-1' },
+    });
+    expect(prismaMock.candidateResume.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { userId: 'u1', candidateId: 'candidate-1', resumeHash: 'resume-hash-1' },
+    });
+    expect(prismaMock.candidateResume.upsert).not.toHaveBeenCalled();
+  });
+
+  it('replaces resume chunks with raw pgvector inserts inside a transaction', async () => {
+    const tx = {
+      candidateResumeChunk: { deleteMany: jest.fn() },
+      $executeRaw: jest.fn(),
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    await replaceCandidateResumeChunks({
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      embeddingModel: 'text-embedding-3-small',
+      chunks: [
+        {
+          id: 'chunk-1',
+          chunkIndex: 0,
+          content: 'resume chunk',
+          tokenEstimate: 12,
+          embedding: [0.1, 0.2],
+        },
+      ],
+    });
+
+    expect(tx.candidateResumeChunk.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', candidateId: 'candidate-1', resumeId: 'resume-1' },
+    });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    const rawSql = tx.$executeRaw.mock.calls[0][0] as TemplateStringsArray;
+    const sqlText = String(rawSql.join(' '));
+    expect(sqlText).toContain('INSERT INTO "public"."candidate_resume_chunks"');
+    expect(sqlText).toContain('"embedding"');
+    expect(sqlText).toContain('::vector');
+  });
+
+  it('searches candidate chunks with user, model, dimension, and contact filters', async () => {
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      {
+        id: 'chunk-1',
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        userId: 'u1',
+        chunkIndex: 0,
+        content: 'resume chunk',
+        displayName: 'Ada',
+        currentTitle: 'Frontend Engineer',
+        currentCompany: 'Acme',
+        profileUrl: 'https://example.test/ada',
+        score: '0.91',
+      },
+    ]);
+
+    const result = await searchCandidateResumeChunks({
+      userId: 'u1',
+      queryVector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-3-small',
+      topK: 3,
+      allowAlreadyContacted: false,
+    });
+
+    const sqlText = String(prismaMock.$queryRaw.mock.calls[0][0].strings.join(' '));
+    expect(sqlText).toContain('c.user_id =');
+    expect(sqlText).toContain('c.embedding_model =');
+    expect(sqlText).toContain('c.embedding_dimension =');
+    expect(sqlText).toContain('candidate.contacted = false');
+    expect(sqlText).toContain('ORDER BY c.embedding <=>');
+    expect(result[0]?.score).toBe(0.91);
+  });
+
+  it('upserts JD screening results by job description and candidate', async () => {
+    prismaMock.candidateScreeningResult.findFirst.mockResolvedValueOnce(null);
+    prismaMock.candidateScreeningResult.create.mockResolvedValueOnce({
+      id: 'result-1',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'both',
+      tags: { skills: ['React'] },
+      scoreDetail: { total: 91 },
+      finalScore: 91,
+      rank: 1,
+      decisionAction: 'chat',
+      decisionPriority: 'high',
+      decisionReason: 'Strong fit',
+      actionPlan: { action: 'chat', priority: 'high', message: 'Hi', reason: 'Strong fit' },
+      actionStatus: 'planned',
+      interviewStage: 'screened',
+      notes: null,
+      createdAt,
+      updatedAt,
+    });
+
+    await upsertCandidateScreeningResult({
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'both',
+      tags: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      scoreDetail: { skill: 30, domain: 20, ability: 20, risk: 0, llmBonus: 21, total: 91 },
+      finalScore: 91,
+      rank: 1,
+      decisionAction: 'chat',
+      decisionPriority: 'high',
+      decisionReason: 'Strong fit',
+      actionPlan: { action: 'chat', priority: 'high', message: 'Hi', reason: 'Strong fit' },
+    });
+
+    expect(prismaMock.candidateScreeningResult.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+    });
+    expect(prismaMock.candidateScreeningResult.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'u1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+      }),
+    });
+    expect(prismaMock.candidateScreeningResult.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not reset existing progress when refreshing a screening result', async () => {
+    const existingResult = {
+      id: 'result-1',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'vector_recall',
+      tags: { skills: ['React'] },
+      scoreDetail: { total: 88 },
+      finalScore: 88,
+      rank: 2,
+      decisionAction: 'chat',
+      decisionPriority: 'medium',
+      decisionReason: 'Still fits',
+      actionPlan: null,
+      actionStatus: 'success',
+      interviewStage: 'contacted',
+      notes: 'Already reached out',
+      createdAt,
+      updatedAt,
+    };
+    prismaMock.candidateScreeningResult.findFirst
+      .mockResolvedValueOnce(existingResult)
+      .mockResolvedValueOnce({ ...existingResult, finalScore: 88, rank: 2 });
+    prismaMock.candidateScreeningResult.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await upsertCandidateScreeningResult({
+      userId: 'u1',
+      runId: 'run-2',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'vector_recall',
+      tags: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      scoreDetail: { skill: 28, domain: 20, ability: 20, risk: 0, llmBonus: 20, total: 88 },
+      finalScore: 88,
+      rank: 2,
+      decisionAction: 'chat',
+      decisionPriority: 'medium',
+      decisionReason: 'Still fits',
+    });
+
+    const call = prismaMock.candidateScreeningResult.updateMany.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(call.data).not.toHaveProperty('actionStatus');
+    expect(call.data).not.toHaveProperty('interviewStage');
+    expect(call.data).not.toHaveProperty('notes');
+  });
+
+  it('keeps run immutable when refreshing an existing screening result', async () => {
+    const existingResult = {
+      id: 'result-1',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'live_search',
+      tags: { skills: ['React'] },
+      scoreDetail: { total: 91 },
+      finalScore: 91,
+      rank: 1,
+      decisionAction: 'chat',
+      decisionPriority: 'high',
+      decisionReason: 'Strong fit',
+      actionPlan: null,
+      actionStatus: 'success',
+      interviewStage: 'contacted',
+      notes: 'Already contacted',
+      createdAt,
+      updatedAt,
+    };
+    prismaMock.candidateScreeningResult.findFirst
+      .mockResolvedValueOnce(existingResult)
+      .mockResolvedValueOnce({ ...existingResult, finalScore: 88, rank: 2 });
+    prismaMock.candidateScreeningResult.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await upsertCandidateScreeningResult({
+      userId: 'u1',
+      runId: 'run-2',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'vector_recall',
+      tags: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      scoreDetail: { skill: 28, domain: 20, ability: 20, risk: 0, llmBonus: 20, total: 88 },
+      finalScore: 88,
+      rank: 2,
+      decisionAction: 'chat',
+      decisionPriority: 'medium',
+      decisionReason: 'Still fits',
+    });
+
+    const updateCall = prismaMock.candidateScreeningResult.updateMany.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(updateCall.data).not.toHaveProperty('runId');
+  });
+
+  it('refreshes screening results through user-scoped lookup and update', async () => {
+    const existingResult = {
+      id: 'result-1',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'live_search',
+      tags: { skills: ['React'] },
+      scoreDetail: { total: 91 },
+      finalScore: 91,
+      rank: 1,
+      decisionAction: 'chat',
+      decisionPriority: 'high',
+      decisionReason: 'Strong fit',
+      actionPlan: null,
+      actionStatus: 'success',
+      interviewStage: 'contacted',
+      notes: 'Already contacted',
+      createdAt,
+      updatedAt,
+    };
+    prismaMock.candidateScreeningResult.findFirst
+      .mockResolvedValueOnce(existingResult)
+      .mockResolvedValueOnce({ ...existingResult, finalScore: 88 });
+    prismaMock.candidateScreeningResult.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await upsertCandidateScreeningResult({
+      userId: 'u1',
+      runId: 'run-2',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'vector_recall',
+      tags: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      scoreDetail: { skill: 28, domain: 20, ability: 20, risk: 0, llmBonus: 20, total: 88 },
+      finalScore: 88,
+      rank: 2,
+      decisionAction: 'chat',
+      decisionPriority: 'medium',
+      decisionReason: 'Still fits',
+    });
+
+    expect(prismaMock.candidateScreeningResult.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+    });
+    expect(prismaMock.candidateScreeningResult.updateMany).toHaveBeenCalledWith({
+      where: { id: 'result-1', userId: 'u1' },
+      data: expect.objectContaining({
+        finalScore: 88,
+        decisionAction: 'chat',
+      }),
+    });
+    expect(prismaMock.candidateScreeningResult.upsert).not.toHaveBeenCalled();
+  });
+
+  it('retries scoped screening result refresh when create races on unique constraint', async () => {
+    const uniqueError = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+    const existingResult = {
+      id: 'result-1',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'live_search',
+      tags: { skills: ['React'] },
+      scoreDetail: { total: 91 },
+      finalScore: 91,
+      rank: 1,
+      decisionAction: 'chat',
+      decisionPriority: 'high',
+      decisionReason: 'Strong fit',
+      actionPlan: null,
+      actionStatus: 'success',
+      interviewStage: 'contacted',
+      notes: 'Already contacted',
+      createdAt,
+      updatedAt,
+    };
+    prismaMock.candidateScreeningResult.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existingResult)
+      .mockResolvedValueOnce({ ...existingResult, finalScore: 88, rank: 2 });
+    prismaMock.candidateScreeningResult.create.mockRejectedValueOnce(uniqueError);
+    prismaMock.candidateScreeningResult.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await upsertCandidateScreeningResult({
+      userId: 'u1',
+      runId: 'run-2',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      source: 'vector_recall',
+      tags: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      scoreDetail: { skill: 28, domain: 20, ability: 20, risk: 0, llmBonus: 20, total: 88 },
+      finalScore: 88,
+      rank: 2,
+      decisionAction: 'chat',
+      decisionPriority: 'medium',
+      decisionReason: 'Still fits',
+    });
+
+    expect(result.id).toBe('result-1');
+    expect(prismaMock.candidateScreeningResult.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+    });
+    expect(prismaMock.candidateScreeningResult.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+    });
+    const updateCall = prismaMock.candidateScreeningResult.updateMany.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(updateCall.data).not.toHaveProperty('runId');
+    expect(updateCall.data).not.toHaveProperty('actionStatus');
+    expect(updateCall.data).not.toHaveProperty('interviewStage');
+    expect(updateCall.data).not.toHaveProperty('notes');
+    expect(prismaMock.candidateScreeningResult.upsert).not.toHaveBeenCalled();
+  });
+
+  it('updates interview progress only in user and JD scope', async () => {
+    prismaMock.candidateScreeningResult.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.candidateScreeningResult.findFirst.mockResolvedValueOnce({
+      id: 'result-1',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      resumeId: null,
+      source: 'live_search',
+      tags: { skills: [] },
+      scoreDetail: { total: 50 },
+      finalScore: 50,
+      rank: 2,
+      decisionAction: 'collect',
+      decisionPriority: 'medium',
+      decisionReason: 'Need resume',
+      actionPlan: null,
+      actionStatus: 'planned',
+      interviewStage: 'contacted',
+      notes: 'Reached out',
+      createdAt,
+      updatedAt,
+    });
+
+    await updateCandidateInterviewProgress({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      interviewStage: 'contacted',
+      notes: 'Reached out',
+    });
+
+    expect(prismaMock.candidateScreeningResult.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+      data: { interviewStage: 'contacted', notes: 'Reached out' },
+    });
+    expect(prismaMock.candidateScreeningResult.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+    });
+  });
+
+  it('creates action logs with idempotency key', async () => {
+    prismaMock.candidateActionLog.upsert.mockResolvedValueOnce({
+      id: 'action-1',
+      userId: 'u1',
+      runId: 'run-1',
+      screeningResultId: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'dry_run',
+      action: 'chat',
+      message: 'Hi',
+      status: 'planned',
+      idempotencyKey: 'idem-1',
+      browserTrace: null,
+      errorMessage: null,
+      createdAt,
+      updatedAt,
+    });
+
+    await createCandidateActionLog({
+      userId: 'u1',
+      runId: 'run-1',
+      screeningResultId: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'dry_run',
+      action: 'chat',
+      message: 'Hi',
+      status: 'planned',
+      idempotencyKey: 'idem-1',
+      browserTrace: null,
+    });
+
+    expect(prismaMock.candidateActionLog.upsert).toHaveBeenCalledWith({
+      where: {
+        userId_idempotencyKey: {
+          userId: 'u1',
+          idempotencyKey: 'idem-1',
+        },
+      },
+      create: expect.objectContaining({
+        userId: 'u1',
+        idempotencyKey: 'idem-1',
+        screeningResultId: 'result-1',
+      }),
+      update: {},
+    });
+  });
+
+  it('claims a planned action log atomically before execution', async () => {
+    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.candidateActionLog.findFirst.mockResolvedValueOnce({
+      id: 'action-1',
+      userId: 'u1',
+      runId: 'run-1',
+      screeningResultId: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'dry_run',
+      action: 'chat',
+      message: 'Hi',
+      status: 'running',
+      idempotencyKey: 'idem-1',
+      browserTrace: null,
+      errorMessage: null,
+      createdAt,
+      updatedAt,
+    });
+
+    const result = await claimCandidateActionLog({ userId: 'u1', id: 'action-1' });
+
+    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: { id: 'action-1', userId: 'u1', status: 'planned' },
+      data: { status: 'running', browserTrace: expect.anything(), errorMessage: null },
+    });
+    expect(prismaMock.candidateActionLog.findFirst).toHaveBeenCalledWith({
+      where: { id: 'action-1', userId: 'u1' },
+    });
+    expect(result?.status).toBe('running');
+  });
+
+  it('returns null when a planned action log cannot be claimed', async () => {
+    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const result = await claimCandidateActionLog({ userId: 'u1', id: 'action-1' });
+
+    expect(result).toBeNull();
+    expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('lists JD-scoped results that have current-run planned action logs', async () => {
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await listCandidateScreeningResults({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      runId: 'run-2',
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        actionLogs: {
+          some: {
+            userId: 'u1',
+            runId: 'run-2',
+            status: 'planned',
+          },
+        },
+      },
+      include: { candidate: true, resume: true },
+      orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
+      skip: 0,
+      take: 10,
+    });
+  });
+
+  it('can restrict current-run planned action results to executable actions', async () => {
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await listCandidateScreeningResults({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      runId: 'run-2',
+      plannedActions: ['chat', 'collect'],
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        actionLogs: {
+          some: {
+            userId: 'u1',
+            runId: 'run-2',
+            status: 'planned',
+            action: { in: ['chat', 'collect'] },
+          },
+        },
+      },
+      include: { candidate: true, resume: true },
+      orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
+      skip: 0,
+      take: 10,
+    });
+  });
+});

@@ -60,6 +60,7 @@ jest.mock('lucide-react', () => ({
   BadgeCheck: () => <div data-testid="badge-check-icon" />,
   Building2: () => <div data-testid="building2-icon" />,
   Eye: () => <div data-testid="eye-icon" />,
+  ExternalLink: () => <div data-testid="external-link-icon" />,
   FileText: () => <div data-testid="file-text-icon" />,
   ListFilter: () => <div data-testid="list-filter-icon" />,
   Plus: () => <div data-testid="plus-icon" />,
