@@ -231,6 +231,7 @@ async function evaluateCandidates(params: {
   jobDescription: JobDescriptionDto;
   evaluationSchema: EvaluationSchema;
   stats: ScreeningRunStats;
+  strictEvaluation: boolean;
 }): Promise<Map<string, CandidateEvaluation>> {
   const evaluations = new Map<string, CandidateEvaluation>();
 
@@ -240,6 +241,7 @@ async function evaluateCandidates(params: {
       evaluationSchema: params.evaluationSchema,
       resumeText: context.resumeText,
       candidateName: context.displayName,
+      strict: params.strictEvaluation,
     });
     evaluations.set(context.candidateId, evaluation);
     params.stats.evaluated += 1;
@@ -425,6 +427,7 @@ export async function runCandidateScreening(params: {
       jobDescription: params.jobDescription,
       evaluationSchema,
       stats,
+      strictEvaluation: params.request.mode === 'execution',
     });
 
     await updateStage({

@@ -472,6 +472,33 @@ describe('candidate screening runner', () => {
     );
   });
 
+  it('passes strict evaluation when the screening run is execution mode', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [makeRawCandidate()],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobTitle: 'Frontend Engineer',
+        candidateName: 'Ada Lovelace',
+        strict: true,
+      }),
+    );
+  });
+
   it('records failed status and error message when adapter search fails', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() => {
