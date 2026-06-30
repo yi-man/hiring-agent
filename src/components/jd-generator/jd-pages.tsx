@@ -17,6 +17,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
+import { createCandidateScreeningRun } from '@/lib/candidate-screening/client';
+import type { CandidateScreeningRunDto } from '@/lib/candidate-screening/repo';
 import {
   createJobDescriptionFromInput,
   fetchJobDescription,
@@ -458,6 +460,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [isSaving, setIsSaving] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isScreening, setIsScreening] = useState(false);
+  const [latestScreeningRun, setLatestScreeningRun] = useState<CandidateScreeningRunDto | null>(
+    null,
+  );
   const [publishCompany, setPublishCompany] = useState('星河智能');
   const [publishSalary, setPublishSalary] = useState('25-40K');
   const [publishLocation, setPublishLocation] = useState('上海');
@@ -588,7 +594,22 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     }
   }
 
+  async function handleStartScreening() {
+    if (!jobDescription) return;
+    setIsScreening(true);
+    setError('');
+    try {
+      const run = await createCandidateScreeningRun(jobDescription.id, { platform: 'boss-like' });
+      setLatestScreeningRun(run);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动候选人筛选失败');
+    } finally {
+      setIsScreening(false);
+    }
+  }
+
   const context = jobDescription?.generationMeta?.context ?? null;
+  const canScreenCandidates = status === 'published' || status === 'ready_to_publish';
 
   if (isLoading) {
     return <div className="text-muted-foreground py-12 text-center text-sm">正在加载 JD…</div>;
@@ -829,6 +850,52 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 </div>
               ) : null}
             </div>
+
+            {canScreenCandidates ? (
+              <div className="border-border space-y-3 border-t pt-3">
+                <div className="flex items-center gap-2">
+                  <ListFilter className="text-muted-foreground h-4 w-4" aria-hidden />
+                  <div className="text-foreground text-sm font-medium">候选人筛选</div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button
+                    className="gap-2"
+                    color="primary"
+                    disableRipple
+                    isDisabled={isScreening}
+                    type="button"
+                    onClick={() => void handleStartScreening()}
+                  >
+                    <ListFilter className="h-4 w-4" aria-hidden />
+                    {isScreening ? '启动中' : '筛选候选人'}
+                  </Button>
+                  <Button
+                    as={Link}
+                    className="gap-2"
+                    disableRipple
+                    href={`/jd-generator/${jobDescription.id}/candidates`}
+                    variant="bordered"
+                  >
+                    <ListFilter className="h-4 w-4" aria-hidden />
+                    已筛选候选人
+                  </Button>
+                </div>
+                {latestScreeningRun ? (
+                  <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
+                    <div className="text-foreground flex items-center justify-between gap-2 font-medium">
+                      <span>筛选任务 {latestScreeningRun.id}</span>
+                      <span className="text-muted-foreground">{latestScreeningRun.status}</span>
+                    </div>
+                    <Link
+                      className="text-primary mt-1 inline-flex text-xs hover:underline"
+                      href={`/jd-generator/${jobDescription.id}/candidates`}
+                    >
+                      查看筛选结果
+                    </Link>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </section>
 
           <section className="border-border space-y-3 rounded-lg border p-4">
