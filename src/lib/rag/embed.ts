@@ -11,12 +11,16 @@ type EmbedMultimodalResponse = {
 };
 
 function getEmbeddingsUrl(multimodal: boolean): string {
-  const base = env.OPENAI_BASE_URL.replace(/\/$/, '');
+  const base = (env.EMBEDDING_BASE_URL ?? env.OPENAI_BASE_URL).replace(/\/$/, '');
   return multimodal ? `${base}/embeddings/multimodal` : `${base}/embeddings`;
 }
 
-function getEmbeddingModel(model?: string): string {
-  return model ?? env.OPENAI_EMBEDDING_MODEL;
+export function getConfiguredEmbeddingModel(model?: string): string {
+  return model ?? env.EMBEDDING_MODEL ?? env.OPENAI_EMBEDDING_MODEL;
+}
+
+function getEmbeddingApiKey(): string | undefined {
+  return env.EMBEDDING_API_KEY ?? env.OPENAI_API_KEY;
 }
 
 function shouldUseMultimodalEmbedding(model: string): boolean {
@@ -37,8 +41,9 @@ function assertNumericVector(maybeVector: unknown, index: number): number[] {
 }
 
 async function requestMultimodalEmbedding(text: string, model: string): Promise<number[]> {
-  if (!env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is not configured');
+  const apiKey = getEmbeddingApiKey();
+  if (!apiKey) {
+    throw new Error('EMBEDDING_API_KEY or OPENAI_API_KEY is not configured');
   }
 
   const controller = new AbortController();
@@ -49,7 +54,7 @@ async function requestMultimodalEmbedding(text: string, model: string): Promise<
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
@@ -75,8 +80,9 @@ async function requestStandardEmbeddings(
   input: string | string[],
   model: string,
 ): Promise<number[][]> {
-  if (!env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is not configured');
+  const apiKey = getEmbeddingApiKey();
+  if (!apiKey) {
+    throw new Error('EMBEDDING_API_KEY or OPENAI_API_KEY is not configured');
   }
 
   const controller = new AbortController();
@@ -87,7 +93,7 @@ async function requestStandardEmbeddings(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
@@ -113,7 +119,7 @@ async function requestStandardEmbeddings(
 }
 
 async function requestEmbeddings(input: string | string[], model?: string): Promise<number[][]> {
-  const resolvedModel = getEmbeddingModel(model);
+  const resolvedModel = getConfiguredEmbeddingModel(model);
   if (shouldUseMultimodalEmbedding(resolvedModel)) {
     const texts = Array.isArray(input) ? input : [input];
     return Promise.all(texts.map((t) => requestMultimodalEmbedding(t, resolvedModel)));

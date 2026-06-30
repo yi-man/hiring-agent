@@ -108,4 +108,19 @@ describe('evaluateCandidateForJd', () => {
     expect(result.decision).toMatchObject({ action: 'skip', priority: 'low' });
     expect(result.decision.reason).toContain('LLM 评估失败，已使用规则兜底');
   });
+
+  it('rethrows LLM failures in strict mode', async () => {
+    await expect(
+      evaluateCandidateForJd({
+        jobTitle: '高级后端工程师',
+        evaluationSchema,
+        resumeText: 'Java Spring Boot 高并发',
+        candidateName: '王小明',
+        strict: true,
+        runLLM: async () => {
+          throw new Error('OPENAI_API_KEY is not configured');
+        },
+      }),
+    ).rejects.toThrow('OPENAI_API_KEY is not configured');
+  });
 });

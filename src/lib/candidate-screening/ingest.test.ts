@@ -8,12 +8,14 @@ const replaceCandidateResumeChunksMock = jest.fn();
 
 jest.mock('@/lib/env', () => ({
   env: {
+    EMBEDDING_MODEL: 'text-embedding-v3',
     OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
   },
 }));
 
 jest.mock('@/lib/rag/embed', () => ({
   embedDocuments: (...args: unknown[]) => embedDocumentsMock(...args),
+  getConfiguredEmbeddingModel: () => 'text-embedding-v3',
 }));
 
 jest.mock('@/lib/rag/markdown', () => ({
@@ -105,7 +107,7 @@ describe('ingestRawCandidate', () => {
     expect(embedDocumentsMock).toHaveBeenCalledWith(['Java Spring Boot']);
     expect(replaceCandidateResumeChunksMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        embeddingModel: 'text-embedding-3-small',
+        embeddingModel: 'text-embedding-v3',
         chunks: [
           expect.objectContaining({
             chunkIndex: 0,

@@ -26,6 +26,7 @@ const embedQueryMock = jest.fn();
 jest.mock('@/lib/rag/embed', () => ({
   embedDocuments: (...args: unknown[]) => embedDocumentsMock(...args),
   embedQuery: (...args: unknown[]) => embedQueryMock(...args),
+  getConfiguredEmbeddingModel: () => 'text-embedding-3-small',
 }));
 
 type BossLikeServer = {
@@ -118,6 +119,7 @@ function renderResumeListPage(): string {
     <main>
       <h1>候选人库</h1>
       <label>搜索候选人 <input name="keyword" type="search" /></label>
+      <button type="button">搜索</button>
       <p>简历</p>
       <section>${candidateFixtures().join('\n')}</section>
     </main>
@@ -138,8 +140,10 @@ function renderResumeDetailPage(id: string): string {
       ${article}
       <button type="button">收藏</button>
       <button type="button" id="open-chat">打招呼</button>
-      <label>消息 <textarea name="message"></textarea></label>
-      <button type="button">发送</button>
+      <form method="post" action="/employer/resumes/${escapeHtml(id)}/messages">
+        <label>消息 <textarea name="message"></textarea></label>
+        <button type="submit">发送</button>
+      </form>
     </main>
   </body>
 </html>`;
@@ -158,6 +162,14 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     }
     if (url.pathname === '/employer/resumes') {
       response.end(renderResumeListPage());
+      return;
+    }
+    const messageMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)\/messages$/);
+    if (request.method === 'POST' && messageMatch) {
+      request.resume();
+      request.on('end', () => {
+        response.end('<!doctype html><html><body>Message sent</body></html>');
+      });
       return;
     }
     const detailMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)$/);
@@ -336,6 +348,72 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(actionLogs.every((log) => log.mode === 'dry_run')).toBe(true);
       expect(actionLogs.every((log) => log.status === 'planned')).toBe(true);
       expect(bossLike.requests).toContain('GET /employer/resumes');
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('executes planned chat actions through the browser during execution runs', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const run = await createCandidateScreeningRun({
+        userId,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        mode: 'execution',
+        status: 'pending',
+      });
+
+      await runCandidateScreening({
+        runId: run.id,
+        userId,
+        jobDescription,
+        request: {
+          platform: 'boss-like',
+          mode: 'execution',
+          maxCandidates: 1,
+          batchSize: 1,
+          allowAlreadyContacted: false,
+        },
+        dependencies: {
+          createAdapter: () =>
+            new BossLikeCandidateSourceAdapter({
+              baseUrl: bossLike.baseUrl,
+              executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+              username: 'admin',
+              password: 'boss123',
+            }),
+          evaluateCandidate,
+        },
+      });
+
+      const completedRun = await prisma.candidateScreeningRun.findUniqueOrThrow({
+        where: { id: run.id },
+      });
+      const actionLogs = await prisma.candidateActionLog.findMany({
+        where: { userId, runId: run.id },
+      });
+      const result = await prisma.candidateScreeningResult.findFirstOrThrow({
+        where: { userId, runId: run.id, jobDescriptionId: jobDescription.id },
+      });
+
+      expect(completedRun.status).toBe('success');
+      expect(completedRun.currentStage).toBe('finalizing');
+      expect(actionLogs).toHaveLength(1);
+      expect(actionLogs[0]).toMatchObject({
+        mode: 'execution',
+        action: 'chat',
+        status: 'success',
+      });
+      expect(result.actionStatus).toBe('success');
+      expect(result.interviewStage).toBe('contacted');
+      expect(bossLike.requests).toContain('GET /employer/resumes');
+      expect(bossLike.requests).toContain('GET /employer/resumes/boss-cand-1');
+      expect(bossLike.requests).toContain('POST /employer/resumes/boss-cand-1/messages');
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();

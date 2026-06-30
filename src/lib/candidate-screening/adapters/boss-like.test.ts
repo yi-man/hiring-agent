@@ -174,6 +174,44 @@ class StructuredSnapshotFailureExecutor extends FakeBrowserExecutor {
   }
 }
 
+class StructuredResumeListExecutor extends FakeBrowserExecutor {
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    this.calls.push('snapshotStructured');
+    return {
+      url: 'http://localhost:6183/employer/resumes',
+      title: 'Boss Like',
+      pageState: 'list',
+      headings: [],
+      forms: [],
+      links: [],
+      textBlocks: [],
+    };
+  }
+}
+
+class AmbiguousResumeTextExecutor extends FakeBrowserExecutor {
+  async waitForText(text: string): Promise<BrowserStepResult> {
+    this.calls.push(`waitForText:${text}`);
+    return {
+      success: false,
+      error: 'ambiguous_target: Multiple candidates matched text "简历"',
+    };
+  }
+}
+
+class EmptyThenResultExecutor extends FakeBrowserExecutor {
+  private cardChecks = 0;
+
+  async check(check: PublishStepCheck): Promise<boolean> {
+    this.calls.push(`check:${check.id ?? check.text ?? check.selector ?? ''}`);
+    if (check.type === 'dom_exists' && check.selector === 'article[data-candidate-id]') {
+      this.cardChecks += 1;
+      return this.cardChecks > 1;
+    }
+    return true;
+  }
+}
+
 function createSnapshotlessExecutor(): BrowserExecutor & { calls: string[] } {
   const calls: string[] = [];
   return {
@@ -265,6 +303,21 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
+  it('does not treat raw app bootstrap text as login when structured state is the resume list', async () => {
+    const executor = new StructuredResumeListExecutor([
+      '<style>.password-field{display:block}</style><main></main>',
+    ]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await adapter.loginIfNeeded();
+
+    expect(executor.calls).toEqual([
+      'navigate:http://localhost:6183/employer/resumes',
+      'snapshot',
+      'snapshotStructured',
+    ]);
+  });
+
   it('extracts candidate cards from a structured resume list snapshot', () => {
     expect(extractBossLikeCandidatesFromHtml(resumeListFixture)).toEqual([
       {
@@ -299,6 +352,41 @@ describe('BossLikeCandidateSourceAdapter', () => {
         resumeText: 'Java Spring Boot 高并发 微服务 分布式 系统设计',
       }),
     ]);
+  });
+
+  it('waits for candidate cards instead of ambiguous resume text before reading snapshots', async () => {
+    const executor = new AmbiguousResumeTextExecutor([
+      '<main>候选人列表</main>',
+      resumeListFixture,
+    ]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const batches = await collectAsyncBatches(
+      adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }),
+    );
+
+    expect(executor.calls).toContain('check:article[data-candidate-id]');
+    expect(executor.calls).not.toContain('waitForText:简历');
+    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('boss-1');
+  });
+
+  it('submits each keyword search and continues after an empty result page', async () => {
+    const executor = new EmptyThenResultExecutor([
+      '<main>候选人列表</main>',
+      '<main>暂无简历数据</main>',
+      resumeListFixture,
+    ]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const batches = await collectAsyncBatches(
+      adapter.searchCandidates(
+        { ...searchPlan, keywords: ['不存在的关键词', 'Java'] },
+        { maxCandidates: 1, batchSize: 1 },
+      ),
+    );
+
+    expect(executor.calls.filter((call) => call === 'click:搜索')).toHaveLength(2);
+    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('boss-1');
   });
 
   it('requires raw browser snapshots for candidate search', async () => {

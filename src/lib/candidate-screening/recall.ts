@@ -1,5 +1,4 @@
-import { env } from '@/lib/env';
-import { embedQuery } from '@/lib/rag/embed';
+import { embedQuery, getConfiguredEmbeddingModel } from '@/lib/rag/embed';
 import { searchCandidateResumeChunks } from './repo';
 
 export async function recallCandidatesForJd(params: {
@@ -17,7 +16,7 @@ export async function recallCandidatesForJd(params: {
   return searchCandidateResumeChunks({
     userId: params.userId,
     queryVector,
-    embeddingModel: env.OPENAI_EMBEDDING_MODEL,
+    embeddingModel: getConfiguredEmbeddingModel(),
     topK: params.topK,
     allowAlreadyContacted: params.allowAlreadyContacted,
   });

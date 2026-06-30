@@ -24,6 +24,22 @@ const envBoolean = (defaultValue: boolean) =>
     }, z.boolean())
     .default(defaultValue);
 
+const optionalNonEmptyString = () =>
+  z.preprocess((value) => {
+    if (typeof value === 'string' && value.trim() === '') {
+      return undefined;
+    }
+    return value;
+  }, z.string().optional());
+
+const optionalUrl = () =>
+  z.preprocess((value) => {
+    if (typeof value === 'string' && value.trim() === '') {
+      return undefined;
+    }
+    return value;
+  }, z.string().url().optional());
+
 const envSchema = z.object({
   // 应用配置
   NEXT_PUBLIC_APP_NAME: z.string().default('Hiring Agent'),
@@ -55,6 +71,10 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  /** Embedding 专用 OpenAI-compatible 配置；未设置时回退到 OPENAI_*，兼容旧部署。 */
+  EMBEDDING_API_KEY: optionalNonEmptyString(),
+  EMBEDDING_BASE_URL: optionalUrl(),
+  EMBEDDING_MODEL: optionalNonEmptyString(),
   OPENAI_EMBEDDING_MODEL: z.string().default('doubao-embedding-vision-250615'),
   /**
    * auto: 当 OPENAI_EMBEDDING_MODEL 名含 embedding-vision 时走 /embeddings/multimodal（如豆包视觉向量）。

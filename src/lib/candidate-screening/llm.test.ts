@@ -95,6 +95,32 @@ describe('runCandidateEvaluationLLM', () => {
     expect(result.score.skill).toBe(90);
   });
 
+  it('instructs the model with the exact evaluation output contract and score scale', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: validContent } }] }),
+    } as Response);
+
+    await runCandidateEvaluationLLM({
+      jobTitle: '高级后端工程师',
+      evaluationSchema,
+      resumeText: 'Java 高并发',
+      candidateName: '王小明',
+    });
+
+    const request = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemPrompt = request.messages[0].content;
+
+    expect(systemPrompt).toEqual(expect.stringContaining('"tags"'));
+    expect(systemPrompt).toEqual(expect.stringContaining('"score"'));
+    expect(systemPrompt).toEqual(expect.stringContaining('"reason"'));
+    expect(systemPrompt).toEqual(expect.stringContaining('0-100'));
+    expect(systemPrompt).toEqual(expect.stringContaining('risk=0'));
+  });
+
   it('throws when API key is missing', async () => {
     mockEnv.OPENAI_API_KEY = '';
 

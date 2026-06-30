@@ -15,7 +15,7 @@ import type {
 } from '@/lib/jd-publishing/types';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DOM_SNAPSHOT_MAX_CHARS = 8_000;
+const DOM_SNAPSHOT_MAX_CHARS = 200_000;
 const RESOLVE_POLL_INTERVAL_MS = 50;
 
 export function resolveHeadlessOption(headless: boolean | undefined): boolean {

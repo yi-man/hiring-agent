@@ -5,12 +5,14 @@ const searchCandidateResumeChunksMock = jest.fn();
 
 jest.mock('@/lib/env', () => ({
   env: {
+    EMBEDDING_MODEL: 'text-embedding-v3',
     OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
   },
 }));
 
 jest.mock('@/lib/rag/embed', () => ({
   embedQuery: (...args: unknown[]) => embedQueryMock(...args),
+  getConfiguredEmbeddingModel: () => 'text-embedding-v3',
 }));
 
 jest.mock('./repo', () => ({
@@ -53,7 +55,7 @@ describe('recallCandidatesForJd', () => {
     expect(searchCandidateResumeChunksMock).toHaveBeenCalledWith({
       userId: 'u1',
       queryVector: [0.1, 0.2, 0.3],
-      embeddingModel: 'text-embedding-3-small',
+      embeddingModel: 'text-embedding-v3',
       topK: 5,
       allowAlreadyContacted: false,
     });
