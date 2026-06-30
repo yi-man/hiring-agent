@@ -59,7 +59,7 @@ test.describe('candidate screening UI', () => {
     test.skip(!HAS_DB_ENV, 'Requires POSTGRES_* or DATABASE_URL in env (see .env.local).');
   });
 
-  test('published JD links to candidate screening results and starts a dry-run', async ({
+  test('published JD links to candidate screening results and starts an execution run', async ({
     context,
     page,
   }, testInfo) => {
@@ -121,7 +121,7 @@ test.describe('candidate screening UI', () => {
                 userId: seeded.userId,
                 jobDescriptionId: 'jd-screening-1',
                 platform: 'boss-like',
-                mode: 'dry_run',
+                mode: 'execution',
                 status: 'pending',
                 currentStage: 'planning',
                 searchPlan: null,
@@ -142,7 +142,7 @@ test.describe('candidate screening UI', () => {
 
       await page.goto('/jd-generator/jd-screening-1');
       const startScreeningButton = page.getByRole('button', {
-        name: '筛选候选人',
+        name: '筛选并执行',
         exact: true,
       });
       await expect(startScreeningButton).toBeVisible();

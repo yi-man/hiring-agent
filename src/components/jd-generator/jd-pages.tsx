@@ -609,7 +609,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     setIsScreening(true);
     setError('');
     try {
-      const run = await createCandidateScreeningRun(jobDescription.id, { platform: 'boss-like' });
+      const run = await createCandidateScreeningRun(jobDescription.id, {
+        platform: 'boss-like',
+        mode: 'execution',
+      });
       setLatestScreeningRun(run);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人筛选失败');
@@ -877,7 +880,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     onClick={() => void handleStartScreening()}
                   >
                     <ListFilter className="h-4 w-4" aria-hidden />
-                    {isScreening ? '启动中' : '筛选候选人'}
+                    {isScreening ? '启动中' : '筛选并执行'}
                   </Button>
                   <Button
                     as={Link}

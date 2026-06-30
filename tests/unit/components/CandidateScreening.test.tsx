@@ -311,7 +311,7 @@ describe('candidate screening UI', () => {
   it('JD detail shows screening button and screened candidates link when published', async () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    expect(await screen.findByRole('button', { name: '筛选候选人' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '筛选并执行' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /已筛选候选人/ })).toHaveAttribute(
       'href',
       '/jd-generator/jd-1/candidates',
@@ -326,14 +326,15 @@ describe('candidate screening UI', () => {
     expect(trackingLink).toHaveAttribute('href', '/jd-generator/candidates');
   });
 
-  it('starts a dry-run screening run and shows the run id', async () => {
+  it('starts an execution screening run and shows the run id', async () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '筛选候选人' }));
+    fireEvent.click(await screen.findByRole('button', { name: '筛选并执行' }));
 
     await waitFor(() =>
       expect(createCandidateScreeningRunMock).toHaveBeenCalledWith('jd-1', {
         platform: 'boss-like',
+        mode: 'execution',
       }),
     );
     expect(await screen.findByText(/run-1/)).toBeInTheDocument();
