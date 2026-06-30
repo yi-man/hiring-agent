@@ -499,6 +499,129 @@ describe('candidate screening runner', () => {
     );
   });
 
+  it('creates planned action logs with the request mode', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [makeRawCandidate()],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'execution',
+        status: 'planned',
+        action: 'chat',
+      }),
+    );
+  });
+
+  it('automatically executes planned chat actions during an execution screening run', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [makeRawCandidate()],
+        }),
+      ),
+      chatCandidate: jest.fn().mockResolvedValue({
+        success: true,
+        browserTrace: { action: 'chat', candidateId: 'candidate-1' },
+      }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const plannedResult = makeResult({
+      id: 'result-1',
+      candidateId: 'candidate-1',
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+      interviewStage: 'to_contact',
+    });
+    const detail = makeDetail({
+      ...plannedResult,
+      actionLogs: [
+        {
+          id: 'action-log-1',
+          userId: 'user-1',
+          runId: 'run-1',
+          screeningResultId: 'result-1',
+          candidateId: 'candidate-1',
+          jobDescriptionId: 'jd-1',
+          platform: 'boss-like',
+          mode: 'execution',
+          action: 'chat',
+          message: 'chat candidate',
+          status: 'planned',
+          idempotencyKey: 'execution-key',
+          browserTrace: null,
+          errorMessage: null,
+          createdAt,
+          updatedAt,
+        },
+      ],
+    });
+
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValue(plannedResult);
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'execution' }),
+    );
+    expect(dependencies.repo.listResults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        runId: 'run-1',
+        plannedActions: ['chat', 'collect'],
+      }),
+    );
+    expect(dependencies.repo.claimActionLog).toHaveBeenCalledWith({
+      userId: 'user-1',
+      id: 'action-log-1',
+    });
+    expect(adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
+    expect(adapter.chatCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: 'candidate-1',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'https://example.com/ada',
+      },
+      chatDecision,
+    );
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'action-log-1',
+        status: 'success',
+        browserTrace: { action: 'chat', candidateId: 'candidate-1' },
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionStatus: 'success',
+        interviewStage: 'contacted',
+      }),
+    );
+  });
+
   it('records failed status and error message when adapter search fails', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() => {

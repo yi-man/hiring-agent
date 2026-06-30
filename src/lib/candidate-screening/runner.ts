@@ -168,7 +168,8 @@ async function updateStage(params: {
     | 'recalling_vectors'
     | 'evaluating'
     | 'ranking'
-    | 'planning_actions';
+    | 'planning_actions'
+    | 'executing_actions';
   stats: ScreeningRunStats;
 }): Promise<void> {
   await params.dependencies.repo.updateRun({
@@ -302,7 +303,7 @@ async function createPlannedActions(params: {
       candidateId: rankedCandidate.candidateId,
       jobDescriptionId: params.jobDescription.id,
       platform: params.request.platform,
-      mode: 'dry_run',
+      mode: params.request.mode,
       action: actionPlan.action,
       message: actionPlan.message,
       status: 'planned',
@@ -460,6 +461,30 @@ export async function runCandidateScreening(params: {
       evaluations,
       stats,
     });
+
+    if (params.request.mode === 'execution' && adapter) {
+      const executionAdapter = adapter;
+      await updateStage({
+        dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        currentStage: 'executing_actions',
+        stats,
+      });
+      await executePlannedActionsForRun({
+        dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescription.id,
+        getAdapterAfterClaim: async () => executionAdapter,
+        request: {
+          confirmExecution: true,
+          maxChatActions: params.request.maxCandidates,
+          maxCollectActions: params.request.maxCandidates,
+        },
+        stats,
+      });
+    }
 
     await dependencies.repo.updateRun({
       userId: params.userId,
@@ -644,6 +669,95 @@ async function markExecutionFailed(params: {
   });
 }
 
+async function executePlannedActionsForRun(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  getAdapterAfterClaim: () => Promise<CandidateSourceAdapter>;
+  request: ExecuteActionsRequest;
+  stats: ScreeningRunStats;
+}): Promise<void> {
+  let chatCount = 0;
+  let collectCount = 0;
+
+  const results = await params.dependencies.repo.listResults({
+    userId: params.userId,
+    jobDescriptionId: params.jobDescriptionId,
+    runId: params.runId,
+    plannedActions: ['chat', 'collect'],
+    limit: params.request.maxChatActions + params.request.maxCollectActions + 100,
+    offset: 0,
+  });
+
+  for (const result of results) {
+    if (
+      !shouldExecuteAction({
+        result,
+        chatCount,
+        collectCount,
+        request: params.request,
+      }) ||
+      !result.actionPlan
+    ) {
+      continue;
+    }
+
+    const detail = await params.dependencies.repo.getDetail({
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: result.candidateId,
+    });
+    if (!detail) continue;
+
+    const actionLog = getPlannedActionLog(detail, result.actionPlan.action, params.runId);
+    if (!actionLog) continue;
+
+    const claimedActionLog = await params.dependencies.repo.claimActionLog({
+      userId: params.userId,
+      id: actionLog.id,
+    });
+    if (!claimedActionLog) continue;
+
+    try {
+      const adapter = await params.getAdapterAfterClaim();
+      const storedCandidate = createStoredCandidateRef(result);
+      const executionResult =
+        result.actionPlan.action === 'chat'
+          ? await adapter.chatCandidate(storedCandidate, result.actionPlan)
+          : await adapter.collectCandidate(storedCandidate);
+
+      await persistExecutionResult({
+        dependencies: params.dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        result,
+        actionPlan: result.actionPlan,
+        actionLog: claimedActionLog,
+        executionResult,
+        stats: params.stats,
+      });
+    } catch (error) {
+      await markExecutionFailed({
+        dependencies: params.dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        result,
+        actionPlan: result.actionPlan,
+        actionLog: claimedActionLog,
+        errorMessage: getErrorMessage(error),
+        stats: params.stats,
+      });
+    }
+
+    if (result.actionPlan.action === 'chat') {
+      chatCount += 1;
+    } else {
+      collectCount += 1;
+    }
+  }
+}
+
 export async function executeScreeningRunActions(params: {
   runId: string;
   userId: string;
@@ -659,8 +773,6 @@ export async function executeScreeningRunActions(params: {
   const currentRun = run;
   const stats = currentRun.stats ? copyStats(currentRun.stats) : createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
-  let chatCount = 0;
-  let collectCount = 0;
 
   async function getAdapterAfterClaim(): Promise<CandidateSourceAdapter> {
     if (adapter) {
@@ -689,87 +801,15 @@ export async function executeScreeningRunActions(params: {
       stats: copyStats(stats),
     });
 
-    const results = await dependencies.repo.listResults({
+    await executePlannedActionsForRun({
+      dependencies,
       userId: params.userId,
-      jobDescriptionId: currentRun.jobDescriptionId,
       runId: params.runId,
-      plannedActions: ['chat', 'collect'],
-      limit: params.request.maxChatActions + params.request.maxCollectActions + 100,
-      offset: 0,
+      jobDescriptionId: currentRun.jobDescriptionId,
+      getAdapterAfterClaim,
+      request: params.request,
+      stats,
     });
-
-    for (const result of results) {
-      if (
-        !shouldExecuteAction({
-          result,
-          chatCount,
-          collectCount,
-          request: params.request,
-        }) ||
-        !result.actionPlan
-      ) {
-        continue;
-      }
-
-      const detail = await dependencies.repo.getDetail({
-        userId: params.userId,
-        jobDescriptionId: currentRun.jobDescriptionId,
-        candidateId: result.candidateId,
-      });
-      if (!detail) {
-        continue;
-      }
-
-      const actionLog = getPlannedActionLog(detail, result.actionPlan.action, params.runId);
-      if (!actionLog) {
-        continue;
-      }
-
-      const claimedActionLog = await dependencies.repo.claimActionLog({
-        userId: params.userId,
-        id: actionLog.id,
-      });
-      if (!claimedActionLog) {
-        continue;
-      }
-
-      try {
-        const claimedAdapter = await getAdapterAfterClaim();
-        const storedCandidate = createStoredCandidateRef(result);
-        const executionResult =
-          result.actionPlan.action === 'chat'
-            ? await claimedAdapter.chatCandidate(storedCandidate, result.actionPlan)
-            : await claimedAdapter.collectCandidate(storedCandidate);
-
-        await persistExecutionResult({
-          dependencies,
-          userId: params.userId,
-          runId: params.runId,
-          result,
-          actionPlan: result.actionPlan,
-          actionLog: claimedActionLog,
-          executionResult,
-          stats,
-        });
-      } catch (error) {
-        await markExecutionFailed({
-          dependencies,
-          userId: params.userId,
-          runId: params.runId,
-          result,
-          actionPlan: result.actionPlan,
-          actionLog: claimedActionLog,
-          errorMessage: getErrorMessage(error),
-          stats,
-        });
-      }
-
-      if (result.actionPlan.action === 'chat') {
-        chatCount += 1;
-      } else {
-        collectCount += 1;
-      }
-    }
 
     await dependencies.repo.updateRun({
       userId: params.userId,
