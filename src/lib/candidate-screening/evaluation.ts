@@ -50,6 +50,7 @@ export async function evaluateCandidateForJd(params: {
   resumeText: string;
   candidateName: string;
   runLLM?: RunCandidateLLM;
+  strict?: boolean;
 }) {
   const runLLM = params.runLLM ?? runCandidateEvaluationLLM;
   let output: CandidateEvaluationLlmOutput;
@@ -57,6 +58,10 @@ export async function evaluateCandidateForJd(params: {
   try {
     output = parseCandidateEvaluationOutput(await runLLM(params));
   } catch (error) {
+    if (params.strict) {
+      throw error;
+    }
+
     output = buildRuleBasedFallback({
       evaluationSchema: params.evaluationSchema,
       resumeText: params.resumeText,
