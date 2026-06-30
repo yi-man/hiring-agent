@@ -1,16 +1,19 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { JDDetailView } from '@/components/jd-generator/jd-pages';
+import { JDDetailView, JDListView } from '@/components/jd-generator/jd-pages';
 import { CandidateList } from '@/components/candidate-screening/candidate-list';
 import { CandidateDetail } from '@/components/candidate-screening/candidate-detail';
+import { CandidateTrackingDashboard } from '@/components/candidate-screening/tracking-dashboard';
 import type {
   CandidateDto,
   CandidateResumeDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultListItem,
   CandidateScreeningRunDto,
+  CandidateTrackingOverviewDto,
 } from '@/lib/candidate-screening/repo';
 import type { JD, JobDescriptionDto } from '@/types';
 
+const fetchJobDescriptionsMock = jest.fn();
 const fetchJobDescriptionMock = jest.fn();
 const fetchJobDescriptionPublishTasksMock = jest.fn();
 const updateJobDescriptionResourceMock = jest.fn();
@@ -19,6 +22,7 @@ const publishJobDescriptionResourceMock = jest.fn();
 const createCandidateScreeningRunMock = jest.fn();
 const fetchJdCandidatesMock = jest.fn();
 const fetchJdCandidateDetailMock = jest.fn();
+const fetchCandidateTrackingOverviewMock = jest.fn();
 const updateJdCandidateProgressMock = jest.fn();
 
 jest.mock('next/navigation', () => ({
@@ -30,7 +34,7 @@ jest.mock('@/lib/jd/client', () => ({
   fetchJobDescription: (...args: unknown[]) => fetchJobDescriptionMock(...args),
   fetchJobDescriptionPublishTasks: (...args: unknown[]) =>
     fetchJobDescriptionPublishTasksMock(...args),
-  fetchJobDescriptions: jest.fn(),
+  fetchJobDescriptions: (...args: unknown[]) => fetchJobDescriptionsMock(...args),
   publishJobDescriptionResource: (...args: unknown[]) => publishJobDescriptionResourceMock(...args),
   regenerateJobDescription: (...args: unknown[]) => regenerateJobDescriptionMock(...args),
   updateJobDescriptionResource: (...args: unknown[]) => updateJobDescriptionResourceMock(...args),
@@ -38,6 +42,8 @@ jest.mock('@/lib/jd/client', () => ({
 
 jest.mock('@/lib/candidate-screening/client', () => ({
   createCandidateScreeningRun: (...args: unknown[]) => createCandidateScreeningRunMock(...args),
+  fetchCandidateTrackingOverview: (...args: unknown[]) =>
+    fetchCandidateTrackingOverviewMock(...args),
   fetchJdCandidates: (...args: unknown[]) => fetchJdCandidatesMock(...args),
   fetchJdCandidateDetail: (...args: unknown[]) => fetchJdCandidateDetailMock(...args),
   updateJdCandidateProgress: (...args: unknown[]) => updateJdCandidateProgressMock(...args),
@@ -240,8 +246,44 @@ const sampleCandidateDetail: CandidateScreeningDetailDto = {
   ],
 };
 
+const sampleTrackingOverview: CandidateTrackingOverviewDto = {
+  jobs: [
+    {
+      jobDescription: {
+        id: 'jd-1',
+        department: '技术部',
+        position: '高级后端工程师',
+        status: 'published',
+        title: '高级后端工程师',
+        updatedAt: now,
+      },
+      totalCandidates: 2,
+      activeCandidates: 1,
+      interviewingCandidates: 1,
+      skippedCandidates: 1,
+      latestCandidateUpdatedAt: now,
+    },
+  ],
+  candidates: [
+    {
+      ...sampleCandidateListItem,
+      jobDescription: {
+        id: 'jd-1',
+        department: '技术部',
+        position: '高级后端工程师',
+        status: 'published',
+        title: '高级后端工程师',
+        updatedAt: now,
+      },
+      interviewStage: 'interviewing',
+      notes: '下周一面',
+    },
+  ],
+};
+
 describe('candidate screening UI', () => {
   beforeEach(() => {
+    fetchJobDescriptionsMock.mockReset();
     fetchJobDescriptionMock.mockReset();
     fetchJobDescriptionPublishTasksMock.mockReset();
     updateJobDescriptionResourceMock.mockReset();
@@ -250,12 +292,15 @@ describe('candidate screening UI', () => {
     createCandidateScreeningRunMock.mockReset();
     fetchJdCandidatesMock.mockReset();
     fetchJdCandidateDetailMock.mockReset();
+    fetchCandidateTrackingOverviewMock.mockReset();
     updateJdCandidateProgressMock.mockReset();
+    fetchJobDescriptionsMock.mockResolvedValue([sampleJobDescription]);
     fetchJobDescriptionMock.mockResolvedValue(sampleJobDescription);
     fetchJobDescriptionPublishTasksMock.mockResolvedValue([]);
     createCandidateScreeningRunMock.mockResolvedValue(sampleRun);
     fetchJdCandidatesMock.mockResolvedValue([sampleCandidateListItem]);
     fetchJdCandidateDetailMock.mockResolvedValue(sampleCandidateDetail);
+    fetchCandidateTrackingOverviewMock.mockResolvedValue(sampleTrackingOverview);
     updateJdCandidateProgressMock.mockResolvedValue({
       ...sampleCandidateListItem,
       interviewStage: 'phone_screen',
@@ -271,6 +316,14 @@ describe('candidate screening UI', () => {
       'href',
       '/jd-generator/jd-1/candidates',
     );
+  });
+
+  it('JD list links to the cross-JD candidate tracking dashboard', async () => {
+    render(<JDListView />);
+
+    const trackingLink = await screen.findByRole('button', { name: '候选人跟踪' });
+
+    expect(trackingLink).toHaveAttribute('href', '/jd-generator/candidates');
   });
 
   it('starts a dry-run screening run and shows the run id', async () => {
@@ -296,6 +349,22 @@ describe('candidate screening UI', () => {
     expect(screen.getAllByText('both').length).toBeGreaterThan(0);
     expect(screen.getByText('planned')).toBeInTheDocument();
     expect(screen.getAllByText('to_contact').length).toBeGreaterThan(0);
+  });
+
+  it('candidate tracking dashboard shows JD summaries and linked candidates', async () => {
+    render(<CandidateTrackingDashboard />);
+
+    expect(await screen.findByText('候选人跟踪')).toBeInTheDocument();
+    expect(screen.getByText('1 个跟进中')).toBeInTheDocument();
+    expect(screen.getByText('1 个面试中')).toBeInTheDocument();
+    expect(screen.getByText('下周一面')).toBeInTheDocument();
+
+    const candidateLink = screen.getByRole('link', { name: /Ada Lovelace/ });
+    expect(candidateLink).toHaveAttribute('href', '/jd-generator/jd-1/candidates/cand-1');
+    expect(screen.getByRole('button', { name: '查看原站' })).toHaveAttribute(
+      'href',
+      '/api/jd/jd-1/candidates/cand-1/original-profile',
+    );
   });
 
   it('candidate detail renders resume text and score reason', async () => {

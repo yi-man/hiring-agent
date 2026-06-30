@@ -8,6 +8,7 @@ import {
 import { GET as getScreeningRun } from '@/app/api/candidate-screening/runs/[runId]/route';
 import { GET as streamScreeningRun } from '@/app/api/candidate-screening/runs/[runId]/stream/route';
 import { POST as executeScreeningRunActionsRoute } from '@/app/api/candidate-screening/runs/[runId]/execute-actions/route';
+import { GET as getCandidateTracking } from '@/app/api/candidate-screening/tracking/route';
 import { GET as listJdCandidates } from '@/app/api/jd/[id]/candidates/route';
 import {
   GET as getJdCandidate,
@@ -21,6 +22,7 @@ import type {
   CandidateScreeningResultDto,
   CandidateScreeningResultListItem,
   CandidateScreeningRunDto,
+  CandidateTrackingOverviewDto,
 } from '@/lib/candidate-screening/repo';
 import type { JD, JobDescriptionDto } from '@/types';
 
@@ -30,6 +32,7 @@ const createAndStartCandidateScreeningRunMock = jest.fn();
 const listCandidateScreeningRunsMock = jest.fn();
 const getCandidateScreeningRunMock = jest.fn();
 const listCandidateScreeningResultsMock = jest.fn();
+const getCandidateTrackingOverviewMock = jest.fn();
 const getCandidateScreeningDetailMock = jest.fn();
 const updateCandidateInterviewProgressMock = jest.fn();
 const executeScreeningRunActionsMock = jest.fn();
@@ -73,6 +76,7 @@ jest.mock('@/lib/candidate-screening/repo', () => ({
   listCandidateScreeningRuns: (...args: unknown[]) => listCandidateScreeningRunsMock(...args),
   getCandidateScreeningRun: (...args: unknown[]) => getCandidateScreeningRunMock(...args),
   listCandidateScreeningResults: (...args: unknown[]) => listCandidateScreeningResultsMock(...args),
+  getCandidateTrackingOverview: (...args: unknown[]) => getCandidateTrackingOverviewMock(...args),
   getCandidateScreeningDetail: (...args: unknown[]) => getCandidateScreeningDetailMock(...args),
   updateCandidateInterviewProgress: (...args: unknown[]) =>
     updateCandidateInterviewProgressMock(...args),
@@ -218,6 +222,39 @@ const sampleCandidateListItem: CandidateScreeningResultListItem = {
   resume: sampleResume,
 };
 
+const sampleTrackingOverview: CandidateTrackingOverviewDto = {
+  jobs: [
+    {
+      jobDescription: {
+        id: 'jd-1',
+        department: 'Engineering',
+        position: 'Frontend Engineer',
+        status: 'published',
+        title: 'Frontend Engineer',
+        updatedAt: now,
+      },
+      totalCandidates: 1,
+      activeCandidates: 1,
+      interviewingCandidates: 0,
+      skippedCandidates: 0,
+      latestCandidateUpdatedAt: now,
+    },
+  ],
+  candidates: [
+    {
+      ...sampleCandidateListItem,
+      jobDescription: {
+        id: 'jd-1',
+        department: 'Engineering',
+        position: 'Frontend Engineer',
+        status: 'published',
+        title: 'Frontend Engineer',
+        updatedAt: now,
+      },
+    },
+  ],
+};
+
 const sampleCandidateDetail: CandidateScreeningDetailDto = {
   ...sampleCandidateListItem,
   actionLogs: [
@@ -270,6 +307,7 @@ describe('candidate screening API routes', () => {
     listCandidateScreeningRunsMock.mockReset();
     getCandidateScreeningRunMock.mockReset();
     listCandidateScreeningResultsMock.mockReset();
+    getCandidateTrackingOverviewMock.mockReset();
     getCandidateScreeningDetailMock.mockReset();
     updateCandidateInterviewProgressMock.mockReset();
     executeScreeningRunActionsMock.mockReset();
@@ -506,6 +544,22 @@ describe('candidate screening API routes', () => {
       limit: 25,
       offset: 5,
       interviewStage: 'to_contact',
+    });
+  });
+
+  it('returns cross-JD candidate tracking overview for the current user', async () => {
+    getCandidateTrackingOverviewMock.mockResolvedValueOnce(sampleTrackingOverview);
+
+    const response = await getCandidateTracking({
+      url: 'http://localhost/api/candidate-screening/tracking?limit=80',
+    } as Request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual(sampleTrackingOverview);
+    expect(getCandidateTrackingOverviewMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      limit: 80,
     });
   });
 

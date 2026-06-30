@@ -228,6 +228,16 @@ export function JDListView() {
           <Button
             as={Link}
             className="gap-2"
+            disableRipple
+            href="/jd-generator/candidates"
+            variant="bordered"
+          >
+            <ListFilter className="h-4 w-4" aria-hidden />
+            候选人跟踪
+          </Button>
+          <Button
+            as={Link}
+            className="gap-2"
             color="primary"
             disableRipple
             href="/jd-generator/new"

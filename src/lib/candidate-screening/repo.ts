@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { vectorToPgLiteral } from '@/lib/rag/knowledge-repo';
+import type { JDStatus } from '@/types';
 import type {
   CandidateActionPlan,
   CandidateActionStatus,
@@ -118,10 +119,24 @@ type CandidateActionLogRecord = {
   updatedAt: Date;
 };
 
+type TrackingJobDescriptionRecord = {
+  id: string;
+  userId: string;
+  department: string;
+  position: string;
+  status: string;
+  content: unknown;
+  updatedAt: Date;
+};
+
 type CandidateWithRelationsRecord = CandidateScreeningResultRecord & {
   candidate: CandidateRecord;
   resume: CandidateResumeRecord | null;
   actionLogs?: CandidateActionLogRecord[];
+};
+
+type CandidateTrackingRecord = CandidateWithRelationsRecord & {
+  jobDescription: TrackingJobDescriptionRecord;
 };
 
 export type CandidateScreeningRunDto = {
@@ -247,6 +262,33 @@ export type CandidateScreeningResultListItem = CandidateScreeningResultDto & {
 
 export type CandidateScreeningDetailDto = CandidateScreeningResultListItem & {
   actionLogs: CandidateActionLogDto[];
+};
+
+export type CandidateTrackingJobDescriptionDto = {
+  id: string;
+  department: string;
+  position: string;
+  status: JDStatus;
+  title: string;
+  updatedAt: string;
+};
+
+export type CandidateTrackingJobSummaryDto = {
+  jobDescription: CandidateTrackingJobDescriptionDto;
+  totalCandidates: number;
+  activeCandidates: number;
+  interviewingCandidates: number;
+  skippedCandidates: number;
+  latestCandidateUpdatedAt: string;
+};
+
+export type CandidateTrackingCandidateDto = CandidateScreeningResultListItem & {
+  jobDescription: CandidateTrackingJobDescriptionDto;
+};
+
+export type CandidateTrackingOverviewDto = {
+  jobs: CandidateTrackingJobSummaryDto[];
+  candidates: CandidateTrackingCandidateDto[];
 };
 
 export type CreateRunParams = {
@@ -532,6 +574,52 @@ function mapDetail(row: CandidateWithRelationsRecord): CandidateScreeningDetailD
     ...mapListItem(row),
     actionLogs: (row.actionLogs ?? []).map(mapActionLog),
   };
+}
+
+function readJobTitle(content: unknown, fallback: string): string {
+  if (content && typeof content === 'object' && 'title' in content) {
+    const title = (content as { title?: unknown }).title;
+    if (typeof title === 'string' && title.trim()) {
+      return title;
+    }
+  }
+  return fallback;
+}
+
+function mapTrackingJobDescription(
+  row: TrackingJobDescriptionRecord,
+): CandidateTrackingJobDescriptionDto {
+  return {
+    id: row.id,
+    department: row.department,
+    position: row.position,
+    status: row.status as JDStatus,
+    title: readJobTitle(row.content, row.position),
+    updatedAt: iso(row.updatedAt),
+  };
+}
+
+function mapTrackingCandidate(row: CandidateTrackingRecord): CandidateTrackingCandidateDto {
+  return {
+    ...mapListItem(row),
+    jobDescription: mapTrackingJobDescription(row.jobDescription),
+  };
+}
+
+function isActiveCandidate(row: CandidateScreeningResultDto): boolean {
+  return (
+    row.decisionAction !== 'skip' &&
+    row.interviewStage !== 'rejected' &&
+    row.interviewStage !== 'withdrawn'
+  );
+}
+
+function isInterviewingCandidate(row: CandidateScreeningResultDto): boolean {
+  return (
+    row.interviewStage === 'phone_screen' ||
+    row.interviewStage === 'interviewing' ||
+    row.interviewStage === 'offer'
+  );
 }
 
 export async function createCandidateScreeningRun(
@@ -923,6 +1011,50 @@ export async function listCandidateScreeningResults(
     take: params.limit,
   });
   return rows.map(mapListItem);
+}
+
+export async function getCandidateTrackingOverview(params: {
+  userId: string;
+  limit?: number;
+}): Promise<CandidateTrackingOverviewDto> {
+  const limit = Math.max(1, Math.min(500, Math.trunc(params.limit ?? 200)));
+  const rows = await prisma.candidateScreeningResult.findMany({
+    where: { userId: params.userId },
+    include: { candidate: true, resume: true, jobDescription: true },
+    orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+    take: limit,
+  });
+  const candidates = (rows as CandidateTrackingRecord[]).map(mapTrackingCandidate);
+  const jobsById = new Map<string, CandidateTrackingJobSummaryDto>();
+
+  for (const candidate of candidates) {
+    const current = jobsById.get(candidate.jobDescription.id);
+    const nextTotal = (current?.totalCandidates ?? 0) + 1;
+    const nextActive = (current?.activeCandidates ?? 0) + (isActiveCandidate(candidate) ? 1 : 0);
+    const nextInterviewing =
+      (current?.interviewingCandidates ?? 0) + (isInterviewingCandidate(candidate) ? 1 : 0);
+    const nextSkipped =
+      (current?.skippedCandidates ?? 0) + (candidate.decisionAction === 'skip' ? 1 : 0);
+    const latestCandidateUpdatedAt =
+      !current || candidate.updatedAt > current.latestCandidateUpdatedAt
+        ? candidate.updatedAt
+        : current.latestCandidateUpdatedAt;
+
+    jobsById.set(candidate.jobDescription.id, {
+      jobDescription: candidate.jobDescription,
+      totalCandidates: nextTotal,
+      activeCandidates: nextActive,
+      interviewingCandidates: nextInterviewing,
+      skippedCandidates: nextSkipped,
+      latestCandidateUpdatedAt,
+    });
+  }
+
+  const jobs = [...jobsById.values()].sort((left, right) =>
+    right.latestCandidateUpdatedAt.localeCompare(left.latestCandidateUpdatedAt),
+  );
+
+  return { jobs, candidates };
 }
 
 export async function getCandidateScreeningDetail(params: {

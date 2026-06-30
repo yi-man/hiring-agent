@@ -3,6 +3,7 @@ import type {
   CandidateScreeningResultDto,
   CandidateScreeningResultListItem,
   CandidateScreeningRunDto,
+  CandidateTrackingOverviewDto,
 } from './repo';
 import type {
   CandidateDecisionAction,
@@ -71,6 +72,22 @@ export async function fetchCandidateScreeningRun(runId: string): Promise<Candida
     throw new Error(data.error || '加载候选人筛选进度失败');
   }
   return data.run;
+}
+
+export async function fetchCandidateTrackingOverview(
+  limit = 200,
+): Promise<CandidateTrackingOverviewDto> {
+  const params = new URLSearchParams();
+  appendSearchParam(params, 'limit', limit);
+  const response = await fetch(`/api/candidate-screening/tracking?${params.toString()}`);
+  const data = await readJson<Partial<CandidateTrackingOverviewDto>>(response);
+  if (!response.ok || !Array.isArray(data.jobs) || !Array.isArray(data.candidates)) {
+    throw new Error(data.error || '加载候选人跟踪失败');
+  }
+  return {
+    jobs: data.jobs,
+    candidates: data.candidates,
+  };
 }
 
 export async function executeCandidateScreeningActions(
