@@ -3,6 +3,7 @@ import {
   createStructuredDomSnapshot,
   resolveTarget as resolveDomTarget,
 } from '@/lib/jd-publishing/dom-resolver';
+import { resolvePlaywrightHeadlessOption } from '@/lib/browser/playwright-config';
 import type {
   BrowserExecutor,
   BrowserResolveOptions,
@@ -19,7 +20,7 @@ const DOM_SNAPSHOT_MAX_CHARS = 200_000;
 const RESOLVE_POLL_INTERVAL_MS = 50;
 
 export function resolveHeadlessOption(headless: boolean | undefined): boolean {
-  return headless ?? false;
+  return resolvePlaywrightHeadlessOption(headless);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -71,7 +72,7 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     if (this.page) return this.page;
     const { chromium } = await import('playwright');
     this.browser = await chromium.launch({
-      headless: resolveHeadlessOption(this.options.headless),
+      headless: resolvePlaywrightHeadlessOption(this.options.headless),
     });
     const context = await this.browser.newContext();
     this.page = await context.newPage();
@@ -191,6 +192,20 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     } catch (error) {
       return this.targetErrorResult(error, match, 'target');
     }
+  }
+
+  async fillSelector(selector: string, value: string): Promise<BrowserStepResult> {
+    return this.wrap(async () => {
+      const page = await this.getPage();
+      await page.locator(selector).first().fill(value, { timeout: this.timeoutMs });
+    });
+  }
+
+  async clickSelector(selector: string): Promise<BrowserStepResult> {
+    return this.wrap(async () => {
+      const page = await this.getPage();
+      await page.locator(selector).first().click({ timeout: this.timeoutMs });
+    });
   }
 
   async waitForUrl(url: string): Promise<BrowserStepResult> {

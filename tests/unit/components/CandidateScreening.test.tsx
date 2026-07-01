@@ -294,6 +294,16 @@ describe('candidate screening UI', () => {
     fetchJdCandidateDetailMock.mockReset();
     fetchCandidateTrackingOverviewMock.mockReset();
     updateJdCandidateProgressMock.mockReset();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        stoppedReason: 'no_unread_messages',
+        processed: 2,
+        failed: 0,
+        passes: 3,
+      }),
+    });
     fetchJobDescriptionsMock.mockResolvedValue([sampleJobDescription]);
     fetchJobDescriptionMock.mockResolvedValue(sampleJobDescription);
     fetchJobDescriptionPublishTasksMock.mockResolvedValue([]);
@@ -340,6 +350,27 @@ describe('candidate screening UI', () => {
     expect(await screen.findByText(/run-1/)).toBeInTheDocument();
   });
 
+  it('starts a recruiter-wide communication flow from JD detail and shows the result', async () => {
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '启动沟通' }));
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/candidate-conversations/sync-unread',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            platform: 'boss-like',
+            maxPasses: 10,
+          }),
+        }),
+      ),
+    );
+    expect(await screen.findByText('沟通流程完成')).toBeInTheDocument();
+    expect(screen.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeInTheDocument();
+  });
+
   it('candidate list renders score, decision, source, action status, and interview stage', async () => {
     render(<CandidateList jobDescriptionId="jd-1" />);
 
@@ -366,6 +397,27 @@ describe('candidate screening UI', () => {
       'href',
       '/api/jd/jd-1/candidates/cand-1/original-profile',
     );
+  });
+
+  it('starts a global communication sync from the tracking dashboard', async () => {
+    render(<CandidateTrackingDashboard />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '启动沟通' }));
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/candidate-conversations/sync-unread',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            platform: 'boss-like',
+            maxPasses: 10,
+          }),
+        }),
+      ),
+    );
+    expect(await screen.findByText('沟通流程完成')).toBeInTheDocument();
+    expect(screen.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeInTheDocument();
   });
 
   it('candidate detail renders resume text and score reason', async () => {

@@ -33,13 +33,15 @@ Include every key. Empty arrays are allowed. All score fields must be numbers on
 
 const scoreComponentSchema = z.number().finite().min(0).max(100);
 
+const tagListSchema = z.array(z.string()).default([]);
+
 const candidateTagsSchema = z.object({
-  skills: z.array(z.string()),
-  domainKnowledge: z.array(z.string()),
-  generalAbility: z.array(z.string()),
-  risk: z.array(z.string()),
-  activity: z.array(z.string()),
-  custom: z.array(z.string()),
+  skills: tagListSchema,
+  domainKnowledge: tagListSchema,
+  generalAbility: tagListSchema,
+  risk: tagListSchema,
+  activity: tagListSchema,
+  custom: tagListSchema,
 });
 
 const candidateEvaluationSchema = z.object({
@@ -71,6 +73,69 @@ function isUnsupportedJsonObjectError(message: string): boolean {
 function toCandidateEvaluationResponsePayload(value: unknown): CandidateEvaluationResponsePayload {
   if (!value || typeof value !== 'object') return {};
   return value as CandidateEvaluationResponsePayload;
+}
+
+function extractCompleteJsonObject(content: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < content.length; index += 1) {
+    const char = content[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return content.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseCandidateEvaluationContent(content: string): CandidateEvaluationLlmOutput {
+  const trimmed = content.trim();
+  try {
+    return parseCandidateEvaluationOutput(JSON.parse(trimmed) as unknown);
+  } catch (strictParseError) {
+    for (let start = trimmed.indexOf('{'); start !== -1; start = trimmed.indexOf('{', start + 1)) {
+      const jsonObject = extractCompleteJsonObject(trimmed, start);
+      if (!jsonObject) {
+        continue;
+      }
+
+      try {
+        return parseCandidateEvaluationOutput(JSON.parse(jsonObject) as unknown);
+      } catch {
+        continue;
+      }
+    }
+
+    throw strictParseError;
+  }
 }
 
 async function parseResponseBody(
@@ -175,7 +240,7 @@ export async function runCandidateEvaluationLLM(params: {
     const content = payload.choices?.[0]?.message?.content;
     if (!content) throw new Error('Candidate evaluation returned empty content');
 
-    return parseCandidateEvaluationOutput(JSON.parse(content) as unknown);
+    return parseCandidateEvaluationContent(content);
   } finally {
     clearTimeout(timeout);
   }

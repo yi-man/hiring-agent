@@ -2,8 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ExternalLink, Eye, ListFilter, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Eye, ListFilter, MessageCircle, RefreshCw } from 'lucide-react';
+import { CandidateCommunicationSyncResultPanel } from '@/components/candidate-communication/sync-result-panel';
 import { Button, Chip } from '@/components/ui';
+import {
+  syncUnreadCandidateConversations,
+  type SyncUnreadCandidateConversationsResult,
+} from '@/lib/candidate-communication/client';
 import { fetchCandidateTrackingOverview } from '@/lib/candidate-screening/client';
 import { CANDIDATE_SCREENING_INTERVIEW_STAGES } from '@/lib/candidate-screening/constants';
 import type {
@@ -60,6 +65,9 @@ export function CandidateTrackingDashboard() {
   const [decisionAction, setDecisionAction] = useState<'' | CandidateDecisionAction>('');
   const [scope, setScope] = useState<'active' | 'all'>('active');
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
+  const [communicationSyncResult, setCommunicationSyncResult] =
+    useState<SyncUnreadCandidateConversationsResult | null>(null);
   const [error, setError] = useState('');
 
   async function loadOverview(options?: { silent?: boolean }) {
@@ -79,6 +87,24 @@ export function CandidateTrackingDashboard() {
   useEffect(() => {
     void loadOverview();
   }, []);
+
+  async function handleSyncCommunication() {
+    setIsSyncingCommunication(true);
+    setCommunicationSyncResult(null);
+    setError('');
+    try {
+      const result = await syncUnreadCandidateConversations({
+        platform: 'boss-like',
+        maxPasses: 10,
+      });
+      setCommunicationSyncResult(result);
+      await loadOverview({ silent: true });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动候选人沟通失败');
+    } finally {
+      setIsSyncingCommunication(false);
+    }
+  }
 
   const filteredCandidates = useMemo(
     () =>
@@ -108,22 +134,38 @@ export function CandidateTrackingDashboard() {
             按 JD 汇总筛选结果，并集中查看正在推进的候选人。
           </p>
         </div>
-        <Button
-          className="gap-2 self-start lg:self-auto"
-          isDisabled={isLoading}
-          type="button"
-          variant="bordered"
-          onClick={() => void loadOverview({ silent: true })}
-        >
-          <RefreshCw className="h-4 w-4" aria-hidden />
-          刷新
-        </Button>
+        <div className="flex flex-wrap gap-2 self-start lg:self-auto">
+          <Button
+            className="gap-2"
+            isDisabled={isSyncingCommunication}
+            type="button"
+            variant="bordered"
+            onClick={() => void handleSyncCommunication()}
+          >
+            <MessageCircle className="h-4 w-4" aria-hidden />
+            {isSyncingCommunication ? '启动中' : '启动沟通'}
+          </Button>
+          <Button
+            className="gap-2"
+            isDisabled={isLoading}
+            type="button"
+            variant="bordered"
+            onClick={() => void loadOverview({ silent: true })}
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden />
+            刷新
+          </Button>
+        </div>
       </div>
 
       {error ? (
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
           {error}
         </div>
+      ) : null}
+
+      {communicationSyncResult ? (
+        <CandidateCommunicationSyncResultPanel result={communicationSyncResult} />
       ) : null}
 
       <section className="border-border rounded-lg border p-4">

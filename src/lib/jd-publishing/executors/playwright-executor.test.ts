@@ -195,6 +195,41 @@ describe('PlaywrightBrowserExecutor', () => {
     }
   });
 
+  it('fills and clicks Playwright selectors for browser-only conversation flows', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <main>
+              <textarea placeholder="输入回复内容..."></textarea>
+              <button type="button" onclick="document.querySelector('#sent').textContent = document.querySelector('textarea').value">
+                发送
+              </button>
+              <div id="sent"></div>
+            </main>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const fillResult = await executor.fillSelector?.(
+        'textarea[placeholder="输入回复内容..."]',
+        '你好，可以进一步聊聊',
+      );
+      const clickResult = await executor.clickSelector?.('button:has-text("发送")');
+
+      expect(fillResult).toEqual({ success: true });
+      expect(clickResult).toEqual({ success: true });
+      await expect(
+        executor.check({ type: 'text_contains', text: '你好，可以进一步聊聊', timeout: 500 }),
+      ).resolves.toBe(true);
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('refuses to click ambiguous duplicate structured buttons', async () => {
     const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
     try {

@@ -92,6 +92,7 @@ jobs:
         run: >-
           bun run test:ci --
           --testPathIgnorePatterns tests/integration/chat/real-deps.e2e.test.ts
+          --testPathIgnorePatterns tests/integration/candidate-communication/communication-flow.e2e.test.ts
       - name: Run Jest (full suite — push / merge queue)
         if: github.event_name != 'pull_request'
         run: bun run test:ci
