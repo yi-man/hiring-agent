@@ -4,6 +4,7 @@ import {
   WORKFLOW_PLAYWRIGHT_TIMEOUT_MS,
   WORKFLOW_TOOL_RESULT_MAX_CHARS,
 } from '@/lib/workflow-learning/constants';
+import { resolvePlaywrightHeadlessOption } from '@/lib/browser/playwright-config';
 import { assertUrlAllowed } from '@/lib/workflow-learning/url-allowlist';
 
 const schema = z.object({
@@ -18,7 +19,7 @@ const schema = z.object({
 export async function runBrowserSnapshot(url: string): Promise<{ title: string; excerpt: string }> {
   assertUrlAllowed(url);
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: resolvePlaywrightHeadlessOption(undefined) });
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -50,7 +51,7 @@ export function createBrowserSnapshotTool() {
     {
       name: 'browser_snapshot',
       description:
-        'Open a web page in a headless browser and return JSON with title and visible text excerpt. Use when the user asks to fetch or inspect a page.',
+        'Open a web page in a browser and return JSON with title and visible text excerpt. Use when the user asks to fetch or inspect a page.',
       schema,
     },
   );

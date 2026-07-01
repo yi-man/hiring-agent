@@ -18,7 +18,7 @@ export async function runUnreadCandidateCommunicationSkill(params: {
     jobDescriptionId: params.jobDescriptionId,
     platform: params.platform,
     adapter: new BossLikeCandidateCommunicationAdapter({
-      executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 10_000 }),
+      executor: new PlaywrightBrowserExecutor({ timeoutMs: 10_000 }),
     }),
     maxPasses: params.maxPasses,
   });
