@@ -41,17 +41,17 @@ describe('Navbar', () => {
     });
   });
 
-  it('should display logo and main navigation links', async () => {
+  it('should keep product feature links out of the desktop header', async () => {
     render(<Navbar />);
 
     expect(screen.getByText('招聘助手')).toBeInTheDocument();
 
     expect(screen.getByText('首页')).toBeInTheDocument();
-    expect(screen.getByText('对话')).toBeInTheDocument();
-    expect(screen.getByText('知识库')).toBeInTheDocument();
-    expect(screen.getByText('Workflow')).toBeInTheDocument();
-    expect(screen.getByText('JD 工作台')).toBeInTheDocument();
-    expect(screen.getByText('LLM 可观测')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '对话' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '知识库' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Workflow' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'JD 工作台' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'LLM 可观测' })).not.toBeInTheDocument();
     expect(await screen.findByRole('link', { name: /log in/i })).toBeInTheDocument();
   });
 
@@ -78,8 +78,10 @@ describe('Navbar', () => {
     const menuButton = screen.getByRole('button', { name: /菜单/i });
     fireEvent.click(menuButton);
 
-    const homeLinks = screen.getAllByText('首页');
-    expect(homeLinks.length).toBe(2);
+    const homeLinks = screen.getAllByRole('link', { name: '首页' });
+    expect(homeLinks).toHaveLength(2);
+    expect(screen.queryByRole('link', { name: '对话' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'JD 工作台' })).not.toBeInTheDocument();
     expect(await screen.findAllByRole('link', { name: /log in/i })).toHaveLength(2);
   });
 

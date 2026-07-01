@@ -71,14 +71,7 @@ export function Navbar() {
     };
   }, []);
 
-  const navigation = [
-    { name: '首页', href: '/' },
-    { name: '对话', href: '/chat' },
-    { name: '知识库', href: '/knowledge' },
-    { name: 'Workflow', href: '/workflow-learning' },
-    { name: 'JD 工作台', href: '/jd-generator' },
-    { name: 'LLM 可观测', href: '/llm-observability' },
-  ];
+  const navigation = [{ name: '首页', href: '/' }];
 
   return (
     <nav
