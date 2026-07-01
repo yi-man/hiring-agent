@@ -111,6 +111,26 @@ test.describe('candidate screening UI', () => {
       await page.route('**/api/jd/jd-screening-1/publish', async (route) => {
         await route.fulfill({ json: { tasks: [] } });
       });
+      let communicationSyncPayload: unknown = null;
+      await page.route('**/api/candidate-conversations/sync-unread', async (route) => {
+        expect(route.request().method()).toBe('POST');
+        communicationSyncPayload = route.request().postDataJSON();
+        expect(communicationSyncPayload).toMatchObject({
+          platform: 'boss-like',
+          jobDescriptionId: 'jd-screening-1',
+          maxPasses: 10,
+        });
+        await route.fulfill({
+          status: 202,
+          json: {
+            status: 'success',
+            stoppedReason: 'no_unread_messages',
+            processed: 2,
+            failed: 0,
+            passes: 3,
+          },
+        });
+      });
       await page.route('**/api/jd/jd-screening-1/candidate-screening/runs', async (route) => {
         if (route.request().method() === 'POST') {
           expect(route.request().postDataJSON()).toMatchObject({
@@ -162,6 +182,16 @@ test.describe('candidate screening UI', () => {
         'href',
         '/jd-generator/jd-screening-1/candidates',
       );
+
+      await page.getByRole('button', { name: '同步沟通', exact: true }).click();
+
+      expect(communicationSyncPayload).toMatchObject({
+        platform: 'boss-like',
+        jobDescriptionId: 'jd-screening-1',
+        maxPasses: 10,
+      });
+      await expect(page.getByText('沟通同步完成')).toBeVisible();
+      await expect(page.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeVisible();
     } finally {
       await cleanupSeededUser(seeded.userId);
     }

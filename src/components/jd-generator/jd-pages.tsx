@@ -10,13 +10,19 @@ import {
   Eye,
   FileText,
   ListFilter,
+  MessageCircle,
   Plus,
   RefreshCw,
   Rocket,
   Save,
   Sparkles,
 } from 'lucide-react';
+import { CandidateCommunicationSyncResultPanel } from '@/components/candidate-communication/sync-result-panel';
 import { Button, Chip } from '@/components/ui';
+import {
+  syncUnreadCandidateConversations,
+  type SyncUnreadCandidateConversationsResult,
+} from '@/lib/candidate-communication/client';
 import { createCandidateScreeningRun } from '@/lib/candidate-screening/client';
 import type { CandidateScreeningRunDto } from '@/lib/candidate-screening/repo';
 import {
@@ -471,9 +477,12 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isScreening, setIsScreening] = useState(false);
+  const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
   const [latestScreeningRun, setLatestScreeningRun] = useState<CandidateScreeningRunDto | null>(
     null,
   );
+  const [communicationSyncResult, setCommunicationSyncResult] =
+    useState<SyncUnreadCandidateConversationsResult | null>(null);
   const [publishCompany, setPublishCompany] = useState('星河智能');
   const [publishSalary, setPublishSalary] = useState('25-40K');
   const [publishLocation, setPublishLocation] = useState('上海');
@@ -618,6 +627,25 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setError(e instanceof Error ? e.message : '启动候选人筛选失败');
     } finally {
       setIsScreening(false);
+    }
+  }
+
+  async function handleSyncCommunication() {
+    if (!jobDescription) return;
+    setIsSyncingCommunication(true);
+    setCommunicationSyncResult(null);
+    setError('');
+    try {
+      const result = await syncUnreadCandidateConversations({
+        platform: 'boss-like',
+        jobDescriptionId: jobDescription.id,
+        maxPasses: 10,
+      });
+      setCommunicationSyncResult(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '同步候选人沟通失败');
+    } finally {
+      setIsSyncingCommunication(false);
     }
   }
 
@@ -892,6 +920,17 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     <ListFilter className="h-4 w-4" aria-hidden />
                     已筛选候选人
                   </Button>
+                  <Button
+                    className="gap-2 sm:col-span-2"
+                    disableRipple
+                    isDisabled={isSyncingCommunication}
+                    type="button"
+                    variant="bordered"
+                    onClick={() => void handleSyncCommunication()}
+                  >
+                    <MessageCircle className="h-4 w-4" aria-hidden />
+                    {isSyncingCommunication ? '同步中' : '同步沟通'}
+                  </Button>
                 </div>
                 {latestScreeningRun ? (
                   <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
@@ -906,6 +945,9 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                       查看筛选结果
                     </Link>
                   </div>
+                ) : null}
+                {communicationSyncResult ? (
+                  <CandidateCommunicationSyncResultPanel result={communicationSyncResult} />
                 ) : null}
               </div>
             ) : null}
