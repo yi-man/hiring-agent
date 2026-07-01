@@ -2,7 +2,6 @@ import type { CandidateScreeningPlatform } from '@/lib/candidate-screening/types
 
 export type SyncUnreadCandidateConversationsRequest = {
   platform: CandidateScreeningPlatform;
-  jobDescriptionId?: string;
   maxPasses?: number;
 };
 

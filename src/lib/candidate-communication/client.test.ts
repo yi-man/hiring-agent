@@ -20,7 +20,6 @@ describe('candidate communication client', () => {
     await expect(
       syncUnreadCandidateConversations({
         platform: 'boss-like',
-        jobDescriptionId: 'jd-1',
         maxPasses: 10,
       }),
     ).resolves.toEqual({
@@ -36,7 +35,6 @@ describe('candidate communication client', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         platform: 'boss-like',
-        jobDescriptionId: 'jd-1',
         maxPasses: 10,
       }),
     });

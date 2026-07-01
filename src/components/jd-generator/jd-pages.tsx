@@ -631,19 +631,17 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   }
 
   async function handleSyncCommunication() {
-    if (!jobDescription) return;
     setIsSyncingCommunication(true);
     setCommunicationSyncResult(null);
     setError('');
     try {
       const result = await syncUnreadCandidateConversations({
         platform: 'boss-like',
-        jobDescriptionId: jobDescription.id,
         maxPasses: 10,
       });
       setCommunicationSyncResult(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '同步候选人沟通失败');
+      setError(e instanceof Error ? e.message : '启动候选人沟通失败');
     } finally {
       setIsSyncingCommunication(false);
     }
@@ -929,7 +927,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     onClick={() => void handleSyncCommunication()}
                   >
                     <MessageCircle className="h-4 w-4" aria-hidden />
-                    {isSyncingCommunication ? '同步中' : '同步沟通'}
+                    {isSyncingCommunication ? '启动中' : '启动沟通'}
                   </Button>
                 </div>
                 {latestScreeningRun ? (

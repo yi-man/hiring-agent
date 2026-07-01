@@ -350,10 +350,10 @@ describe('candidate screening UI', () => {
     expect(await screen.findByText(/run-1/)).toBeInTheDocument();
   });
 
-  it('starts a JD-scoped communication sync and shows the result', async () => {
+  it('starts a recruiter-wide communication flow from JD detail and shows the result', async () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '同步沟通' }));
+    fireEvent.click(await screen.findByRole('button', { name: '启动沟通' }));
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
@@ -362,13 +362,12 @@ describe('candidate screening UI', () => {
           method: 'POST',
           body: JSON.stringify({
             platform: 'boss-like',
-            jobDescriptionId: 'jd-1',
             maxPasses: 10,
           }),
         }),
       ),
     );
-    expect(await screen.findByText('沟通同步完成')).toBeInTheDocument();
+    expect(await screen.findByText('沟通流程完成')).toBeInTheDocument();
     expect(screen.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeInTheDocument();
   });
 
@@ -403,7 +402,7 @@ describe('candidate screening UI', () => {
   it('starts a global communication sync from the tracking dashboard', async () => {
     render(<CandidateTrackingDashboard />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '同步沟通' }));
+    fireEvent.click(await screen.findByRole('button', { name: '启动沟通' }));
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
@@ -417,7 +416,7 @@ describe('candidate screening UI', () => {
         }),
       ),
     );
-    expect(await screen.findByText('沟通同步完成')).toBeInTheDocument();
+    expect(await screen.findByText('沟通流程完成')).toBeInTheDocument();
     expect(screen.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeInTheDocument();
   });
 

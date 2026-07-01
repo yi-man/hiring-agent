@@ -117,9 +117,9 @@ test.describe('candidate screening UI', () => {
         communicationSyncPayload = route.request().postDataJSON();
         expect(communicationSyncPayload).toMatchObject({
           platform: 'boss-like',
-          jobDescriptionId: 'jd-screening-1',
           maxPasses: 10,
         });
+        expect(communicationSyncPayload).not.toHaveProperty('jobDescriptionId');
         await route.fulfill({
           status: 202,
           json: {
@@ -183,14 +183,14 @@ test.describe('candidate screening UI', () => {
         '/jd-generator/jd-screening-1/candidates',
       );
 
-      await page.getByRole('button', { name: '同步沟通', exact: true }).click();
+      await page.getByRole('button', { name: '启动沟通', exact: true }).click();
 
       expect(communicationSyncPayload).toMatchObject({
         platform: 'boss-like',
-        jobDescriptionId: 'jd-screening-1',
         maxPasses: 10,
       });
-      await expect(page.getByText('沟通同步完成')).toBeVisible();
+      expect(communicationSyncPayload).not.toHaveProperty('jobDescriptionId');
+      await expect(page.getByText('沟通流程完成')).toBeVisible();
       await expect(page.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeVisible();
     } finally {
       await cleanupSeededUser(seeded.userId);

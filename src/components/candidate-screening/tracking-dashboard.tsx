@@ -100,7 +100,7 @@ export function CandidateTrackingDashboard() {
       setCommunicationSyncResult(result);
       await loadOverview({ silent: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : '同步候选人沟通失败');
+      setError(e instanceof Error ? e.message : '启动候选人沟通失败');
     } finally {
       setIsSyncingCommunication(false);
     }
@@ -143,7 +143,7 @@ export function CandidateTrackingDashboard() {
             onClick={() => void handleSyncCommunication()}
           >
             <MessageCircle className="h-4 w-4" aria-hidden />
-            {isSyncingCommunication ? '同步中' : '同步沟通'}
+            {isSyncingCommunication ? '启动中' : '启动沟通'}
           </Button>
           <Button
             className="gap-2"

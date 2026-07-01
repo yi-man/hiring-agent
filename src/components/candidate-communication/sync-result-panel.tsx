@@ -7,11 +7,11 @@ export function CandidateCommunicationSyncResultPanel({
 }) {
   return (
     <div
-      aria-label="沟通同步结果"
+      aria-label="沟通流程结果"
       className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs"
     >
       <div className="text-foreground flex items-center justify-between gap-2 font-medium">
-        <span>沟通同步完成</span>
+        <span>沟通流程完成</span>
         <span className="text-muted-foreground">
           {result.stoppedReason === 'no_unread_messages' ? '无待处理' : result.status}
         </span>
