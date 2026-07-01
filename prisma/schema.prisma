@@ -46,6 +46,7 @@ model User {
   candidateScreeningResults CandidateScreeningResult[]
   candidateActionLogs       CandidateActionLog[]
   candidateTagStats       CandidateTagStat[]
+  candidateInterviewFeedbacks CandidateInterviewFeedback[]
   candidateConversations         CandidateConversation[]
   candidateConversationMessages  CandidateConversationMessage[]
   candidateConversationDecisions CandidateConversationDecision[]
@@ -72,6 +73,7 @@ model JobDescription {
   candidateScreeningRuns    CandidateScreeningRun[]
   candidateScreeningResults CandidateScreeningResult[]
   candidateActionLogs       CandidateActionLog[]
+  candidateInterviewFeedbacks CandidateInterviewFeedback[]
   candidateConversations         CandidateConversation[]
   candidateConversationMessages  CandidateConversationMessage[]
   candidateConversationDecisions CandidateConversationDecision[]
@@ -313,6 +315,7 @@ model Candidate {
   chunks                    CandidateResumeChunk[]
   screeningResults          CandidateScreeningResult[]
   actionLogs                CandidateActionLog[]
+  interviewFeedbacks        CandidateInterviewFeedback[]
   conversations         CandidateConversation[]
   conversationMessages  CandidateConversationMessage[]
   conversationDecisions CandidateConversationDecision[]
@@ -467,6 +470,30 @@ model CandidateActionLog {
   @@index([candidateId], map: "idx_candidate_action_logs_candidate_id")
   @@index([userId, jobDescriptionId, candidateId, createdAt(sort: Desc)], map: "idx_candidate_action_logs_user_jd_candidate_created")
   @@map("candidate_action_logs")
+}
+
+model CandidateInterviewFeedback {
+  id               String         @id @default(uuid())
+  userId           String         @map("user_id")
+  jobDescriptionId String         @map("job_description_id")
+  candidateId      String         @map("candidate_id")
+  stage            String
+  interviewer      String
+  rating           Float
+  pros             Json
+  cons             Json
+  decision         String
+  notes            String?
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate        Candidate      @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([userId, jobDescriptionId, candidateId, stage], map: "candidate_interview_feedbacks_user_jd_candidate_stage_key")
+  @@index([userId, jobDescriptionId, candidateId], map: "idx_candidate_interview_feedbacks_user_jd_candidate")
+  @@index([userId, stage, updatedAt(sort: Desc)], map: "idx_candidate_interview_feedbacks_user_stage_updated")
+  @@map("candidate_interview_feedbacks")
 }
 
 model CandidateTagStat {

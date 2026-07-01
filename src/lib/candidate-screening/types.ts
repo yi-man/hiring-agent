@@ -33,6 +33,14 @@ export type CandidateInterviewStage =
   | 'offer'
   | 'rejected'
   | 'withdrawn';
+export type CandidateInterviewFeedbackStage =
+  | 'first_interview'
+  | 'second_interview'
+  | 'final_interview';
+export type CandidateInterviewFeedbackDecision = 'pass' | 'reject' | 'hold';
+export type CandidateHireDecision = 'strong_yes' | 'yes' | 'no';
+export type CandidateDecisionIntentLevel = 'high' | 'medium' | 'low';
+export type CandidateDecisionRiskLevel = 'low' | 'medium' | 'high';
 
 export type EvaluationSchema = {
   skills: string[];
@@ -105,4 +113,19 @@ export type ExecuteActionsRequest = {
 export type UpdateCandidateProgressRequest = {
   interviewStage?: CandidateInterviewStage;
   notes?: string;
+};
+
+export type UpsertCandidateInterviewFeedbackRequest = {
+  stage: CandidateInterviewFeedbackStage;
+  interviewer: string;
+  rating: number;
+  pros: string[];
+  cons: string[];
+  decision: CandidateInterviewFeedbackDecision;
+  notes?: string | null;
+};
+
+export type EvaluateCandidateDecisionRequest = {
+  jobDescriptionId: string;
+  candidateId: string;
 };

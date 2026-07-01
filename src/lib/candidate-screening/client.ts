@@ -1,4 +1,6 @@
 import type {
+  CandidateDecisionResultDto,
+  CandidateInterviewFeedbackDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultDto,
   CandidateScreeningResultListItem,
@@ -12,6 +14,7 @@ import type {
   CreateScreeningRunRequest,
   ExecuteActionsRequest,
   UpdateCandidateProgressRequest,
+  UpsertCandidateInterviewFeedbackRequest,
 } from './types';
 
 export type CandidateListFilters = {
@@ -155,4 +158,57 @@ export async function updateJdCandidateProgress(
     throw new Error(data.error || '保存候选人进度失败');
   }
   return data.candidate;
+}
+
+export async function fetchCandidateInterviewFeedbacks(
+  jobDescriptionId: string,
+  candidateId: string,
+): Promise<CandidateInterviewFeedbackDto[]> {
+  const response = await fetch(
+    `/api/jd/${jobDescriptionId}/candidates/${candidateId}/interview-feedbacks`,
+  );
+  const data = await readJson<{ feedbacks?: CandidateInterviewFeedbackDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.feedbacks)) {
+    throw new Error(data.error || '加载面试反馈失败');
+  }
+  return data.feedbacks;
+}
+
+export async function saveCandidateInterviewFeedback(
+  jobDescriptionId: string,
+  candidateId: string,
+  payload: UpsertCandidateInterviewFeedbackRequest,
+): Promise<CandidateInterviewFeedbackDto> {
+  const response = await fetch(
+    `/api/jd/${jobDescriptionId}/candidates/${candidateId}/interview-feedbacks`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+  const data = await readJson<{ feedback?: CandidateInterviewFeedbackDto }>(response);
+  if (!response.ok || !data.feedback) {
+    throw new Error(data.error || '保存面试反馈失败');
+  }
+  return data.feedback;
+}
+
+export async function evaluateJdCandidateDecision(
+  jobDescriptionId: string,
+  candidateId: string,
+): Promise<CandidateDecisionResultDto> {
+  const response = await fetch('/api/decision/evaluate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      job_description_id: jobDescriptionId,
+      candidate_id: candidateId,
+    }),
+  });
+  const data = await readJson<{ decision?: CandidateDecisionResultDto }>(response);
+  if (!response.ok || !data.decision) {
+    throw new Error(data.error || '生成录用建议失败');
+  }
+  return data.decision;
 }

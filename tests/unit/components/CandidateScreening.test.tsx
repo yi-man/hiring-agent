@@ -5,6 +5,8 @@ import { CandidateDetail } from '@/components/candidate-screening/candidate-deta
 import { CandidateTrackingDashboard } from '@/components/candidate-screening/tracking-dashboard';
 import type {
   CandidateDto,
+  CandidateInterviewFeedbackDto,
+  CandidateDecisionResultDto,
   CandidateResumeDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultListItem,
@@ -24,6 +26,9 @@ const fetchJdCandidatesMock = jest.fn();
 const fetchJdCandidateDetailMock = jest.fn();
 const fetchCandidateTrackingOverviewMock = jest.fn();
 const updateJdCandidateProgressMock = jest.fn();
+const fetchCandidateInterviewFeedbacksMock = jest.fn();
+const saveCandidateInterviewFeedbackMock = jest.fn();
+const evaluateJdCandidateDecisionMock = jest.fn();
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), refresh: jest.fn() }),
@@ -46,6 +51,11 @@ jest.mock('@/lib/candidate-screening/client', () => ({
     fetchCandidateTrackingOverviewMock(...args),
   fetchJdCandidates: (...args: unknown[]) => fetchJdCandidatesMock(...args),
   fetchJdCandidateDetail: (...args: unknown[]) => fetchJdCandidateDetailMock(...args),
+  fetchCandidateInterviewFeedbacks: (...args: unknown[]) =>
+    fetchCandidateInterviewFeedbacksMock(...args),
+  saveCandidateInterviewFeedback: (...args: unknown[]) =>
+    saveCandidateInterviewFeedbackMock(...args),
+  evaluateJdCandidateDecision: (...args: unknown[]) => evaluateJdCandidateDecisionMock(...args),
   updateJdCandidateProgress: (...args: unknown[]) => updateJdCandidateProgressMock(...args),
 }));
 
@@ -246,6 +256,48 @@ const sampleCandidateDetail: CandidateScreeningDetailDto = {
   ],
 };
 
+const sampleFeedback: CandidateInterviewFeedbackDto = {
+  id: 'feedback-1',
+  userId: 'u1',
+  jobDescriptionId: 'jd-1',
+  candidateId: 'cand-1',
+  stage: 'first_interview',
+  interviewer: 'Grace Hopper',
+  rating: 4,
+  pros: ['Java 基础扎实'],
+  cons: ['系统设计还需追问'],
+  decision: 'pass',
+  notes: '建议推进二面',
+  createdAt: now,
+  updatedAt: now,
+};
+
+const sampleDecisionResult: CandidateDecisionResultDto = {
+  hireDecision: 'yes',
+  confidence: 0.82,
+  offerAcceptProbability: 0.68,
+  generatedAt: now,
+  features: {
+    skillMatchScore: 0.86,
+    experienceMatch: 0.9,
+    interviewScore: 0.8,
+    intentLevel: 'high',
+    risks: {
+      salarySensitive: true,
+      hasOtherOffers: false,
+      lowStability: false,
+    },
+    responsiveness: 0.85,
+  },
+  riskAnalysis: {
+    level: 'medium',
+    reasons: ['薪资敏感'],
+  },
+  strengths: ['Java 基础扎实'],
+  weaknesses: ['系统设计还需追问'],
+  suggestions: [{ type: 'action', content: '先确认薪资预期再发 offer' }],
+};
+
 const sampleTrackingOverview: CandidateTrackingOverviewDto = {
   jobs: [
     {
@@ -294,6 +346,9 @@ describe('candidate screening UI', () => {
     fetchJdCandidateDetailMock.mockReset();
     fetchCandidateTrackingOverviewMock.mockReset();
     updateJdCandidateProgressMock.mockReset();
+    fetchCandidateInterviewFeedbacksMock.mockReset();
+    saveCandidateInterviewFeedbackMock.mockReset();
+    evaluateJdCandidateDecisionMock.mockReset();
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -310,6 +365,9 @@ describe('candidate screening UI', () => {
     createCandidateScreeningRunMock.mockResolvedValue(sampleRun);
     fetchJdCandidatesMock.mockResolvedValue([sampleCandidateListItem]);
     fetchJdCandidateDetailMock.mockResolvedValue(sampleCandidateDetail);
+    fetchCandidateInterviewFeedbacksMock.mockResolvedValue([sampleFeedback]);
+    saveCandidateInterviewFeedbackMock.mockResolvedValue(sampleFeedback);
+    evaluateJdCandidateDecisionMock.mockResolvedValue(sampleDecisionResult);
     fetchCandidateTrackingOverviewMock.mockResolvedValue(sampleTrackingOverview);
     updateJdCandidateProgressMock.mockResolvedValue({
       ...sampleCandidateListItem,
@@ -458,5 +516,47 @@ describe('candidate screening UI', () => {
 
     const progressRegion = screen.getByLabelText('当前候选人进度');
     expect(within(progressRegion).getByText('phone_screen')).toBeInTheDocument();
+  });
+
+  it('candidate detail saves interview feedback rounds and evaluates hiring decision', async () => {
+    render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    expect(await screen.findByText('一面')).toBeInTheDocument();
+    expect(screen.getByText('二面')).toBeInTheDocument();
+    expect(screen.getByText('终面')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('一面面试官'), {
+      target: { value: 'Grace Hopper' },
+    });
+    fireEvent.change(screen.getByLabelText('一面评分'), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText('一面优势'), {
+      target: { value: 'Java 基础扎实\n业务理解好' },
+    });
+    fireEvent.change(screen.getByLabelText('一面不足'), {
+      target: { value: '系统设计还需追问' },
+    });
+    fireEvent.change(screen.getByLabelText('一面结论'), { target: { value: 'pass' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存一面' }));
+
+    await waitFor(() =>
+      expect(saveCandidateInterviewFeedbackMock).toHaveBeenCalledWith('jd-1', 'cand-1', {
+        stage: 'first_interview',
+        interviewer: 'Grace Hopper',
+        rating: 4,
+        pros: ['Java 基础扎实', '业务理解好'],
+        cons: ['系统设计还需追问'],
+        decision: 'pass',
+        notes: '建议推进二面',
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '生成录用建议' }));
+
+    await waitFor(() =>
+      expect(evaluateJdCandidateDecisionMock).toHaveBeenCalledWith('jd-1', 'cand-1'),
+    );
+    expect(await screen.findByText('建议录用')).toBeInTheDocument();
+    expect(screen.getByText('接受 offer 概率 68%')).toBeInTheDocument();
+    expect(screen.getByText('先确认薪资预期再发 offer')).toBeInTheDocument();
   });
 });
