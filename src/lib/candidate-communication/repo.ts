@@ -213,6 +213,7 @@ export type CandidateConversationRepository = {
     platform: string;
     platformCandidateId?: string | null;
     profileUrl?: string | null;
+    candidateName?: string | null;
   }): Promise<{ candidateId: string } | null>;
   resolveJobDescriptionForCandidateMessage?(params: {
     userId: string;
@@ -559,21 +560,44 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
   },
 
   async resolveCandidateForPlatformMessage(params) {
-    const candidate = await prisma.candidate.findFirst({
+    const identifiers = [
+      ...(params.platformCandidateId ? [{ platformCandidateId: params.platformCandidateId }] : []),
+      ...(params.profileUrl ? [{ profileUrl: params.profileUrl }] : []),
+    ];
+    if (identifiers.length > 0) {
+      const candidate = await prisma.candidate.findFirst({
+        where: {
+          userId: params.userId,
+          sourcePlatform: params.platform,
+          OR: identifiers,
+        },
+        select: { id: true },
+      });
+      if (candidate) return { candidateId: candidate.id };
+    }
+
+    const candidateName = normalizeMatchText(params.candidateName);
+    if (!candidateName) return null;
+
+    const candidates = await prisma.candidate.findMany({
       where: {
         userId: params.userId,
         sourcePlatform: params.platform,
-        OR: [
-          ...(params.platformCandidateId
-            ? [{ platformCandidateId: params.platformCandidateId }]
-            : []),
-          ...(params.profileUrl ? [{ profileUrl: params.profileUrl }] : []),
-        ],
       },
-      select: { id: true },
+      select: {
+        id: true,
+        displayName: true,
+        currentCompany: true,
+      },
+      take: 200,
     });
+    const matched = candidates.find(
+      (candidate) =>
+        normalizeMatchText(candidate.displayName) === candidateName ||
+        normalizeMatchText(candidate.currentCompany) === candidateName,
+    );
 
-    return candidate ? { candidateId: candidate.id } : null;
+    return matched ? { candidateId: matched.id } : null;
   },
 
   async resolveJobDescriptionForCandidateMessage(params) {

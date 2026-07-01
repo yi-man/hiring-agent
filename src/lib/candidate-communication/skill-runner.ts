@@ -39,6 +39,7 @@ async function resolveCandidateId(params: {
     platform: params.platform,
     platformCandidateId: params.message.platformCandidateId ?? null,
     profileUrl: params.message.profileUrl ?? null,
+    candidateName: params.message.candidateName ?? null,
   });
   if (!resolved) {
     const rawCandidate = await params.adapter.collectCandidateFromMessage?.(params.message);

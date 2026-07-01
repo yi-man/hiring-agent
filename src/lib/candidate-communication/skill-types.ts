@@ -3,9 +3,10 @@ import type { RawCandidate } from '@/lib/candidate-screening/ingest';
 import type { CandidateScreeningPlatform } from '@/lib/candidate-screening/types';
 
 export type UnreadCandidateReplyTarget = {
-  receiverId: string;
+  receiverId?: string | null;
   jobId?: string | null;
   sourceMessageId?: string | null;
+  browserThreadSelector?: string | null;
 };
 
 export type UnreadCandidateMessage = {

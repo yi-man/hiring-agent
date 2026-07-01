@@ -1,4 +1,7 @@
-import { BossLikeCandidateSourceAdapter } from '@/lib/candidate-screening/adapters/boss-like';
+import {
+  BossLikeCandidateSourceAdapter,
+  extractBossLikeCandidatesFromHtml,
+} from '@/lib/candidate-screening/adapters/boss-like';
 import type { CandidateSourceAdapter } from '@/lib/candidate-screening/adapters/types';
 import type { RawCandidate } from '@/lib/candidate-screening/ingest';
 import type { CandidateActionPlan } from '@/lib/candidate-screening/types';
@@ -11,50 +14,24 @@ import type {
 
 const EMPTY_RAW_SNAPSHOT_ERROR =
   'boss-like unread message search returned an empty browser snapshot';
-const BOSS_LIKE_MESSAGE_ID_PREFIX = 'boss-like-message:';
+const RENDERED_MESSAGE_ID_PREFIX = 'rendered-row:';
+const CONVERSATION_ROW_SELECTOR =
+  'main div[class*="overflow-y-auto"] > div[class*="cursor-pointer"]';
+const REPLY_TEXTAREA_SELECTOR = 'textarea[placeholder="输入回复内容..."], textarea';
+const SEND_BUTTON_SELECTOR = 'button:has-text("发送")';
+const THREAD_SELECTOR_TEXT_MAX_LENGTH = 80;
 
-type BossLikeApiMessage = {
-  id: number;
-  content: string;
-  type: string;
-  isRead: boolean;
-  senderId: number;
-  receiverId: number;
-  createdAt: string;
-};
-
-type BossLikeApiConversation = {
-  userId: number;
+type RenderedThread = {
+  rowIndex: number;
   username: string;
-  jobId: number | null;
-  jobTitle: string | null;
+  platformJobTitle: string | null;
   company: string | null;
+  content: string;
   unreadCount: number;
-  messages: BossLikeApiMessage[];
+  selector: string;
 };
 
-type BossLikeApiResume = {
-  id: number;
-  userId: number;
-  name: string;
-  education?: string | null;
-  experience?: string | null;
-  projects?: string | null;
-  skills?: string[] | null;
-  summary?: string | null;
-  user?: { username?: string | null } | null;
-};
-
-type BossLikeUnreadApiInput = {
-  conversations: BossLikeApiConversation[];
-  resumes: BossLikeApiResume[];
-  employerUserId: number;
-};
-
-type BossLikeApiAuth = {
-  token: string;
-  employerUserId: number;
-};
+type ConversationMessageDirection = 'candidate' | 'agent';
 
 function readAttr(attrs: string, name: string): string | null {
   return attrs.match(new RegExp(`${name}="([^"]+)"`, 'i'))?.[1]?.trim() ?? null;
@@ -78,6 +55,26 @@ function readField(article: string, field: string): string {
   );
 }
 
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripTags(value: string): string {
+  return decodeHtml(value.replace(/<[^>]+>/g, ' '));
+}
+
+function normalizeMatchText(value?: string | null): string {
+  return value?.trim().replace(/\s+/g, '').toLowerCase() ?? '';
+}
+
 function resolveSameOriginUrl(baseUrl: string, value: string | null): string | null {
   if (!value) return null;
   try {
@@ -95,58 +92,13 @@ function parseReceivedAt(value: string | null): Date {
   return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
-function parseRequiredDate(value: string): Date {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? new Date() : date;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function readNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : [];
-}
-
-function assertApiEnvelope(value: unknown, action: string): unknown {
-  if (!isRecord(value) || value.code !== 200) {
-    const message = isRecord(value) ? readString(value.message) : null;
-    throw new Error(message ?? `${action} failed`);
-  }
-  return value.data;
-}
-
-function buildResumeText(resume: BossLikeApiResume): string {
-  return [
-    resume.education,
-    resume.experience,
-    resume.projects,
-    resume.skills?.length ? `技能：${resume.skills.join('、')}` : null,
-    resume.summary,
-  ]
-    .filter((item): item is string => Boolean(item?.trim()))
-    .join('\n');
-}
-
-function createReplyTarget(params: {
-  receiverId: number;
-  jobId: number | null;
-  sourceMessageId: number;
+function createBrowserReplyTarget(params: {
+  selector: string;
+  sourceMessageId: string;
 }): UnreadCandidateReplyTarget {
   return {
-    receiverId: String(params.receiverId),
-    ...(params.jobId === null ? { jobId: null } : { jobId: String(params.jobId) }),
-    sourceMessageId: String(params.sourceMessageId),
+    browserThreadSelector: params.selector,
+    sourceMessageId: params.sourceMessageId,
   };
 }
 
@@ -159,6 +111,167 @@ async function requireSuccessfulStep(
     throw new Error(stepResult.error ?? `${action} failed`);
   }
   return stepResult;
+}
+
+function findCursorPointerRows(html: string): Array<{ index: number; html: string }> {
+  const starts = Array.from(
+    html.matchAll(/<div\b[^>]*class="[^"]*\bcursor-pointer\b[^"]*"[^>]*>/gi),
+  ).map((match) => match.index ?? 0);
+
+  return starts.map((start, index) => ({
+    index,
+    html: sliceBalancedDiv(html, start),
+  }));
+}
+
+function sliceBalancedDiv(html: string, start: number): string {
+  const divTagPattern = /<\/?div\b[^>]*>/gi;
+  divTagPattern.lastIndex = start;
+  let depth = 0;
+  for (let match = divTagPattern.exec(html); match; match = divTagPattern.exec(html)) {
+    const tag = match[0] ?? '';
+    if (tag.startsWith('</')) {
+      depth -= 1;
+      if (depth === 0) {
+        return html.slice(start, match.index + tag.length);
+      }
+    } else {
+      depth += 1;
+    }
+  }
+  return html.slice(start);
+}
+
+function readFirstClassText(html: string, className: string): string | null {
+  const match = html.match(
+    new RegExp(`<[^>]+class="[^"]*${className}[^"]*"[^>]*>([\\s\\S]*?)<\\/[^>]+>`, 'i'),
+  );
+  return match ? stripTags(match[1] ?? '') : null;
+}
+
+function readParagraphText(html: string): string {
+  const paragraphs = Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)).map((match) =>
+    stripTags(match[1] ?? ''),
+  );
+  return paragraphs.reverse().find(Boolean) ?? '';
+}
+
+function readUnreadCount(rowHtml: string): number {
+  if (!/bg-red-500/i.test(rowHtml)) return 0;
+  const badges = Array.from(rowHtml.matchAll(/<span\b[^>]*bg-red-500[^>]*>([\s\S]*?)<\/span>/gi))
+    .map((match) => Number.parseInt(stripTags(match[1] ?? ''), 10))
+    .filter(Number.isFinite);
+  return badges[0] ?? 1;
+}
+
+function splitJobLine(value: string | null): { title: string | null; company: string | null } {
+  if (!value) return { title: null, company: null };
+  const [title, company] = value.split('·').map((part) => part.trim());
+  return { title: title || null, company: company || null };
+}
+
+function createHasTextClause(value: string | null): string {
+  const trimmed = value?.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return '';
+  return `:has-text(${JSON.stringify(trimmed.slice(0, THREAD_SELECTOR_TEXT_MAX_LENGTH))})`;
+}
+
+function createConversationRowSelector(params: {
+  rowIndex: number;
+  username: string;
+  platformJobTitle: string | null;
+  content: string;
+}): string {
+  const textSelector = [
+    createHasTextClause(params.username),
+    createHasTextClause(params.platformJobTitle),
+    createHasTextClause(params.content),
+  ].join('');
+  return textSelector
+    ? `${CONVERSATION_ROW_SELECTOR}${textSelector}`
+    : `${CONVERSATION_ROW_SELECTOR}:nth-of-type(${params.rowIndex})`;
+}
+
+function createRenderedSourceMessageId(thread: RenderedThread): string {
+  return `${RENDERED_MESSAGE_ID_PREFIX}${thread.rowIndex}`;
+}
+
+function extractRenderedThreads(html: string): RenderedThread[] {
+  return findCursorPointerRows(html)
+    .map((row) => {
+      const username = readFirstClassText(row.html, 'font-medium') ?? '';
+      const jobLine = splitJobLine(readFirstClassText(row.html, 'text-xs'));
+      const unreadCount = readUnreadCount(row.html);
+      const content = readParagraphText(row.html);
+      return {
+        rowIndex: row.index + 1,
+        username,
+        platformJobTitle: jobLine.title,
+        company: jobLine.company,
+        content,
+        unreadCount,
+        selector: createConversationRowSelector({
+          rowIndex: row.index + 1,
+          username,
+          platformJobTitle: jobLine.title,
+          content,
+        }),
+      };
+    })
+    .filter((thread) => thread.username && thread.content);
+}
+
+function findResumeForThread(thread: RenderedThread, resumes: RawCandidate[]): RawCandidate | null {
+  const username = normalizeMatchText(thread.username);
+  const exact = resumes.find(
+    (resume) =>
+      normalizeMatchText(resume.company) === username ||
+      normalizeMatchText(resume.name) === username,
+  );
+  if (exact) return exact;
+
+  return (
+    resumes.find((resume) => {
+      const name = normalizeMatchText(resume.name);
+      const company = normalizeMatchText(resume.company);
+      return Boolean(
+        (name && (name.includes(username) || username.includes(name))) ||
+        (company && (company.includes(username) || username.includes(company))),
+      );
+    }) ?? null
+  );
+}
+
+function createMessageFromRenderedThread(
+  thread: RenderedThread,
+  resumes: RawCandidate[],
+  baseUrl: string,
+): UnreadCandidateMessage {
+  const resume = findResumeForThread(thread, resumes);
+  const externalMessageId = createRenderedSourceMessageId(thread);
+  return {
+    externalMessageId,
+    platformCandidateId: resume?.platformCandidateId ?? null,
+    candidateName: resume?.name ?? thread.username,
+    profileUrl: resolveSameOriginUrl(baseUrl, resume?.profileUrl ?? null),
+    platformJobTitle: thread.platformJobTitle,
+    replyTarget: createBrowserReplyTarget({
+      selector: thread.selector,
+      sourceMessageId: externalMessageId,
+    }),
+    content: thread.content,
+    receivedAt: new Date(),
+  };
+}
+
+function readLastConversationMessageDirection(html: string): ConversationMessageDirection | null {
+  let lastDirection: ConversationMessageDirection | null = null;
+  for (const match of html.matchAll(
+    /<div\b[^>]*class="[^"]*\bflex\b[^"]*\bjustify-(start|end)\b[^"]*"[^>]*>/gi,
+  )) {
+    lastDirection = match[1] === 'start' ? 'candidate' : 'agent';
+  }
+  return lastDirection;
 }
 
 export function extractBossLikeUnreadMessagesFromHtml(
@@ -184,48 +297,22 @@ export function extractBossLikeUnreadMessagesFromHtml(
     .filter((message) => message.externalMessageId && message.content);
 }
 
-export function extractBossLikeUnreadMessagesFromApi(
-  input: BossLikeUnreadApiInput,
+export function extractBossLikeUnreadMessagesFromRenderedHtml(
+  messagesHtml: string,
+  resumesHtml: string,
   baseUrl: string,
 ): UnreadCandidateMessage[] {
-  const resumeByUserId = new Map<number, BossLikeApiResume>();
-  for (const resume of input.resumes) {
-    if (!resumeByUserId.has(resume.userId)) {
-      resumeByUserId.set(resume.userId, resume);
-    }
-  }
+  const legacyMessages = extractBossLikeUnreadMessagesFromHtml(messagesHtml, baseUrl);
+  if (legacyMessages.length > 0) return legacyMessages;
 
-  const messages: UnreadCandidateMessage[] = [];
-  for (const conversation of input.conversations) {
-    if (conversation.unreadCount <= 0) continue;
-    const resume = resumeByUserId.get(conversation.userId);
-    const profileUrl = resume
-      ? resolveSameOriginUrl(baseUrl, `/employer/resumes/${resume.id}`)
-      : null;
-
-    for (const message of conversation.messages) {
-      if (message.receiverId !== input.employerUserId || message.isRead) continue;
-      messages.push({
-        externalMessageId: `${BOSS_LIKE_MESSAGE_ID_PREFIX}${message.id}`,
-        platformCandidateId: resume ? String(resume.id) : null,
-        candidateName: resume?.name || conversation.username || null,
-        profileUrl,
-        platformJobTitle: conversation.jobTitle,
-        replyTarget: createReplyTarget({
-          receiverId: conversation.userId,
-          jobId: conversation.jobId,
-          sourceMessageId: message.id,
-        }),
-        content: message.content,
-        receivedAt: parseRequiredDate(message.createdAt),
-      });
-    }
-  }
-
-  return messages;
+  const resumes = extractBossLikeCandidatesFromHtml(resumesHtml);
+  return extractRenderedThreads(messagesHtml)
+    .filter((thread) => thread.unreadCount > 0)
+    .map((thread) => createMessageFromRenderedThread(thread, resumes, baseUrl))
+    .filter((message) => message.content);
 }
 
-class BossLikeConversationReplyAdapter implements CandidateSourceAdapter {
+class BossLikeBrowserConversationReplyAdapter implements CandidateSourceAdapter {
   readonly platform = 'boss-like' as const;
 
   constructor(
@@ -234,7 +321,7 @@ class BossLikeConversationReplyAdapter implements CandidateSourceAdapter {
   ) {}
 
   async loginIfNeeded(): Promise<void> {
-    await this.owner.ensureApiLogin();
+    await this.owner.loginIfNeeded();
   }
 
   async *searchCandidates() {
@@ -252,7 +339,7 @@ class BossLikeConversationReplyAdapter implements CandidateSourceAdapter {
     _candidate: Parameters<CandidateSourceAdapter['chatCandidate']>[0],
     plan: CandidateActionPlan,
   ) {
-    return this.owner.sendReplyToUnreadMessage(this.message, plan.message ?? '');
+    return this.owner.sendReplyToUnreadMessageInBrowser(this.message, plan.message ?? '');
   }
 
   async close(): Promise<void> {
@@ -264,105 +351,130 @@ export class BossLikeCandidateCommunicationAdapter
   extends BossLikeCandidateSourceAdapter
   implements CandidateCommunicationSkillAdapter
 {
-  private apiAuth: BossLikeApiAuth | null = null;
-  private resumesByUserId = new Map<number, BossLikeApiResume>();
-
   async listUnreadMessages(): Promise<UnreadCandidateMessage[]> {
-    try {
-      return await this.listUnreadMessagesFromApi();
-    } catch (error) {
-      const htmlMessages = await this.listUnreadMessagesFromHtml();
-      if (htmlMessages.length > 0 || process.env.NODE_ENV === 'test') {
-        return htmlMessages;
-      }
-      throw error;
-    }
+    await this.loginIfNeeded();
+    await this.openMessagesPage();
+    const messagesHtml = await this.readRawSnapshot();
+    const legacyMessages = extractBossLikeUnreadMessagesFromHtml(messagesHtml, this.baseUrl);
+    if (legacyMessages.length > 0) return legacyMessages;
+    const renderedThreads = extractRenderedThreads(messagesHtml);
+    const pendingReplySourceIds = await this.findPendingReplySourceIds(renderedThreads);
+
+    await requireSuccessfulStep(
+      this.executor.navigate(this.communicationResumeListUrl()),
+      'open resume list',
+    );
+    await this.executor.check({
+      type: 'text_contains',
+      text: '简历',
+      timeout: 5_000,
+    });
+    const resumesHtml = await this.readRawSnapshot();
+    const resumes = extractBossLikeCandidatesFromHtml(resumesHtml);
+    return renderedThreads
+      .filter(
+        (thread) =>
+          thread.unreadCount > 0 ||
+          pendingReplySourceIds.has(createRenderedSourceMessageId(thread)),
+      )
+      .map((thread) => createMessageFromRenderedThread(thread, resumes, this.baseUrl))
+      .filter((message) => message.content);
   }
 
   createReplyAdapterForMessage(message: UnreadCandidateMessage): CandidateSourceAdapter {
-    return message.replyTarget ? new BossLikeConversationReplyAdapter(this, message) : this;
+    return message.replyTarget?.browserThreadSelector
+      ? new BossLikeBrowserConversationReplyAdapter(this, message)
+      : this;
   }
 
   async collectCandidateFromMessage(message: UnreadCandidateMessage): Promise<RawCandidate | null> {
-    await this.ensureResumeCache();
-    const receiverId = Number(message.replyTarget?.receiverId);
-    const resume = Number.isFinite(receiverId) ? this.resumesByUserId.get(receiverId) : null;
-    if (!resume) return null;
+    if (!message.profileUrl) {
+      return {
+        platformCandidateId: message.platformCandidateId ?? null,
+        profileUrl: null,
+        name: message.candidateName ?? '候选人',
+        title: message.platformJobTitle ?? '候选人',
+        resumeText: message.content,
+        lastActiveAt: message.receivedAt.toISOString(),
+      };
+    }
+
+    await this.loginIfNeeded();
+    await requireSuccessfulStep(
+      this.executor.navigate(message.profileUrl),
+      'open candidate profile',
+    );
+    const detailHtml = await this.readRawSnapshot();
+    const detail = extractBossLikeCandidatesFromHtml(detailHtml)[0];
+    if (!detail) {
+      return {
+        platformCandidateId: message.platformCandidateId,
+        profileUrl: message.profileUrl,
+        name: message.candidateName ?? '候选人',
+        title: '候选人',
+        resumeText: message.content,
+        lastActiveAt: message.receivedAt.toISOString(),
+      };
+    }
 
     return {
-      platformCandidateId: String(resume.id),
-      profileUrl: resolveSameOriginUrl(this.baseUrl, `/employer/resumes/${resume.id}`),
-      name: resume.name || message.candidateName || `candidate_${resume.userId}`,
-      title: '候选人',
-      company: resume.user?.username ?? null,
-      resumeText: buildResumeText(resume) || message.content,
+      ...detail,
+      platformCandidateId: detail.platformCandidateId ?? message.platformCandidateId,
+      profileUrl: resolveSameOriginUrl(this.baseUrl, detail.profileUrl ?? message.profileUrl),
+      name: detail.name || message.candidateName || '候选人',
+      resumeText: detail.resumeText || message.content,
       lastActiveAt: message.receivedAt.toISOString(),
     };
   }
 
   async markUnreadMessageProcessed(message: UnreadCandidateMessage): Promise<void> {
-    const target = message.replyTarget;
-    if (!target) return;
-    const jobId = target.jobId ?? 'null';
-    await this.apiGet(`/api/messages/conversation/${target.receiverId}/${jobId}`, 'mark read');
-  }
-
-  async ensureApiLogin(): Promise<BossLikeApiAuth> {
-    if (this.apiAuth) return this.apiAuth;
-
-    const response = await fetch(`${this.baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        username: this.credentials.username,
-        password: this.credentials.password,
-      }),
+    const selector = message.replyTarget?.browserThreadSelector;
+    if (!selector) return;
+    await this.openMessagesPage();
+    const isStillVisible = await this.executor.check({
+      type: 'dom_exists',
+      selector,
+      timeout: 2_000,
     });
-    const payload = assertApiEnvelope(await response.json(), 'boss-like api login');
-    if (!isRecord(payload)) {
-      throw new Error('boss-like api login returned invalid data');
-    }
-    const token = readString(payload.token);
-    const employerUserId = readNumber(payload.id);
-    if (!token || employerUserId === null) {
-      throw new Error('boss-like api login returned incomplete data');
-    }
-    this.apiAuth = { token, employerUserId };
-    return this.apiAuth;
+    if (!isStillVisible) return;
+    await this.clickSelector(selector, 'open unread conversation');
   }
 
-  async sendReplyToUnreadMessage(message: UnreadCandidateMessage, content: string) {
-    const target = message.replyTarget;
+  async sendReplyToUnreadMessageInBrowser(message: UnreadCandidateMessage, content: string) {
+    const selector = message.replyTarget?.browserThreadSelector;
     const text = content.trim();
-    if (!target) {
+    if (!selector) {
       return {
         success: false,
-        error: 'boss-like reply target is missing',
-        browserTrace: { action: 'chat', channel: 'api' },
+        error: 'boss-like browser conversation selector is missing',
+        browserTrace: { action: 'chat', channel: 'browser' },
       };
     }
     if (!text) {
       return {
         success: false,
         error: 'chat message is required',
-        browserTrace: { action: 'chat', channel: 'api', receiverId: target.receiverId },
+        browserTrace: { action: 'chat', channel: 'browser', selector },
       };
     }
 
     try {
-      await this.apiPost('/api/messages', 'send message', {
-        receiverId: Number(target.receiverId),
-        content: text,
-        ...(target.jobId ? { jobId: Number(target.jobId) } : {}),
+      await this.openMessagesPage();
+      await this.clickSelector(selector, 'open unread conversation');
+      await this.executor.check({
+        type: 'dom_exists',
+        selector: REPLY_TEXTAREA_SELECTOR,
+        timeout: 5_000,
       });
+      await this.fillSelector(REPLY_TEXTAREA_SELECTOR, text, 'fill chat message');
+      await this.clickSelector(SEND_BUTTON_SELECTOR, 'send chat message');
       return {
         success: true,
         browserTrace: {
           action: 'chat',
-          channel: 'api',
-          receiverId: target.receiverId,
-          jobId: target.jobId ?? null,
-          sourceMessageId: target.sourceMessageId ?? null,
+          channel: 'browser',
+          selector,
+          sourceMessageId: message.replyTarget?.sourceMessageId ?? null,
           messageLength: text.length,
         },
       };
@@ -370,145 +482,76 @@ export class BossLikeCandidateCommunicationAdapter
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        browserTrace: {
-          action: 'chat',
-          channel: 'api',
-          receiverId: target.receiverId,
-          jobId: target.jobId ?? null,
-        },
+        browserTrace: { action: 'chat', channel: 'browser', selector },
       };
     }
   }
 
-  private async listUnreadMessagesFromApi(): Promise<UnreadCandidateMessage[]> {
-    const [conversations, resumes, auth] = await Promise.all([
-      this.apiGet('/api/messages/conversations', 'list conversations'),
-      this.apiGet('/api/resumes', 'list resumes'),
-      this.ensureApiLogin(),
-    ]);
-    const parsedConversations = this.parseConversations(conversations);
-    const parsedResumes = this.parseResumes(resumes);
-    this.resumesByUserId = new Map(parsedResumes.map((resume) => [resume.userId, resume]));
-    return extractBossLikeUnreadMessagesFromApi(
-      {
-        conversations: parsedConversations,
-        resumes: parsedResumes,
-        employerUserId: auth.employerUserId,
-      },
-      this.baseUrl,
-    );
-  }
-
-  private async listUnreadMessagesFromHtml(): Promise<UnreadCandidateMessage[]> {
+  private async openMessagesPage(): Promise<void> {
     await requireSuccessfulStep(this.executor.navigate(this.unreadMessageUrl()), 'open messages');
-    const html = await this.readRawSnapshot();
-    return extractBossLikeUnreadMessagesFromHtml(html, this.baseUrl);
-  }
-
-  private async ensureResumeCache(): Promise<void> {
-    if (this.resumesByUserId.size > 0) return;
-    const resumes = this.parseResumes(await this.apiGet('/api/resumes', 'list resumes'));
-    this.resumesByUserId = new Map(resumes.map((resume) => [resume.userId, resume]));
-  }
-
-  private async apiGet(path: string, action: string): Promise<unknown> {
-    const auth = await this.ensureApiLogin();
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      headers: { authorization: `Bearer ${auth.token}` },
-    });
-    return assertApiEnvelope(await response.json(), action);
-  }
-
-  private async apiPost(path: string, action: string, body: unknown): Promise<unknown> {
-    const auth = await this.ensureApiLogin();
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${auth.token}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
-    return assertApiEnvelope(await response.json(), action);
-  }
-
-  private parseConversations(value: unknown): BossLikeApiConversation[] {
-    if (!Array.isArray(value)) return [];
-    return value.flatMap((item): BossLikeApiConversation[] => {
-      if (!isRecord(item)) return [];
-      const userId = readNumber(item.userId);
-      const username = readString(item.username);
-      const unreadCount = readNumber(item.unreadCount);
-      if (userId === null || !username || unreadCount === null) return [];
-      const jobId = item.jobId === null ? null : readNumber(item.jobId);
-      const messages = Array.isArray(item.messages)
-        ? item.messages.flatMap((message): BossLikeApiMessage[] => {
-            if (!isRecord(message)) return [];
-            const id = readNumber(message.id);
-            const content = readString(message.content);
-            const senderId = readNumber(message.senderId);
-            const receiverId = readNumber(message.receiverId);
-            const createdAt = readString(message.createdAt);
-            if (
-              id === null ||
-              !content ||
-              senderId === null ||
-              receiverId === null ||
-              !createdAt ||
-              typeof message.isRead !== 'boolean'
-            ) {
-              return [];
-            }
-            return [
-              {
-                id,
-                content,
-                type: readString(message.type) ?? 'text',
-                isRead: message.isRead,
-                senderId,
-                receiverId,
-                createdAt,
-              },
-            ];
-          })
-        : [];
-      return [
-        {
-          userId,
-          username,
-          jobId,
-          jobTitle: readString(item.jobTitle),
-          company: readString(item.company),
-          unreadCount,
-          messages,
-        },
-      ];
+    await this.executor.check({
+      type: 'text_contains',
+      text: '消息列表',
+      timeout: 5_000,
     });
   }
 
-  private parseResumes(value: unknown): BossLikeApiResume[] {
-    if (!Array.isArray(value)) return [];
-    return value.flatMap((item): BossLikeApiResume[] => {
-      if (!isRecord(item)) return [];
-      const id = readNumber(item.id);
-      const userId = readNumber(item.userId);
-      const name = readString(item.name);
-      if (id === null || userId === null || !name) return [];
-      const user = isRecord(item.user) ? { username: readString(item.user.username) } : null;
-      return [
-        {
-          id,
-          userId,
-          name,
-          education: readString(item.education),
-          experience: readString(item.experience),
-          projects: readString(item.projects),
-          skills: readStringArray(item.skills),
-          summary: readString(item.summary),
-          user,
-        },
-      ];
+  private async clickSelector(selector: string, action: string): Promise<void> {
+    if (!this.executor.clickSelector) {
+      throw new Error('boss-like browser communication requires selector clicking support');
+    }
+    await requireSuccessfulStep(this.executor.clickSelector(selector), action);
+  }
+
+  private async fillSelector(selector: string, value: string, action: string): Promise<void> {
+    if (!this.executor.fillSelector) {
+      throw new Error('boss-like browser communication requires selector filling support');
+    }
+    await requireSuccessfulStep(this.executor.fillSelector(selector, value), action);
+  }
+
+  private async findPendingReplySourceIds(threads: RenderedThread[]): Promise<Set<string>> {
+    const pending = new Set<string>();
+    for (const thread of threads) {
+      if (thread.unreadCount > 0) continue;
+      try {
+        await this.clickSelector(thread.selector, 'inspect read conversation');
+        await this.waitForConversationDetail(thread);
+        const detailHtml = await this.readRawSnapshot();
+        if (readLastConversationMessageDirection(detailHtml) === 'candidate') {
+          pending.add(createRenderedSourceMessageId(thread));
+        }
+      } catch {
+        continue;
+      }
+    }
+    return pending;
+  }
+
+  private async waitForConversationDetail(thread: RenderedThread): Promise<void> {
+    const detailHeaderSelector = thread.platformJobTitle
+      ? [
+          'div.flex-1.flex.flex-col > div[class*="border-b"]',
+          createHasTextClause(thread.username),
+          createHasTextClause(thread.platformJobTitle),
+        ].join('')
+      : `div.flex-1.flex.flex-col h3${createHasTextClause(thread.username)}`;
+    await this.executor.check({
+      type: 'dom_exists',
+      selector: detailHeaderSelector,
+      timeout: 2_000,
     });
+    await this.executor.check({
+      type: 'dom_exists',
+      selector: `div.flex-1.flex.flex-col div[class*="overflow-y-auto"]${createHasTextClause(
+        thread.content,
+      )}`,
+      timeout: 2_000,
+    });
+  }
+
+  private communicationResumeListUrl(): string {
+    return `${this.baseUrl.replace(/\/+$/, '')}/employer/resumes`;
   }
 
   private unreadMessageUrl(): string {

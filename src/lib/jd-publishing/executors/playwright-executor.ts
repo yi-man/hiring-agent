@@ -193,6 +193,20 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
     }
   }
 
+  async fillSelector(selector: string, value: string): Promise<BrowserStepResult> {
+    return this.wrap(async () => {
+      const page = await this.getPage();
+      await page.locator(selector).first().fill(value, { timeout: this.timeoutMs });
+    });
+  }
+
+  async clickSelector(selector: string): Promise<BrowserStepResult> {
+    return this.wrap(async () => {
+      const page = await this.getPage();
+      await page.locator(selector).first().click({ timeout: this.timeoutMs });
+    });
+  }
+
   async waitForUrl(url: string): Promise<BrowserStepResult> {
     return this.wrap(async () => {
       const page = await this.getPage();

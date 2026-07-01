@@ -91,6 +91,8 @@ export type BrowserStepTargetKey = 'target' | 'submitTarget';
 export type BrowserCommandAction =
   | PublishSkillAction
   | 'check'
+  | 'click_selector'
+  | 'fill_selector'
   | 'snapshot_structured'
   | 'resolve_target';
 
@@ -204,6 +206,8 @@ export type BrowserExecutor = {
   navigate(url: string): Promise<BrowserStepResult>;
   fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult>;
   click(target: BrowserTargetInput): Promise<BrowserStepResult>;
+  fillSelector?(selector: string, value: string): Promise<BrowserStepResult>;
+  clickSelector?(selector: string): Promise<BrowserStepResult>;
   waitForUrl(url: string): Promise<BrowserStepResult>;
   check(check: PublishStepCheck): Promise<boolean>;
   waitForText?(text: string): Promise<BrowserStepResult>;

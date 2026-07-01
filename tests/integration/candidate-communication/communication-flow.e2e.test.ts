@@ -75,27 +75,40 @@ function renderResumeListPage(): string {
     <main>
       <h1>候选人库</h1>
       <p>简历</p>
-      <a href="/employer/resumes/boss-cand-1">Ada Lovelace</a>
+      <a href="/employer/resumes/boss-cand-1">
+        <article data-candidate-id="boss-cand-1" data-profile-url="/employer/resumes/boss-cand-1">
+          <h2>Ada Lovelace</h2>
+          <p data-field="title">Senior Backend Engineer</p>
+          <p data-field="company">Analytical Engines</p>
+          <p data-field="resume">Java PostgreSQL 招聘 SaaS 沟通自动化</p>
+        </article>
+      </a>
     </main>
   </body>
 </html>`;
 }
 
 function renderMessagesPage(unread: boolean): string {
-  const unreadArticle = unread
-    ? `<article data-message-id="boss-message-1" data-candidate-id="boss-cand-1" data-profile-url="/employer/resumes/boss-cand-1" data-unread="true">
-        <h2>Ada Lovelace</h2>
-        <p data-field="message">可以，加我微信 wxid_backend_2026</p>
-        <time datetime="2026-06-30T12:00:00.000Z">刚刚</time>
-      </article>`
+  const unreadRow = unread
+    ? `<div class="p-4 border-b cursor-pointer" onclick="document.querySelector('#selected-thread').textContent = 'boss-message-1'">
+        <div class="font-medium">Ada Lovelace</div>
+        <div class="text-xs text-gray-500">高级后端工程师 · Analytical Engines</div>
+        <p class="text-sm text-gray-600 truncate flex-1">可以，加我微信 wxid_backend_2026</p>
+        <span class="ml-2 bg-red-500 text-white text-xs rounded-full">1</span>
+      </div>`
     : '';
   return `<!doctype html>
 <html lang="zh-CN">
   <head><meta charset="utf-8" /><title>未读消息</title></head>
   <body>
     <main>
-      <h1>未读消息</h1>
-      <section>${unreadArticle}</section>
+      <h1>消息列表</h1>
+      <div class="overflow-y-auto">${unreadRow}</div>
+      <div id="selected-thread"></div>
+      <form method="post" action="/employer/messages/boss-message-1/reply">
+        <label>消息 <textarea name="message" placeholder="输入回复内容..."></textarea></label>
+        <button type="submit">发送</button>
+      </form>
       ${unread ? '' : '<p>暂无未读消息</p>'}
     </main>
   </body>
@@ -128,6 +141,14 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
 
       if (url.pathname === '/employer/messages') {
         response.end(renderMessagesPage(hasUnreadMessage));
+        return;
+      }
+
+      const threadReplyMatch = url.pathname.match(/^\/employer\/messages\/([^/]+)\/reply$/);
+      if (request.method === 'POST' && threadReplyMatch) {
+        postedMessages.push(await readRequestBody(request));
+        hasUnreadMessage = false;
+        response.end('<!doctype html><html><body>Message sent</body></html>');
         return;
       }
 
@@ -173,6 +194,10 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
         });
       }),
   };
+}
+
+function expectNoDirectPlatformApiRequests(requests: string[]): void {
+  expect(requests.filter((request) => / \/api\//.test(request))).toEqual([]);
 }
 
 async function createIntegrationUser(): Promise<string> {
@@ -326,6 +351,7 @@ describe('candidate communication integration flow with real postgres, LLM, and 
       expect(bossLike.requests).toContain('GET /employer/resumes/boss-cand-1');
       expect(bossLike.requests).toContain('POST /employer/resumes/boss-cand-1/messages');
       expect(bossLike.postedMessages.join('\n')).toContain('message=');
+      expectNoDirectPlatformApiRequests(bossLike.requests);
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();
@@ -370,8 +396,9 @@ describe('candidate communication integration flow with real postgres, LLM, and 
       expect(sentMessages[0]).toMatchObject({ deliveryStatus: 'sent' });
       expect(
         bossLike.requests.filter((request) => request === 'GET /employer/messages'),
-      ).toHaveLength(2);
-      expect(bossLike.requests).toContain('POST /employer/resumes/boss-cand-1/messages');
+      ).toHaveLength(4);
+      expect(bossLike.requests).toContain('POST /employer/messages/boss-message-1/reply');
+      expectNoDirectPlatformApiRequests(bossLike.requests);
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();

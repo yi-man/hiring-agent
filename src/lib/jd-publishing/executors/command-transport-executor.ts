@@ -138,6 +138,14 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
     return normalizeResult(await this.send('click', {}, target));
   }
 
+  async fillSelector(selector: string, value: string): Promise<BrowserStepResult> {
+    return normalizeResult(await this.send('fill_selector', { selector, value }));
+  }
+
+  async clickSelector(selector: string): Promise<BrowserStepResult> {
+    return normalizeResult(await this.send('click_selector', { selector }));
+  }
+
   async waitForUrl(url: string): Promise<BrowserStepResult> {
     return normalizeResult(await this.send('wait_for_url', { url }));
   }
