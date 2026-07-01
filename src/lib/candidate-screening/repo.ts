@@ -8,6 +8,8 @@ import type {
   CandidateActionStatus,
   CandidateDecisionAction,
   CandidateDecisionPriority,
+  CandidateInterviewFeedbackDecision,
+  CandidateInterviewFeedbackStage,
   CandidateInterviewStage,
   CandidateScreeningMode,
   CandidateScreeningPlatform,
@@ -20,6 +22,7 @@ import type {
   ScreeningRunStats,
   SearchPlan,
 } from './types';
+export type { CandidateDecisionResultDto } from './hiring-decision';
 
 export { vectorToPgLiteral } from '@/lib/rag/knowledge-repo';
 
@@ -115,6 +118,22 @@ type CandidateActionLogRecord = {
   idempotencyKey: string;
   browserTrace: unknown | null;
   errorMessage: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type CandidateInterviewFeedbackRecord = {
+  id: string;
+  userId: string;
+  jobDescriptionId: string;
+  candidateId: string;
+  stage: string;
+  interviewer: string;
+  rating: number;
+  pros: unknown;
+  cons: unknown;
+  decision: string;
+  notes: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -229,6 +248,22 @@ export type CandidateActionLogDto = {
   idempotencyKey: string;
   browserTrace: Record<string, unknown> | null;
   errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CandidateInterviewFeedbackDto = {
+  id: string;
+  userId: string;
+  jobDescriptionId: string;
+  candidateId: string;
+  stage: CandidateInterviewFeedbackStage;
+  interviewer: string;
+  rating: number;
+  pros: string[];
+  cons: string[];
+  decision: CandidateInterviewFeedbackDecision;
+  notes: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -404,6 +439,19 @@ export type UpdateCandidateProgressRepoParams = {
   notes?: string | null;
 };
 
+export type UpsertCandidateInterviewFeedbackParams = {
+  userId: string;
+  jobDescriptionId: string;
+  candidateId: string;
+  stage: CandidateInterviewFeedbackStage;
+  interviewer: string;
+  rating: number;
+  pros: string[];
+  cons: string[];
+  decision: CandidateInterviewFeedbackDecision;
+  notes?: string | null;
+};
+
 export type CreateActionLogParams = {
   userId: string;
   runId: string;
@@ -449,6 +497,12 @@ function toRecordOrNull(value: unknown | null): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 }
 
 function iso(date: Date): string;
@@ -556,6 +610,26 @@ function mapActionLog(row: CandidateActionLogRecord): CandidateActionLogDto {
     idempotencyKey: row.idempotencyKey,
     browserTrace: toRecordOrNull(row.browserTrace),
     errorMessage: row.errorMessage,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+  };
+}
+
+function mapInterviewFeedback(
+  row: CandidateInterviewFeedbackRecord,
+): CandidateInterviewFeedbackDto {
+  return {
+    id: row.id,
+    userId: row.userId,
+    jobDescriptionId: row.jobDescriptionId,
+    candidateId: row.candidateId,
+    stage: row.stage as CandidateInterviewFeedbackStage,
+    interviewer: row.interviewer,
+    rating: row.rating,
+    pros: toStringArray(row.pros),
+    cons: toStringArray(row.cons),
+    decision: row.decision as CandidateInterviewFeedbackDecision,
+    notes: row.notes,
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
   };
@@ -1095,6 +1169,74 @@ export async function updateCandidateInterviewProgress(
   }
   const row = await prisma.candidateScreeningResult.findFirst({ where });
   return row ? mapScreeningResult(row) : null;
+}
+
+const interviewFeedbackStageOrder: CandidateInterviewFeedbackStage[] = [
+  'first_interview',
+  'second_interview',
+  'final_interview',
+];
+
+function sortInterviewFeedbacks(
+  left: CandidateInterviewFeedbackDto,
+  right: CandidateInterviewFeedbackDto,
+): number {
+  return (
+    interviewFeedbackStageOrder.indexOf(left.stage) -
+    interviewFeedbackStageOrder.indexOf(right.stage)
+  );
+}
+
+export async function listCandidateInterviewFeedbacks(params: {
+  userId: string;
+  jobDescriptionId: string;
+  candidateId: string;
+}): Promise<CandidateInterviewFeedbackDto[]> {
+  const rows = await prisma.candidateInterviewFeedback.findMany({
+    where: {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: params.candidateId,
+    },
+    orderBy: { updatedAt: 'asc' },
+  });
+  return rows.map(mapInterviewFeedback).sort(sortInterviewFeedbacks);
+}
+
+export async function upsertCandidateInterviewFeedback(
+  params: UpsertCandidateInterviewFeedbackParams,
+): Promise<CandidateInterviewFeedbackDto> {
+  const row = await prisma.candidateInterviewFeedback.upsert({
+    where: {
+      userId_jobDescriptionId_candidateId_stage: {
+        userId: params.userId,
+        jobDescriptionId: params.jobDescriptionId,
+        candidateId: params.candidateId,
+        stage: params.stage,
+      },
+    },
+    create: {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: params.candidateId,
+      stage: params.stage,
+      interviewer: params.interviewer,
+      rating: params.rating,
+      pros: toJson(params.pros),
+      cons: toJson(params.cons),
+      decision: params.decision,
+      notes: params.notes ?? null,
+    },
+    update: {
+      interviewer: params.interviewer,
+      rating: params.rating,
+      pros: toJson(params.pros),
+      cons: toJson(params.cons),
+      decision: params.decision,
+      notes: params.notes ?? null,
+    },
+  });
+  return mapInterviewFeedback(row);
 }
 
 export async function createCandidateActionLog(

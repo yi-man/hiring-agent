@@ -1,4 +1,6 @@
 import {
+  CANDIDATE_INTERVIEW_FEEDBACK_DECISIONS,
+  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
   CANDIDATE_SCREENING_INTERVIEW_STAGES,
   DEFAULT_MAX_CHAT_ACTIONS,
   DEFAULT_MAX_COLLECT_ACTIONS,
@@ -8,11 +10,15 @@ import {
 } from './constants';
 import type {
   CandidateInterviewStage,
+  CandidateInterviewFeedbackDecision,
+  CandidateInterviewFeedbackStage,
   CandidateScreeningMode,
   CandidateScreeningPlatform,
   CreateScreeningRunRequest,
+  EvaluateCandidateDecisionRequest,
   ExecuteActionsRequest,
   UpdateCandidateProgressRequest,
+  UpsertCandidateInterviewFeedbackRequest,
 } from './types';
 
 type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -46,6 +52,42 @@ function isCandidateInterviewStage(value: unknown): value is CandidateInterviewS
     typeof value === 'string' &&
     CANDIDATE_SCREENING_INTERVIEW_STAGES.includes(value as CandidateInterviewStage)
   );
+}
+
+function isCandidateInterviewFeedbackStage(
+  value: unknown,
+): value is CandidateInterviewFeedbackStage {
+  return (
+    typeof value === 'string' &&
+    CANDIDATE_INTERVIEW_FEEDBACK_STAGES.includes(value as CandidateInterviewFeedbackStage)
+  );
+}
+
+function isCandidateInterviewFeedbackDecision(
+  value: unknown,
+): value is CandidateInterviewFeedbackDecision {
+  return (
+    typeof value === 'string' &&
+    CANDIDATE_INTERVIEW_FEEDBACK_DECISIONS.includes(value as CandidateInterviewFeedbackDecision)
+  );
+}
+
+function cleanStringArray(value: unknown, fieldName: string): ValidationResult<string[]> {
+  if (!Array.isArray(value)) {
+    return { ok: false, error: `${fieldName} must be an array of strings` };
+  }
+
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      return { ok: false, error: `${fieldName} must be an array of strings` };
+    }
+    const trimmed = item.trim();
+    if (trimmed) {
+      result.push(trimmed);
+    }
+  }
+  return { ok: true, value: result };
 }
 
 export function parseCreateScreeningRunPayload(
@@ -147,4 +189,71 @@ export function parseUpdateCandidateProgressPayload(
   }
 
   return { ok: true, value };
+}
+
+export function parseUpsertCandidateInterviewFeedbackPayload(
+  body: unknown,
+): ValidationResult<UpsertCandidateInterviewFeedbackRequest> {
+  if (!isRecord(body)) {
+    return { ok: false, error: 'invalid JSON body' };
+  }
+
+  if (!isCandidateInterviewFeedbackStage(body.stage)) {
+    return { ok: false, error: 'stage is invalid' };
+  }
+
+  const interviewer = cleanText(body.interviewer);
+  if (!interviewer) {
+    return { ok: false, error: 'interviewer is required' };
+  }
+
+  if (typeof body.rating !== 'number' || !Number.isFinite(body.rating)) {
+    return { ok: false, error: 'rating must be between 1 and 5' };
+  }
+  if (body.rating < 1 || body.rating > 5) {
+    return { ok: false, error: 'rating must be between 1 and 5' };
+  }
+
+  const pros = cleanStringArray(body.pros ?? [], 'pros');
+  if (!pros.ok) return pros;
+
+  const cons = cleanStringArray(body.cons ?? [], 'cons');
+  if (!cons.ok) return cons;
+
+  if (!isCandidateInterviewFeedbackDecision(body.decision)) {
+    return { ok: false, error: 'decision is invalid' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      stage: body.stage,
+      interviewer,
+      rating: body.rating,
+      pros: pros.value,
+      cons: cons.value,
+      decision: body.decision,
+      notes: body.notes === undefined ? null : cleanText(body.notes),
+    },
+  };
+}
+
+export function parseEvaluateCandidateDecisionPayload(
+  body: unknown,
+): ValidationResult<EvaluateCandidateDecisionRequest> {
+  if (!isRecord(body)) {
+    return { ok: false, error: 'invalid JSON body' };
+  }
+
+  const jobDescriptionId = cleanText(body.jobDescriptionId ?? body.job_description_id);
+  if (!jobDescriptionId) {
+    return { ok: false, error: 'job description id is required' };
+  }
+
+  const candidateId = cleanText(body.candidateId ?? body.candidate_id);
+  if (!candidateId) {
+    return { ok: false, error: 'candidate id is required' };
+  }
+
+  return { ok: true, value: { jobDescriptionId, candidateId } };
 }

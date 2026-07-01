@@ -1,5 +1,7 @@
 import type {
   CandidateDecisionAction,
+  CandidateInterviewFeedbackDecision,
+  CandidateInterviewFeedbackStage,
   CandidateInterviewStage,
   CandidateScreeningRunStage,
   CandidateScreeningRunStatus,
@@ -39,6 +41,18 @@ export const CANDIDATE_SCREENING_INTERVIEW_STAGES = [
   'rejected',
   'withdrawn',
 ] as const satisfies readonly CandidateInterviewStage[];
+
+export const CANDIDATE_INTERVIEW_FEEDBACK_STAGES = [
+  'first_interview',
+  'second_interview',
+  'final_interview',
+] as const satisfies readonly CandidateInterviewFeedbackStage[];
+
+export const CANDIDATE_INTERVIEW_FEEDBACK_DECISIONS = [
+  'pass',
+  'reject',
+  'hold',
+] as const satisfies readonly CandidateInterviewFeedbackDecision[];
 
 export const CANDIDATE_SCREENING_DECISION_ACTIONS = [
   'chat',

@@ -9,14 +9,21 @@ import { GET as getScreeningRun } from '@/app/api/candidate-screening/runs/[runI
 import { GET as streamScreeningRun } from '@/app/api/candidate-screening/runs/[runId]/stream/route';
 import { POST as executeScreeningRunActionsRoute } from '@/app/api/candidate-screening/runs/[runId]/execute-actions/route';
 import { GET as getCandidateTracking } from '@/app/api/candidate-screening/tracking/route';
+import { POST as evaluateCandidateDecisionRoute } from '@/app/api/decision/evaluate/route';
 import { GET as listJdCandidates } from '@/app/api/jd/[id]/candidates/route';
 import {
   GET as getJdCandidate,
   PATCH as updateJdCandidate,
 } from '@/app/api/jd/[id]/candidates/[candidateId]/route';
+import {
+  GET as listCandidateInterviewFeedbacksRoute,
+  POST as upsertCandidateInterviewFeedbackRoute,
+} from '@/app/api/jd/[id]/candidates/[candidateId]/interview-feedbacks/route';
 import { GET as openOriginalProfile } from '@/app/api/jd/[id]/candidates/[candidateId]/original-profile/route';
 import type {
   CandidateDto,
+  CandidateInterviewFeedbackDto,
+  CandidateDecisionResultDto,
   CandidateResumeDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultDto,
@@ -35,6 +42,9 @@ const listCandidateScreeningResultsMock = jest.fn();
 const getCandidateTrackingOverviewMock = jest.fn();
 const getCandidateScreeningDetailMock = jest.fn();
 const updateCandidateInterviewProgressMock = jest.fn();
+const listCandidateInterviewFeedbacksMock = jest.fn();
+const upsertCandidateInterviewFeedbackMock = jest.fn();
+const evaluateCandidateHiringDecisionMock = jest.fn();
 const executeScreeningRunActionsMock = jest.fn();
 
 jest.mock('next/server', () => ({
@@ -80,6 +90,15 @@ jest.mock('@/lib/candidate-screening/repo', () => ({
   getCandidateScreeningDetail: (...args: unknown[]) => getCandidateScreeningDetailMock(...args),
   updateCandidateInterviewProgress: (...args: unknown[]) =>
     updateCandidateInterviewProgressMock(...args),
+  listCandidateInterviewFeedbacks: (...args: unknown[]) =>
+    listCandidateInterviewFeedbacksMock(...args),
+  upsertCandidateInterviewFeedback: (...args: unknown[]) =>
+    upsertCandidateInterviewFeedbackMock(...args),
+}));
+
+jest.mock('@/lib/candidate-screening/hiring-decision', () => ({
+  evaluateCandidateHiringDecision: (...args: unknown[]) =>
+    evaluateCandidateHiringDecisionMock(...args),
 }));
 
 jest.mock('@/lib/candidate-screening/runner', () => ({
@@ -279,6 +298,48 @@ const sampleCandidateDetail: CandidateScreeningDetailDto = {
   ],
 };
 
+const sampleFeedback: CandidateInterviewFeedbackDto = {
+  id: 'feedback-1',
+  userId: 'u1',
+  jobDescriptionId: 'jd-1',
+  candidateId: 'cand-1',
+  stage: 'first_interview',
+  interviewer: 'Grace Hopper',
+  rating: 4,
+  pros: ['TypeScript 扎实', '产品判断好'],
+  cons: ['系统设计需要追问'],
+  decision: 'pass',
+  notes: '建议推进二面',
+  createdAt: now,
+  updatedAt: now,
+};
+
+const sampleDecisionResult: CandidateDecisionResultDto = {
+  hireDecision: 'yes',
+  confidence: 0.82,
+  offerAcceptProbability: 0.68,
+  generatedAt: now,
+  features: {
+    skillMatchScore: 0.86,
+    experienceMatch: 0.9,
+    interviewScore: 0.8,
+    intentLevel: 'high',
+    risks: {
+      salarySensitive: true,
+      hasOtherOffers: false,
+      lowStability: false,
+    },
+    responsiveness: 0.85,
+  },
+  riskAnalysis: {
+    level: 'medium',
+    reasons: ['薪资敏感'],
+  },
+  strengths: ['TypeScript 扎实'],
+  weaknesses: ['系统设计需要追问'],
+  suggestions: [{ type: 'action', content: '先确认薪资预期再发 offer' }],
+};
+
 function jsonRequest(url: string, body: unknown): Request {
   return new Request(url, {
     method: 'POST',
@@ -310,6 +371,9 @@ describe('candidate screening API routes', () => {
     getCandidateTrackingOverviewMock.mockReset();
     getCandidateScreeningDetailMock.mockReset();
     updateCandidateInterviewProgressMock.mockReset();
+    listCandidateInterviewFeedbacksMock.mockReset();
+    upsertCandidateInterviewFeedbackMock.mockReset();
+    evaluateCandidateHiringDecisionMock.mockReset();
     executeScreeningRunActionsMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
   });
@@ -594,6 +658,140 @@ describe('candidate screening API routes', () => {
       userId: 'u1',
       jobDescriptionId: 'jd-1',
       candidateId: 'cand-1',
+    });
+  });
+
+  it('lists structured interview feedback for a scoped candidate', async () => {
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([sampleFeedback]);
+
+    const response = await listCandidateInterviewFeedbacksRoute({} as Request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.feedbacks).toEqual([sampleFeedback]);
+    expect(getCandidateScreeningDetailMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+    });
+    expect(listCandidateInterviewFeedbacksMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+    });
+  });
+
+  it('upserts structured interview feedback with trimmed arrays', async () => {
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    upsertCandidateInterviewFeedbackMock.mockResolvedValueOnce(sampleFeedback);
+    const request = jsonRequest(
+      'http://localhost/api/jd/jd-1/candidates/cand-1/interview-feedbacks',
+      {
+        stage: 'first_interview',
+        interviewer: '  Grace Hopper  ',
+        rating: 4,
+        pros: [' TypeScript 扎实 ', '', '产品判断好'],
+        cons: [' 系统设计需要追问 '],
+        decision: 'pass',
+        notes: '  建议推进二面  ',
+      },
+    );
+
+    const response = await upsertCandidateInterviewFeedbackRoute(request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.feedback).toEqual(sampleFeedback);
+    expect(getCandidateScreeningDetailMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+    });
+    expect(upsertCandidateInterviewFeedbackMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+      stage: 'first_interview',
+      interviewer: 'Grace Hopper',
+      rating: 4,
+      pros: ['TypeScript 扎实', '产品判断好'],
+      cons: ['系统设计需要追问'],
+      decision: 'pass',
+      notes: '建议推进二面',
+    });
+  });
+
+  it('returns 404 when interview feedback candidate is missing', async () => {
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(null);
+
+    const response = await listCandidateInterviewFeedbacksRoute({} as Request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-missing' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error).toBe('candidate screening result not found');
+    expect(listCandidateInterviewFeedbacksMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid interview feedback rating', async () => {
+    const request = jsonRequest(
+      'http://localhost/api/jd/jd-1/candidates/cand-1/interview-feedbacks',
+      {
+        stage: 'first_interview',
+        interviewer: 'Grace Hopper',
+        rating: 6,
+        pros: [],
+        cons: [],
+        decision: 'pass',
+      },
+    );
+
+    const response = await upsertCandidateInterviewFeedbackRoute(request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('rating must be between 1 and 5');
+    expect(upsertCandidateInterviewFeedbackMock).not.toHaveBeenCalled();
+  });
+
+  it('evaluates the hiring decision from JD, candidate, and interview feedback', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce(sampleJobDescription);
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([sampleFeedback]);
+    evaluateCandidateHiringDecisionMock.mockReturnValueOnce(sampleDecisionResult);
+    const request = jsonRequest('http://localhost/api/decision/evaluate', {
+      job_description_id: 'jd-1',
+      candidate_id: 'cand-1',
+    });
+
+    const response = await evaluateCandidateDecisionRoute(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.decision).toEqual(sampleDecisionResult);
+    expect(getJobDescriptionByIdMock).toHaveBeenCalledWith('u1', 'jd-1');
+    expect(getCandidateScreeningDetailMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+    });
+    expect(listCandidateInterviewFeedbacksMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+    });
+    expect(evaluateCandidateHiringDecisionMock).toHaveBeenCalledWith({
+      jobDescription: sampleJobDescription,
+      candidate: sampleCandidateDetail,
+      interviewFeedbacks: [sampleFeedback],
     });
   });
 
