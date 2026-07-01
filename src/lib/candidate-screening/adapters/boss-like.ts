@@ -175,8 +175,8 @@ export function extractBossLikeCandidatesFromHtml(html: string): RawCandidate[] 
 
 export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   readonly platform: CandidateScreeningPlatform = 'boss-like';
-  private readonly executor: BrowserExecutor;
-  private readonly baseUrl: string;
+  protected readonly executor: BrowserExecutor;
+  protected readonly baseUrl: string;
   private readonly credentials: BossLikeCredentials;
 
   constructor(options: BossLikeCandidateSourceAdapterOptions) {

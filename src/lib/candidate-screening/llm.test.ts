@@ -230,6 +230,43 @@ describe('runCandidateEvaluationLLM', () => {
     expect(secondRequest.response_format).toBeUndefined();
   });
 
+  it('normalizes missing tag arrays and parses the first JSON object from provider content', async () => {
+    const partialContent = JSON.stringify({
+      tags: {
+        skills: ['Java'],
+        domainKnowledge: ['高并发'],
+        generalAbility: ['owner'],
+        risk: [],
+      },
+      score: { skill: 90, domain: 70, ability: 80, risk: 10, llmBonus: 5 },
+      reason: 'Java 和高并发匹配',
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: `${partialContent}\n补充说明：已完成简历评估。` } }],
+      }),
+    } as Response);
+
+    const result = await runCandidateEvaluationLLM({
+      jobTitle: '高级后端工程师',
+      evaluationSchema,
+      resumeText: 'Java 高并发',
+      candidateName: '王小明',
+    });
+
+    expect(result.tags).toEqual({
+      skills: ['Java'],
+      domainKnowledge: ['高并发'],
+      generalAbility: ['owner'],
+      risk: [],
+      activity: [],
+      custom: [],
+    });
+    expect(result.score.skill).toBe(90);
+  });
+
   it('validates bad JSON and schema errors', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

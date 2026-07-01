@@ -46,6 +46,10 @@ model User {
   candidateScreeningResults CandidateScreeningResult[]
   candidateActionLogs       CandidateActionLog[]
   candidateTagStats       CandidateTagStat[]
+  candidateConversations         CandidateConversation[]
+  candidateConversationMessages  CandidateConversationMessage[]
+  candidateConversationDecisions CandidateConversationDecision[]
+  candidateConversationMemories  CandidateConversationMemory[]
 
   @@map("users")
 }
@@ -68,6 +72,10 @@ model JobDescription {
   candidateScreeningRuns    CandidateScreeningRun[]
   candidateScreeningResults CandidateScreeningResult[]
   candidateActionLogs       CandidateActionLog[]
+  candidateConversations         CandidateConversation[]
+  candidateConversationMessages  CandidateConversationMessage[]
+  candidateConversationDecisions CandidateConversationDecision[]
+  candidateConversationMemories  CandidateConversationMemory[]
 
   @@index([userId], map: "idx_job_descriptions_user_id")
   @@index([status], map: "idx_job_descriptions_status")
@@ -305,6 +313,10 @@ model Candidate {
   chunks                    CandidateResumeChunk[]
   screeningResults          CandidateScreeningResult[]
   actionLogs                CandidateActionLog[]
+  conversations         CandidateConversation[]
+  conversationMessages  CandidateConversationMessage[]
+  conversationDecisions CandidateConversationDecision[]
+  conversationMemories  CandidateConversationMemory[]
 
   @@unique([id, userId], map: "candidates_id_user_id_key")
   @@unique([userId, sourcePlatform, identityHash], map: "candidates_user_source_identity_hash_key")
@@ -471,6 +483,115 @@ model CandidateTagStat {
 
   @@unique([userId, tagType, tag], map: "candidate_tag_stats_user_type_tag_key")
   @@map("candidate_tag_stats")
+}
+
+model CandidateConversation {
+  id                     String                          @id @default(uuid())
+  userId                 String                          @map("user_id")
+  jobDescriptionId       String                          @map("job_description_id")
+  candidateId            String                          @map("candidate_id")
+  platform               String
+  stage                  String                          @default("new")
+  status                 String                          @default("active")
+  intentLevel            String?                         @map("intent_level")
+  messageCount           Int                             @default(0) @map("message_count")
+  lastActiveAt           DateTime                        @map("last_active_at")
+  lastCandidateMessageAt DateTime?                       @map("last_candidate_message_at")
+  lastAgentMessageAt     DateTime?                       @map("last_agent_message_at")
+  nextFollowUpAt         DateTime?                       @map("next_follow_up_at")
+  outcomeResult          String?                         @map("outcome_result")
+  outcomeReason          String?                         @map("outcome_reason")
+  createdAt              DateTime                        @default(now()) @map("created_at")
+  updatedAt              DateTime                        @updatedAt @map("updated_at")
+  user                   User                            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription         JobDescription                  @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate              Candidate                       @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  messages               CandidateConversationMessage[]
+  decisions              CandidateConversationDecision[]
+  memories               CandidateConversationMemory[]
+
+  @@unique([id, userId, jobDescriptionId, candidateId], map: "candidate_conversations_id_user_jd_candidate_key")
+  @@unique([userId, jobDescriptionId, candidateId], map: "candidate_conversations_user_jd_candidate_key")
+  @@index([userId, stage, updatedAt(sort: Desc)], map: "idx_candidate_conversations_user_stage_updated")
+  @@index([candidateId], map: "idx_candidate_conversations_candidate_id")
+  @@map("candidate_conversations")
+}
+
+model CandidateConversationMessage {
+  id                String                @id @default(uuid())
+  conversationId    String                @map("conversation_id")
+  userId            String                @map("user_id")
+  jobDescriptionId  String                @map("job_description_id")
+  candidateId       String                @map("candidate_id")
+  platform          String
+  role              String
+  content           String
+  externalMessageId String?               @map("external_message_id")
+  deliveryStatus    String                @default("received") @map("delivery_status")
+  browserTrace      Json?                 @map("browser_trace")
+  errorMessage      String?               @map("error_message")
+  occurredAt        DateTime              @map("occurred_at")
+  createdAt         DateTime              @default(now()) @map("created_at")
+  conversation      CandidateConversation @relation(fields: [conversationId, userId, jobDescriptionId, candidateId], references: [id, userId, jobDescriptionId, candidateId], onDelete: Cascade, onUpdate: Restrict)
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription    JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate         Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([conversationId, occurredAt], map: "idx_candidate_conversation_messages_conversation_time")
+  @@index([userId, jobDescriptionId, candidateId, occurredAt(sort: Desc)], map: "idx_candidate_conversation_messages_user_jd_candidate_time")
+  @@index([userId, platform, externalMessageId], map: "idx_candidate_conversation_messages_external")
+  @@map("candidate_conversation_messages")
+}
+
+model CandidateConversationDecision {
+  id               String                @id @default(uuid())
+  conversationId   String                @map("conversation_id")
+  userId           String                @map("user_id")
+  jobDescriptionId String                @map("job_description_id")
+  candidateId      String                @map("candidate_id")
+  inputMessageId   String                @map("input_message_id")
+  outputMessageId  String?               @map("output_message_id")
+  intent           String
+  intentLevel      String                @map("intent_level")
+  nextStage        String                @map("next_stage")
+  shouldReply      Boolean               @map("should_reply")
+  reply            String?
+  actions          Json
+  rationale        String
+  llmMeta          Json?                 @map("llm_meta")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  conversation     CandidateConversation @relation(fields: [conversationId, userId, jobDescriptionId, candidateId], references: [id, userId, jobDescriptionId, candidateId], onDelete: Cascade, onUpdate: Restrict)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate        Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([conversationId, createdAt(sort: Desc)], map: "idx_candidate_conversation_decisions_conversation_created")
+  @@index([inputMessageId], map: "idx_candidate_conversation_decisions_input_message")
+  @@map("candidate_conversation_decisions")
+}
+
+model CandidateConversationMemory {
+  id               String                @id @default(uuid())
+  conversationId   String                @map("conversation_id")
+  userId           String                @map("user_id")
+  jobDescriptionId String                @map("job_description_id")
+  candidateId      String                @map("candidate_id")
+  outcomeResult    String                @map("outcome_result")
+  outcomeReason    String                @map("outcome_reason")
+  intent           Json
+  profileSummary   Json                  @map("profile_summary")
+  keyPoints        Json                  @map("key_points")
+  dropOffReason    String?               @map("drop_off_reason")
+  nextFollowUpAt   DateTime?             @map("next_follow_up_at")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  conversation     CandidateConversation @relation(fields: [conversationId, userId, jobDescriptionId, candidateId], references: [id, userId, jobDescriptionId, candidateId], onDelete: Cascade, onUpdate: Restrict)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate        Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([conversationId, createdAt(sort: Desc)], map: "idx_candidate_conversation_memories_conversation_created")
+  @@index([userId, outcomeResult, createdAt(sort: Desc)], map: "idx_candidate_conversation_memories_user_outcome_created")
+  @@map("candidate_conversation_memories")
 }
 
 model LlmCallLog {
