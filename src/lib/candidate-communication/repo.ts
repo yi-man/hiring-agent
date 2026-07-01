@@ -214,6 +214,12 @@ export type CandidateConversationRepository = {
     platformCandidateId?: string | null;
     profileUrl?: string | null;
   }): Promise<{ candidateId: string } | null>;
+  resolveJobDescriptionForCandidateMessage?(params: {
+    userId: string;
+    candidateId: string;
+    fallbackJobDescriptionId?: string | null;
+    platformJobTitle?: string | null;
+  }): Promise<{ jobDescriptionId: string } | null>;
 };
 
 function iso(date: Date): string;
@@ -232,6 +238,16 @@ function toNullableJson(value: unknown | null): Prisma.InputJsonValue | typeof P
 
 function toRecordOrNull(value: unknown | null): JsonRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : null;
+}
+
+function normalizeMatchText(value?: string | null): string {
+  return value?.trim().replace(/\s+/g, '').toLowerCase() ?? '';
+}
+
+function readContentTitle(content: unknown): string | null {
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
+  const title = (content as { title?: unknown }).title;
+  return typeof title === 'string' && title.trim() ? title.trim() : null;
 }
 
 function mapConversation(row: {
@@ -558,5 +574,80 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
     });
 
     return candidate ? { candidateId: candidate.id } : null;
+  },
+
+  async resolveJobDescriptionForCandidateMessage(params) {
+    const screeningResult = await prisma.candidateScreeningResult.findFirst({
+      where: { userId: params.userId, candidateId: params.candidateId },
+      orderBy: { updatedAt: 'desc' },
+      select: { jobDescriptionId: true },
+    });
+    if (screeningResult) {
+      return { jobDescriptionId: screeningResult.jobDescriptionId };
+    }
+
+    const platformJobTitle = normalizeMatchText(params.platformJobTitle);
+    if (platformJobTitle) {
+      const jobDescriptions = await prisma.jobDescription.findMany({
+        where: { userId: params.userId },
+        select: {
+          id: true,
+          position: true,
+          content: true,
+          status: true,
+          updatedAt: true,
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 200,
+      });
+      const exactMatch = jobDescriptions.find((jobDescription) => {
+        const position = normalizeMatchText(jobDescription.position);
+        const contentTitle = normalizeMatchText(readContentTitle(jobDescription.content));
+        return position === platformJobTitle || contentTitle === platformJobTitle;
+      });
+      if (exactMatch) {
+        return { jobDescriptionId: exactMatch.id };
+      }
+
+      const fuzzyMatch = jobDescriptions.find((jobDescription) => {
+        const position = normalizeMatchText(jobDescription.position);
+        const contentTitle = normalizeMatchText(readContentTitle(jobDescription.content));
+        return (
+          (position.length > 0 &&
+            (position.includes(platformJobTitle) || platformJobTitle.includes(position))) ||
+          (contentTitle.length > 0 &&
+            (contentTitle.includes(platformJobTitle) || platformJobTitle.includes(contentTitle)))
+        );
+      });
+      if (fuzzyMatch) {
+        return { jobDescriptionId: fuzzyMatch.id };
+      }
+    }
+
+    if (params.fallbackJobDescriptionId) {
+      const fallback = await prisma.jobDescription.findFirst({
+        where: { id: params.fallbackJobDescriptionId, userId: params.userId },
+        select: { id: true },
+      });
+      if (fallback) {
+        return { jobDescriptionId: fallback.id };
+      }
+    }
+
+    const latestActive = await prisma.jobDescription.findFirst({
+      where: { userId: params.userId, status: { in: ['published', 'ready_to_publish'] } },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true },
+    });
+    if (latestActive) {
+      return { jobDescriptionId: latestActive.id };
+    }
+
+    const latestAny = await prisma.jobDescription.findFirst({
+      where: { userId: params.userId },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true },
+    });
+    return latestAny ? { jobDescriptionId: latestAny.id } : null;
   },
 };

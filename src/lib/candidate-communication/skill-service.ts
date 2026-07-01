@@ -5,7 +5,7 @@ import type { CandidateScreeningPlatform } from '@/lib/candidate-screening/types
 
 export async function runUnreadCandidateCommunicationSkill(params: {
   userId: string;
-  jobDescriptionId: string;
+  jobDescriptionId?: string;
   platform: CandidateScreeningPlatform;
   maxPasses?: number;
 }) {

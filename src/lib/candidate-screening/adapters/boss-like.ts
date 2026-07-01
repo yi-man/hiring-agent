@@ -177,7 +177,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   readonly platform: CandidateScreeningPlatform = 'boss-like';
   protected readonly executor: BrowserExecutor;
   protected readonly baseUrl: string;
-  private readonly credentials: BossLikeCredentials;
+  protected readonly credentials: BossLikeCredentials;
 
   constructor(options: BossLikeCandidateSourceAdapterOptions) {
     this.executor = options.executor;

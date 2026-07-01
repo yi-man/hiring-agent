@@ -1,4 +1,5 @@
 import type { CandidateScreeningPlatform } from '@/lib/candidate-screening/types';
+import { ingestRawCandidate } from '@/lib/candidate-screening/ingest';
 import { handleCandidateMessage, type HandleCandidateMessageResult } from './service';
 import {
   bossLikeUnreadCommunicationSkill,
@@ -12,19 +13,23 @@ import {
 } from './repo';
 
 type HandleMessage = typeof handleCandidateMessage;
+type IngestCandidate = typeof ingestRawCandidate;
 
 export type RunCandidateCommunicationSkillParams = {
   userId: string;
-  jobDescriptionId: string;
+  jobDescriptionId?: string;
   platform: CandidateScreeningPlatform;
   adapter: CandidateCommunicationSkillAdapter;
   repo?: CandidateConversationRepository;
   handleMessage?: HandleMessage;
+  ingestCandidate?: IngestCandidate;
   maxPasses?: number;
 };
 
 async function resolveCandidateId(params: {
   repo: CandidateConversationRepository;
+  adapter: CandidateCommunicationSkillAdapter;
+  ingestCandidate: IngestCandidate;
   userId: string;
   platform: CandidateScreeningPlatform;
   message: UnreadCandidateMessage;
@@ -36,31 +41,78 @@ async function resolveCandidateId(params: {
     profileUrl: params.message.profileUrl ?? null,
   });
   if (!resolved) {
-    throw new Error(`candidate not found for unread message: ${params.message.externalMessageId}`);
+    const rawCandidate = await params.adapter.collectCandidateFromMessage?.(params.message);
+    if (!rawCandidate) {
+      throw new Error(
+        `candidate not found for unread message: ${params.message.externalMessageId}`,
+      );
+    }
+    const stored = await params.ingestCandidate({
+      userId: params.userId,
+      sourcePlatform: params.platform,
+      rawCandidate,
+    });
+    return stored.candidateId;
   }
   return resolved.candidateId;
 }
 
+async function resolveJobDescriptionId(params: {
+  repo: CandidateConversationRepository;
+  userId: string;
+  candidateId: string;
+  fallbackJobDescriptionId?: string | null;
+  platformJobTitle?: string | null;
+  message: UnreadCandidateMessage;
+}): Promise<string> {
+  const resolved = await params.repo.resolveJobDescriptionForCandidateMessage?.({
+    userId: params.userId,
+    candidateId: params.candidateId,
+    fallbackJobDescriptionId: params.fallbackJobDescriptionId,
+    platformJobTitle: params.platformJobTitle,
+  });
+  const jobDescriptionId = resolved?.jobDescriptionId ?? params.fallbackJobDescriptionId;
+  if (!jobDescriptionId) {
+    throw new Error(
+      `job description not found for unread message: ${params.message.externalMessageId}`,
+    );
+  }
+  return jobDescriptionId;
+}
+
 async function processUnreadMessage(params: {
   userId: string;
-  jobDescriptionId: string;
+  jobDescriptionId?: string;
   platform: CandidateScreeningPlatform;
   adapter: CandidateCommunicationSkillAdapter;
   repo: CandidateConversationRepository;
   handleMessage: HandleMessage;
+  ingestCandidate: IngestCandidate;
   message: UnreadCandidateMessage;
 }): Promise<HandleCandidateMessageResult> {
   const candidateId = await resolveCandidateId({
     repo: params.repo,
+    adapter: params.adapter,
+    ingestCandidate: params.ingestCandidate,
     userId: params.userId,
     platform: params.platform,
     message: params.message,
   });
+  const jobDescriptionId = await resolveJobDescriptionId({
+    repo: params.repo,
+    userId: params.userId,
+    candidateId,
+    fallbackJobDescriptionId: params.jobDescriptionId,
+    platformJobTitle: params.message.platformJobTitle,
+    message: params.message,
+  });
+  const replyAdapter =
+    params.adapter.createReplyAdapterForMessage?.(params.message) ?? params.adapter;
 
-  return params.handleMessage({
+  const result = await params.handleMessage({
     userId: params.userId,
     payload: {
-      jobDescriptionId: params.jobDescriptionId,
+      jobDescriptionId,
       candidateId,
       platform: params.platform,
       message: {
@@ -72,10 +124,16 @@ async function processUnreadMessage(params: {
     },
     dependencies: {
       repo: params.repo,
-      createAdapter: () => params.adapter,
+      createAdapter: () => replyAdapter,
       closeAdapterAfterReply: false,
     },
   });
+
+  if (result.outgoingMessage?.deliveryStatus !== 'failed') {
+    await params.adapter.markUnreadMessageProcessed?.(params.message);
+  }
+
+  return result;
 }
 
 export async function runCandidateCommunicationSkill(
@@ -83,6 +141,7 @@ export async function runCandidateCommunicationSkill(
 ): Promise<CandidateCommunicationSkillResult> {
   const repo = params.repo ?? prismaCandidateConversationRepository;
   const handleMessage = params.handleMessage ?? handleCandidateMessage;
+  const ingestCandidate = params.ingestCandidate ?? ingestRawCandidate;
   const maxPasses = params.maxPasses ?? bossLikeUnreadCommunicationSkill.maxPasses;
   let processed = 0;
   let failed = 0;
@@ -110,6 +169,7 @@ export async function runCandidateCommunicationSkill(
           adapter: params.adapter,
           repo,
           handleMessage,
+          ingestCandidate,
           message,
         });
         processed += 1;

@@ -125,4 +125,30 @@ describe('candidate communication messages route', () => {
     });
     expect(body.stoppedReason).toBe('no_unread_messages');
   });
+
+  it('runs the unread-message communication skill without a single JD scope', async () => {
+    runCandidateCommunicationSkillMock.mockResolvedValue({
+      status: 'success',
+      stoppedReason: 'no_unread_messages',
+      processed: 6,
+      failed: 0,
+      passes: 2,
+    });
+
+    const res = await syncUnread(
+      jsonRequest({
+        platform: 'boss-like',
+        maxPasses: 5,
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(202);
+    expect(runCandidateCommunicationSkillMock).toHaveBeenCalledWith({
+      userId: 'user-1',
+      platform: 'boss-like',
+      maxPasses: 5,
+    });
+    expect(body.processed).toBe(6);
+  });
 });

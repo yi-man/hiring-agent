@@ -3,10 +3,11 @@
 import { runCandidateCommunicationSkill } from './skill-runner';
 import type { CandidateConversationRepository } from './repo';
 import type { CandidateCommunicationSkillAdapter } from './skill-types';
+import type { RawCandidate } from '@/lib/candidate-screening/ingest';
 
 function createAdapter(
   unreadBatches: Array<Array<{ id: string; candidateId: string; content: string }>>,
-) {
+): CandidateCommunicationSkillAdapter {
   const listUnreadMessages = jest.fn().mockImplementation(
     async () =>
       unreadBatches.shift()?.map((message) => ({
@@ -46,6 +47,9 @@ function createRepo(): CandidateConversationRepository {
       .mockImplementation(async ({ platformCandidateId }) => ({
         candidateId: `candidate-${platformCandidateId}`,
       })),
+    resolveJobDescriptionForCandidateMessage: jest
+      .fn()
+      .mockResolvedValue({ jobDescriptionId: 'jd-from-screening' }),
   } as unknown as CandidateConversationRepository;
 }
 
@@ -81,6 +85,61 @@ describe('candidate communication skill runner', () => {
     expect(adapter.listUnreadMessages).toHaveBeenCalledTimes(3);
     expect(handleMessage).toHaveBeenCalledTimes(3);
     expect(adapter.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('collects and ingests a platform candidate when unread resolution misses the local DB', async () => {
+    const adapter = createAdapter([
+      [{ id: 'msg-1', candidateId: 'boss-cand-1', content: '你好，还在招吗？' }],
+      [],
+    ]);
+    const rawCandidate: RawCandidate = {
+      platformCandidateId: 'boss-cand-1',
+      profileUrl: 'http://127.0.0.1:6183/employer/resumes/boss-cand-1',
+      name: 'Ada Lovelace',
+      title: '候选人',
+      company: 'boss-like',
+      resumeText: 'Java PostgreSQL 招聘 SaaS 沟通自动化',
+    };
+    adapter.collectCandidateFromMessage = jest.fn().mockResolvedValue(rawCandidate);
+    const repo = createRepo();
+    (repo.resolveCandidateForPlatformMessage as jest.Mock).mockResolvedValueOnce(null);
+    (repo.resolveJobDescriptionForCandidateMessage as jest.Mock).mockResolvedValueOnce({
+      jobDescriptionId: 'jd-from-fallback',
+    });
+    const ingestCandidate = jest.fn().mockResolvedValue({
+      candidateId: 'candidate-ingested',
+      resumeId: 'resume-1',
+      identityHash: 'hash-1',
+      chunkCount: 1,
+    });
+    const handleMessage = jest.fn().mockResolvedValue({ decision: { intent: 'greeting' } });
+
+    await runCandidateCommunicationSkill({
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      adapter,
+      repo,
+      handleMessage,
+      ingestCandidate,
+    });
+
+    expect(adapter.collectCandidateFromMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ externalMessageId: 'msg-1' }),
+    );
+    expect(ingestCandidate).toHaveBeenCalledWith({
+      userId: 'user-1',
+      sourcePlatform: 'boss-like',
+      rawCandidate,
+    });
+    expect(handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          jobDescriptionId: 'jd-from-fallback',
+          candidateId: 'candidate-ingested',
+        }),
+      }),
+    );
   });
 
   it('fails instead of stopping when unread messages cannot be drained', async () => {

@@ -15,7 +15,7 @@ export type CandidateMessagePayload = {
 };
 
 export type UnreadSyncPayload = {
-  jobDescriptionId: string;
+  jobDescriptionId?: string;
   platform: CandidateScreeningPlatform;
   maxPasses?: number;
 };
@@ -109,9 +109,6 @@ export function parseUnreadSyncPayload(body: unknown): ValidationResult<UnreadSy
   }
 
   const jobDescriptionId = cleanText(body.jobDescriptionId);
-  if (!jobDescriptionId) {
-    return { ok: false, error: 'jobDescriptionId is required' };
-  }
 
   if (!isCandidatePlatform(body.platform)) {
     return { ok: false, error: 'platform is invalid' };
@@ -124,8 +121,8 @@ export function parseUnreadSyncPayload(body: unknown): ValidationResult<UnreadSy
   return {
     ok: true,
     value: {
-      jobDescriptionId,
       platform: body.platform,
+      ...(jobDescriptionId ? { jobDescriptionId } : {}),
       ...(body.maxPasses !== undefined ? { maxPasses: body.maxPasses } : {}),
     },
   };
