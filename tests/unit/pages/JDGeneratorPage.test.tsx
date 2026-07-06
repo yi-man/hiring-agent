@@ -17,6 +17,8 @@ const sampleJobDescription: JobDescriptionDto = {
   department: '技术部',
   position: '前端工程师',
   positionDescription: '负责增长业务体验建设',
+  salaryRange: '30-50K',
+  workLocations: ['上海张江', '远程'],
   tone: 'tech',
   status: 'created',
   content: {
@@ -54,6 +56,32 @@ const sampleJobDescription: JobDescriptionDto = {
   updatedAt: '2026-06-25T02:00:00.000Z',
 };
 
+const sampleCompanyProfile = {
+  id: 'profile-1',
+  userId: 'u1',
+  name: '深海数据',
+  locations: [
+    {
+      id: 'loc-1',
+      kind: 'office',
+      label: '上海张江',
+      city: '上海',
+      address: '博云路 2 号',
+      sortOrder: 0,
+    },
+    {
+      id: 'loc-2',
+      kind: 'remote',
+      label: '远程',
+      city: null,
+      address: null,
+      sortOrder: 1,
+    },
+  ],
+  createdAt: '2026-07-06T01:00:00.000Z',
+  updatedAt: '2026-07-06T02:00:00.000Z',
+};
+
 describe('JD pages', () => {
   beforeEach(() => {
     pushMock.mockReset();
@@ -84,17 +112,29 @@ describe('JD pages', () => {
   });
 
   it('creates a JD from selected department and position', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        jobDescription: sampleJobDescription,
-      }),
-    });
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescription: sampleJobDescription,
+        }),
+      });
 
     render(<JDCreateView />);
 
+    const companyName = await screen.findByLabelText('公司名称');
+    await waitFor(() => {
+      expect(companyName).toHaveValue('深海数据');
+    });
+    expect(companyName).toHaveAttribute('readonly');
     fireEvent.change(screen.getByLabelText('部门'), { target: { value: '技术部' } });
     fireEvent.change(screen.getByLabelText('职位'), { target: { value: '前端工程师' } });
+    fireEvent.change(screen.getByLabelText('薪资范围'), { target: { value: '30-50K' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '远程' }));
     fireEvent.change(screen.getByLabelText('职位说明'), {
       target: { value: '负责增长业务体验建设' },
     });
@@ -109,6 +149,8 @@ describe('JD pages', () => {
             department: '技术部',
             position: '前端工程师',
             positionDescription: '负责增长业务体验建设',
+            salaryRange: '30-50K',
+            workLocations: ['上海张江', '远程'],
             tone: 'tech',
           }),
         }),
@@ -126,6 +168,10 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -175,5 +221,68 @@ describe('JD pages', () => {
       );
     });
     expect(screen.getByText('company.md')).toBeInTheDocument();
+  });
+
+  it('uses the logged-in user company profile when publishing a JD', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: sampleJobDescription }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescription: { ...sampleJobDescription, status: 'ready_to_publish' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescription: { ...sampleJobDescription, status: 'published' },
+          task: {
+            taskId: 'task-1',
+            skillId: 'boss-like-publish-jd',
+            status: 'success',
+            trace: {
+              taskId: 'task-1',
+              skillId: 'boss-like-publish-jd',
+              status: 'success',
+              steps: [],
+              createdAt: '2026-07-06T03:00:00.000Z',
+            },
+          },
+        }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    expect(await screen.findByDisplayValue('深海数据')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '远程' })).toBeChecked();
+    fireEvent.change(screen.getByLabelText('发布薪资范围'), { target: { value: '30-50K' } });
+    fireEvent.click(screen.getByRole('button', { name: '发布到 Boss-like' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/publish',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            platform: 'boss-like',
+            company: '深海数据',
+            salary: '30-50K',
+            location: '上海张江、远程',
+            keywords: ['TypeScript', 'React'],
+          }),
+        }),
+      );
+    });
   });
 });

@@ -123,6 +123,8 @@ describe('JD resource routes', () => {
         department: '技术部',
         position: '前端工程师',
         positionDescription: '负责增长业务体验建设',
+        salaryRange: '30-50K',
+        workLocations: ['上海张江', '远程'],
         tone: 'tech',
       }),
     });
@@ -146,6 +148,8 @@ describe('JD resource routes', () => {
         department: '技术部',
         position: '前端工程师',
         positionDescription: '负责增长业务体验建设',
+        salaryRange: '30-50K',
+        workLocations: ['上海张江', '远程'],
         content: sampleJd,
         generationMeta: sampleAgentResponse.meta,
       }),

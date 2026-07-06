@@ -15,6 +15,8 @@ type JobDescriptionRecord = {
   department: string;
   position: string;
   positionDescription: string;
+  salaryRange: string | null;
+  workLocations: unknown | null;
   tone: string;
   status: string;
   content: unknown;
@@ -29,6 +31,8 @@ type CreateJobDescriptionParams = {
   department: string;
   position: string;
   positionDescription: string;
+  salaryRange?: string | null;
+  workLocations?: string[] | null;
   tone: JDTone;
   status?: JDStatus;
   content: JD;
@@ -42,6 +46,8 @@ export type UpdateJobDescriptionParams = {
   department?: string;
   position?: string;
   positionDescription?: string;
+  salaryRange?: string | null;
+  workLocations?: string[];
   tone?: JDTone;
   status?: JDStatus;
   content?: JD;
@@ -57,6 +63,14 @@ function toNullableJson(value: unknown | null): Prisma.InputJsonValue | typeof P
   return value === null ? Prisma.JsonNull : toJson(value);
 }
 
+function mapWorkLocations(value: unknown | null): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
 function mapRow(row: JobDescriptionRecord): JobDescriptionDto {
   return {
     id: row.id,
@@ -64,6 +78,8 @@ function mapRow(row: JobDescriptionRecord): JobDescriptionDto {
     department: row.department,
     position: row.position,
     positionDescription: row.positionDescription,
+    salaryRange: row.salaryRange,
+    workLocations: mapWorkLocations(row.workLocations),
     tone: row.tone as JDTone,
     status: row.status as JDStatus,
     content: row.content as JD,
@@ -83,6 +99,11 @@ export async function createJobDescription(
       department: params.department,
       position: params.position,
       positionDescription: params.positionDescription,
+      salaryRange: params.salaryRange ?? null,
+      workLocations:
+        params.workLocations === undefined || params.workLocations === null
+          ? Prisma.JsonNull
+          : toJson(params.workLocations),
       tone: params.tone,
       status: params.status ?? 'created',
       content: toJson(params.content),
@@ -133,6 +154,8 @@ export async function updateJobDescription(
   if (params.positionDescription !== undefined) {
     data.positionDescription = params.positionDescription;
   }
+  if (params.salaryRange !== undefined) data.salaryRange = params.salaryRange;
+  if (params.workLocations !== undefined) data.workLocations = toJson(params.workLocations);
   if (params.tone !== undefined) data.tone = params.tone;
   if (params.status !== undefined) data.status = params.status;
   if (params.content !== undefined) data.content = toJson(params.content);

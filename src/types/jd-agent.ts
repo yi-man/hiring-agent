@@ -129,6 +129,8 @@ export type JobDescriptionDto = {
   department: string;
   position: string;
   positionDescription: string;
+  salaryRange: string | null;
+  workLocations: string[];
   tone: JDTone;
   status: JDStatus;
   content: JD;
@@ -142,6 +144,8 @@ export type CreateJobDescriptionRequest = {
   department: string;
   position: string;
   positionDescription: string;
+  salaryRange: string;
+  workLocations: string[];
   tone?: JDTone;
 };
 
@@ -149,6 +153,8 @@ export type UpdateJobDescriptionRequest = Partial<{
   department: string;
   position: string;
   positionDescription: string;
+  salaryRange: string | null;
+  workLocations: string[];
   tone: JDTone;
   status: JDStatus;
   content: JD;

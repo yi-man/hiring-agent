@@ -21,6 +21,17 @@ function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function cleanStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => cleanText(item))
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
@@ -57,16 +68,24 @@ export function parseCreateJobDescriptionPayload(
   const department = cleanText(body.department);
   const position = cleanText(body.position);
   const positionDescription = cleanText(body.positionDescription);
+  const salaryRange = cleanText(body.salaryRange);
+  const workLocations = cleanStringList(body.workLocations);
+  const tone = body.tone === undefined ? 'tech' : body.tone;
   if (!department) return { ok: false, error: 'department is required' };
   if (!position) return { ok: false, error: 'position is required' };
   if (!positionDescription) return { ok: false, error: 'positionDescription is required' };
-
-  const tone = body.tone === undefined ? 'tech' : body.tone;
   if (!isJDTone(tone)) {
     return { ok: false, error: 'tone is invalid' };
   }
+  if (!salaryRange) return { ok: false, error: 'salaryRange is required' };
+  if (workLocations.length === 0) {
+    return { ok: false, error: 'at least one work location is required' };
+  }
 
-  return { ok: true, value: { department, position, positionDescription, tone } };
+  return {
+    ok: true,
+    value: { department, position, positionDescription, salaryRange, workLocations, tone },
+  };
 }
 
 export function parseUpdateJobDescriptionPayload(
@@ -91,6 +110,22 @@ export function parseUpdateJobDescriptionPayload(
     const positionDescription = cleanText(body.positionDescription);
     if (!positionDescription) return { ok: false, error: 'positionDescription must not be empty' };
     value.positionDescription = positionDescription;
+  }
+  if (body.salaryRange !== undefined) {
+    if (body.salaryRange === null) {
+      value.salaryRange = null;
+    } else {
+      const salaryRange = cleanText(body.salaryRange);
+      if (!salaryRange) return { ok: false, error: 'salaryRange must not be empty' };
+      value.salaryRange = salaryRange;
+    }
+  }
+  if (body.workLocations !== undefined) {
+    const workLocations = cleanStringList(body.workLocations);
+    if (workLocations.length === 0) {
+      return { ok: false, error: 'at least one work location is required' };
+    }
+    value.workLocations = workLocations;
   }
   if (body.tone !== undefined) {
     if (!isJDTone(body.tone)) return { ok: false, error: 'tone is invalid' };
@@ -147,11 +182,17 @@ export function composeJDJobInput(params: {
   department: string;
   position: string;
   positionDescription: string;
+  salaryRange?: string | null;
+  workLocations?: string[];
 }): string {
   return [
     `职位：${params.position}`,
     `部门：${params.department}`,
+    params.salaryRange ? `薪资范围：${params.salaryRange}` : null,
+    params.workLocations?.length ? `工作地点：${params.workLocations.join('、')}` : null,
     '职位说明：',
     params.positionDescription,
-  ].join('\n');
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join('\n');
 }

@@ -101,6 +101,8 @@ const jobDescription: JobDescriptionDto = {
   department: 'Engineering',
   position: 'Frontend Engineer',
   positionDescription: 'Build hiring workflows',
+  salaryRange: null,
+  workLocations: [],
   tone: 'formal',
   status: 'created',
   content: {

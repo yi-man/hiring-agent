@@ -54,6 +54,8 @@ describe('JD API helpers', () => {
         department: ' 技术部 ',
         position: ' 测试工程师 ',
         positionDescription: ' 负责自动化质量门禁 ',
+        salaryRange: ' 30-50K ',
+        workLocations: [' 上海张江 ', '远程', '上海张江'],
       }),
     ).toEqual({
       ok: true,
@@ -61,6 +63,8 @@ describe('JD API helpers', () => {
         department: '技术部',
         position: '测试工程师',
         positionDescription: '负责自动化质量门禁',
+        salaryRange: '30-50K',
+        workLocations: ['上海张江', '远程'],
         tone: 'tech',
       },
     });
@@ -123,7 +127,9 @@ describe('JD API helpers', () => {
         department: '技术部',
         position: '测试工程师',
         positionDescription: '负责自动化质量门禁',
+        salaryRange: '30-50K',
+        workLocations: ['上海张江', '远程'],
       }),
-    ).toContain('职位：测试工程师');
+    ).toContain('薪资范围：30-50K');
   });
 });
