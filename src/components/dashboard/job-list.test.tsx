@@ -106,4 +106,17 @@ describe('DashboardJobList', () => {
       '/jd-generator/jd-1/candidates',
     );
   });
+
+  it('links row status and platform to filtered dashboard views', () => {
+    render(<DashboardJobList overview={overview} />);
+
+    expect(screen.getByRole('link', { name: '发布异常' })).toHaveAttribute(
+      'href',
+      '/?status=publish_failed&platform=boss-like',
+    );
+    expect(screen.getByRole('link', { name: 'BOSS-like' })).toHaveAttribute(
+      'href',
+      '/?status=publish_failed&platform=boss-like',
+    );
+  });
 });

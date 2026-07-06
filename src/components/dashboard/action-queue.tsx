@@ -56,10 +56,6 @@ function formatTaskTime(value: string) {
   }).format(date);
 }
 
-function jobsByStatus(jobs: DashboardJobDto[], status: JDStatus) {
-  return jobs.filter((job) => job.status === status);
-}
-
 function taskJobTitle(jobs: DashboardJobDto[], task: DashboardPublishTaskSummary) {
   return jobs.find((job) => job.id === task.jobDescriptionId)?.title ?? task.jobDescriptionId;
 }
@@ -77,7 +73,7 @@ export function ActionQueue({ overview }: ActionQueueProps) {
   const queueCards: QueueCard[] = [
     {
       label: '发布失败',
-      count: jobsByStatus(overview.jobs, 'publish_failed').length,
+      count: overview.summary.publishFailedJobs,
       href: '/?status=publish_failed',
       detail: '查看异常岗位',
       Icon: AlertTriangle,
@@ -86,7 +82,7 @@ export function ActionQueue({ overview }: ActionQueueProps) {
     },
     {
       label: '待发布',
-      count: jobsByStatus(overview.jobs, 'ready_to_publish').length,
+      count: overview.summary.readyToPublishJobs,
       href: '/?status=ready_to_publish',
       detail: '进入发布准备',
       Icon: Send,
@@ -95,7 +91,7 @@ export function ActionQueue({ overview }: ActionQueueProps) {
     },
     {
       label: '发布中任务',
-      count: jobsByStatus(overview.jobs, 'publishing').length,
+      count: overview.summary.publishingJobs,
       href: '/?status=publishing',
       detail: '跟踪执行状态',
       Icon: Clock3,

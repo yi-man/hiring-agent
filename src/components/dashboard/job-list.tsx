@@ -5,6 +5,7 @@ import {
   DASHBOARD_PLATFORM_ALL,
   type DashboardJobDto,
   type DashboardOverviewDto,
+  type DashboardPlatformFilter,
 } from '@/lib/dashboard/types';
 import type { JDStatus } from '@/types';
 
@@ -48,6 +49,21 @@ function statusLabel(overview: DashboardOverviewDto, status: JDStatus) {
 function platformLabel(overview: DashboardOverviewDto) {
   const currentPlatform = overview.filters.platform ?? DASHBOARD_PLATFORM_ALL;
   return overview.platforms.find((item) => item.platform === currentPlatform)?.label ?? '全部平台';
+}
+
+function dashboardHref(params: { status?: JDStatus; platform?: DashboardPlatformFilter }) {
+  const query = new URLSearchParams();
+
+  if (params.status) {
+    query.set('status', params.status);
+  }
+
+  if (params.platform && params.platform !== DASHBOARD_PLATFORM_ALL) {
+    query.set('platform', params.platform);
+  }
+
+  const queryString = query.toString();
+  return queryString ? `/?${queryString}` : '/';
 }
 
 function filterSummary(overview: DashboardOverviewDto) {
@@ -113,11 +129,27 @@ function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOv
         ) : null}
       </div>
 
-      <StatusChip overview={overview} status={job.status} />
+      <Link
+        className="focus-visible:ring-ring justify-self-start rounded-md outline-none focus-visible:ring-2"
+        href={dashboardHref({
+          status: job.status,
+          platform: overview.filters.platform,
+        })}
+      >
+        <StatusChip overview={overview} status={job.status} />
+      </Link>
 
       <div className="min-w-0">
         <div className="text-muted-foreground text-xs">平台</div>
-        <div className="text-foreground truncate text-sm">{job.platform.label}</div>
+        <Link
+          className="text-foreground hover:text-primary focus-visible:ring-ring block truncate text-sm outline-none hover:underline focus-visible:ring-2"
+          href={dashboardHref({
+            status: overview.filters.status,
+            platform: job.platform.platform,
+          })}
+        >
+          {job.platform.label}
+        </Link>
       </div>
 
       <div className="min-w-0">
