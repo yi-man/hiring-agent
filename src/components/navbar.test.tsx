@@ -101,9 +101,26 @@ describe('Navbar auth states', () => {
 
     render(<Navbar />);
 
+    expect(screen.getByRole('link', { name: /招聘助手/ })).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('link', { name: '首页' })).not.toBeInTheDocument();
+
     await waitFor(() => {
       expect(screen.getByRole('link', { name: /log in/i })).toHaveAttribute('href', '/auth/signin');
     });
+  });
+
+  it('keeps standalone home links out of the mobile auth menu', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ user: null }),
+    });
+
+    render(<Navbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: /菜单/i }));
+
+    expect(screen.queryByRole('link', { name: '首页' })).not.toBeInTheDocument();
+    expect(await screen.findAllByRole('link', { name: /log in/i })).toHaveLength(2);
   });
 
   it('shows user menu and logout when authenticated', async () => {

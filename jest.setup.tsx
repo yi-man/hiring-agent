@@ -64,6 +64,7 @@ jest.mock('lucide-react', () => ({
   Eye: () => <div data-testid="eye-icon" />,
   ExternalLink: () => <div data-testid="external-link-icon" />,
   FileText: () => <div data-testid="file-text-icon" />,
+  LayoutDashboard: () => <div data-testid="layout-dashboard-icon" />,
   ListFilter: () => <div data-testid="list-filter-icon" />,
   MapPin: () => <div data-testid="map-pin-icon" />,
   MessageCircle: () => <div data-testid="message-circle-icon" />,

@@ -46,7 +46,7 @@ describe('Navbar', () => {
 
     expect(screen.getByText('招聘助手')).toBeInTheDocument();
 
-    expect(screen.getByText('首页')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '首页' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '对话' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '知识库' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Workflow' })).not.toBeInTheDocument();
@@ -78,8 +78,7 @@ describe('Navbar', () => {
     const menuButton = screen.getByRole('button', { name: /菜单/i });
     fireEvent.click(menuButton);
 
-    const homeLinks = screen.getAllByRole('link', { name: '首页' });
-    expect(homeLinks).toHaveLength(2);
+    expect(screen.queryByRole('link', { name: '首页' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '对话' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'JD 工作台' })).not.toBeInTheDocument();
     expect(await screen.findAllByRole('link', { name: /log in/i })).toHaveLength(2);

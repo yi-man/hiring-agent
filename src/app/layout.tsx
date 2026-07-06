@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 };
 
 const footerLinks = [
-  { name: '首页', href: '/' },
+  { name: '工作台', href: '/' },
   { name: '对话', href: '/chat' },
   { name: 'JD 工作台', href: '/jd-generator' },
   { name: 'Workflow 学习', href: '/workflow-learning' },

@@ -71,8 +71,6 @@ export function Navbar() {
     };
   }, []);
 
-  const navigation = [{ name: '首页', href: '/' }];
-
   return (
     <nav
       className={`fixed top-0 right-0 left-0 z-50 border-b transition-all duration-300 ${
@@ -91,16 +89,6 @@ export function Navbar() {
           </Link>
 
           <div className="hidden items-center space-x-5 md:flex">
-            {navigation.map((item) => (
-              <Link
-                key={item.name}
-                href={item.href}
-                className="text-foreground/80 hover:text-primary dark:text-foreground/70 dark:hover:text-primary text-sm font-medium transition-all hover:scale-105"
-              >
-                {item.name}
-              </Link>
-            ))}
-            <div className="bg-border h-6 w-px" />
             {status === 'authenticated' ? (
               <UserMenu name={user?.name ?? user?.username ?? user?.email} />
             ) : status === 'unauthenticated' ? (
@@ -129,17 +117,6 @@ export function Navbar() {
       {isMenuOpen && (
         <div className="animate-in slide-in-from-top-10 border-border bg-background/90 border-b backdrop-blur-lg duration-300 md:hidden">
           <div className="space-y-1 px-2 pt-2 pb-3 sm:px-3">
-            {navigation.map((item) => (
-              <Link
-                key={item.name}
-                href={item.href}
-                className="text-foreground/80 hover:bg-secondary hover:text-primary dark:text-foreground/70 dark:hover:bg-secondary/30 dark:hover:text-primary block rounded-md px-4 py-3 text-base font-medium transition-all hover:scale-105"
-                onClick={() => setIsMenuOpen(false)}
-              >
-                {item.name}
-              </Link>
-            ))}
-            <div className="border-border my-2 border-t" />
             {status === 'authenticated' ? (
               <div className="px-4 py-3">
                 <UserMenu name={user?.name ?? user?.username ?? user?.email} />

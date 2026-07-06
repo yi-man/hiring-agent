@@ -5,10 +5,10 @@ import { usePathname } from 'next/navigation';
 import {
   BrainCircuit,
   Building2,
-  Circle,
   Eye,
   FileCode,
   FileText,
+  LayoutDashboard,
   MessageCircle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -22,10 +22,10 @@ type AppMenuItem = {
 
 const appMenuItems: AppMenuItem[] = [
   {
-    label: '首页',
-    description: '工作台总览',
+    label: '工作台',
+    description: '招聘运营总览',
     href: '/',
-    Icon: Circle,
+    Icon: LayoutDashboard,
   },
   {
     label: '智能对话',
