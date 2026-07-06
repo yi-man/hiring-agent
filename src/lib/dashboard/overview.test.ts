@@ -1,4 +1,9 @@
-import { aggregateCandidateStats, inferDashboardPlatform, parseDashboardFilters } from './overview';
+import {
+  aggregateCandidateStats,
+  findLatestDashboardTask,
+  inferDashboardPlatform,
+  parseDashboardFilters,
+} from './overview';
 import type { DashboardPublishTaskSummary } from './types';
 
 jest.mock('@/lib/prisma', () => ({
@@ -64,6 +69,54 @@ describe('dashboard overview helpers', () => {
   it('infers the latest successful publish platform for a JD', () => {
     const tasks: DashboardPublishTaskSummary[] = [
       {
+        id: 'task-success-old',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        status: 'success',
+        errorMessage: null,
+        createdAt: '2026-07-06T09:00:00.000Z',
+        updatedAt: '2026-07-06T09:01:00.000Z',
+      },
+      {
+        id: 'task-failed',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        status: 'failed',
+        errorMessage: 'form changed',
+        createdAt: '2026-07-06T10:00:00.000Z',
+        updatedAt: '2026-07-06T10:01:00.000Z',
+      },
+      {
+        id: 'task-success-new',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        status: 'success',
+        errorMessage: null,
+        createdAt: '2026-07-06T11:00:00.000Z',
+        updatedAt: '2026-07-06T11:02:00.000Z',
+      },
+    ];
+
+    expect(inferDashboardPlatform('published', tasks)).toEqual({
+      platform: 'boss-like',
+      label: 'BOSS-like',
+      recruitingJobs: 1,
+      failedJobs: 1,
+    });
+  });
+
+  it('marks published jobs without successful tasks as untracked platform', () => {
+    expect(inferDashboardPlatform('published', [])).toEqual({
+      platform: 'untracked',
+      label: '未记录平台',
+      recruitingJobs: 1,
+      failedJobs: 0,
+    });
+  });
+
+  it('uses failed task summary when no successful publish exists', () => {
+    const tasks: DashboardPublishTaskSummary[] = [
+      {
         id: 'task-failed',
         jobDescriptionId: 'jd-1',
         platform: 'boss-like',
@@ -72,28 +125,49 @@ describe('dashboard overview helpers', () => {
         createdAt: '2026-07-06T09:00:00.000Z',
         updatedAt: '2026-07-06T09:01:00.000Z',
       },
-      {
-        id: 'task-success',
-        jobDescriptionId: 'jd-1',
-        platform: 'boss-like',
-        status: 'success',
-        errorMessage: null,
-        createdAt: '2026-07-06T10:00:00.000Z',
-        updatedAt: '2026-07-06T10:02:00.000Z',
-      },
     ];
 
     expect(inferDashboardPlatform('published', tasks)).toEqual({
       platform: 'boss-like',
       label: 'BOSS-like',
+      recruitingJobs: 0,
+      failedJobs: 1,
     });
   });
 
-  it('marks published jobs without successful tasks as untracked platform', () => {
-    expect(inferDashboardPlatform('published', [])).toEqual({
-      platform: 'untracked',
-      label: '未记录平台',
-    });
+  it('selects publish tasks by latest createdAt timestamp', () => {
+    const tasks: DashboardPublishTaskSummary[] = [
+      {
+        id: 'task-success-old',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        status: 'success',
+        errorMessage: null,
+        createdAt: '2026-07-06T09:00:00.000Z',
+        updatedAt: '2026-07-06T09:01:00.000Z',
+      },
+      {
+        id: 'task-success-new',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        status: 'success',
+        errorMessage: null,
+        createdAt: '2026-07-06T10:00:00.000Z',
+        updatedAt: '2026-07-06T10:01:00.000Z',
+      },
+      {
+        id: 'task-failed-newer',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        status: 'failed',
+        errorMessage: 'form changed again',
+        createdAt: '2026-07-06T11:00:00.000Z',
+        updatedAt: '2026-07-06T11:01:00.000Z',
+      },
+    ];
+
+    expect(findLatestDashboardTask(tasks, 'success')?.id).toBe('task-success-new');
+    expect(findLatestDashboardTask(tasks, 'failed')?.id).toBe('task-failed-newer');
   });
 
   it('aggregates active and interviewing candidates by JD', () => {

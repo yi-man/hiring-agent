@@ -88,6 +88,27 @@ function emptyCandidateStats(): DashboardCandidateStats {
   };
 }
 
+function dashboardTaskCreatedAtMs(task: DashboardPublishTaskSummary): number {
+  const createdAtMs = Date.parse(task.createdAt);
+  return Number.isFinite(createdAtMs) ? createdAtMs : 0;
+}
+
+export function findLatestDashboardTask(
+  tasks: DashboardPublishTaskSummary[],
+  status: DashboardPublishTaskSummary['status'],
+): DashboardPublishTaskSummary | undefined {
+  let latestTask: DashboardPublishTaskSummary | undefined;
+
+  for (const task of tasks) {
+    if (task.status !== status) continue;
+    if (!latestTask || dashboardTaskCreatedAtMs(task) > dashboardTaskCreatedAtMs(latestTask)) {
+      latestTask = task;
+    }
+  }
+
+  return latestTask;
+}
+
 export function aggregateCandidateStats(
   signals: DashboardCandidateSignal[],
 ): Map<string, DashboardCandidateStats> {
@@ -117,26 +138,32 @@ export function aggregateCandidateStats(
 export function inferDashboardPlatform(
   jobStatus: JDStatus,
   tasks: DashboardPublishTaskSummary[],
-): Pick<DashboardPlatformSummary, 'platform' | 'label'> {
-  const successfulTask = tasks.find((task) => task.status === 'success');
+): DashboardPlatformSummary {
+  const successfulTask = findLatestDashboardTask(tasks, 'success');
   if (successfulTask) {
     return {
       platform: successfulTask.platform,
       label: labelForPlatform(successfulTask.platform),
+      recruitingJobs: jobStatus === 'published' ? 1 : 0,
+      failedJobs: tasks.some((task) => task.status === 'failed') ? 1 : 0,
     };
   }
 
-  const failedTask = tasks.find((task) => task.status === 'failed');
+  const failedTask = findLatestDashboardTask(tasks, 'failed');
   if (failedTask) {
     return {
       platform: failedTask.platform,
       label: labelForPlatform(failedTask.platform),
+      recruitingJobs: 0,
+      failedJobs: 1,
     };
   }
 
   return {
     platform: DASHBOARD_PLATFORM_UNTRACKED,
     label: labelForPlatform(DASHBOARD_PLATFORM_UNTRACKED),
+    recruitingJobs: jobStatus === 'published' ? 1 : 0,
+    failedJobs: 0,
   };
 }
 
