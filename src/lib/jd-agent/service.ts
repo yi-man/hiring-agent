@@ -1,11 +1,13 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { env } from '@/lib/env';
 import { retrieveUserKnowledgeContext } from '@/lib/rag/knowledge-retrieval';
+import { buildJDSearchProfile } from '@/lib/jd/search-profile';
 import type {
   EvaluationResult,
   JDAgentContextMatch,
   JDAgentRequest,
   JDAgentResponse,
+  JDSearchProfile,
   JDAgentStageTiming,
   JDAgentStageTokenUsage,
   JDAgentTokenUsage,
@@ -131,6 +133,7 @@ function buildMeta(
     matches: JDAgentContextMatch[];
     warnings: string[];
   },
+  searchProfile: JDSearchProfile,
 ): JDAgentResponse['meta'] {
   const totalMs = stages.reduce((acc, s) => acc + s.ms, 0);
   const totalTokens = tokenStages.reduce(
@@ -161,6 +164,7 @@ function buildMeta(
       matches: context.matches,
       warnings: context.warnings,
     },
+    searchProfile,
   };
 }
 
@@ -428,6 +432,7 @@ export async function runJDAgent(
         matches: result.contextMatches,
         warnings: result.warnings,
       },
+      buildJDSearchProfile({ jd: result.finalJd, schema: result.schema }),
     ),
     warnings: result.warnings,
   };

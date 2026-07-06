@@ -161,6 +161,7 @@ export type {
   JDAgentTimingMeta,
   JDStatus,
   JDScore,
+  JDSearchProfile,
   JobDescriptionDto,
   JobSchema,
   JDTone,

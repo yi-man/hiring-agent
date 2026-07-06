@@ -34,4 +34,91 @@ describe('candidate screening planner', () => {
     );
     expect(result.searchPlan.retrievalQuery).toContain('高级后端工程师');
   });
+
+  it('extracts atomic boss-like search keywords from compound full-stack JD requirements', () => {
+    const result = buildScreeningPlanFromJd({
+      ...jd,
+      position: '全栈工程师',
+      positionDescription: '负责飞书团队的产品化，AI agent的开发。',
+      content: {
+        title: '全栈工程师（飞书团队·AI Agent方向）',
+        summary: '负责产品化及AI agent的开发与迭代。',
+        responsibilities: ['设计并实现AI agent逻辑与交互'],
+        requirements: [
+          '3年以上全栈开发经验',
+          '精通React/Vue及Node.js',
+          '熟悉Python或Java后端开发',
+          '有AI/LLM应用开发经验',
+          '掌握SQL及NoSQL数据库设计',
+          '理解微服务与RESTful API',
+        ],
+        bonus: ['熟悉LangChain或类似AI框架'],
+        highlights: ['技术挑战：高并发、复杂业务逻辑与AI推理的深度融合'],
+      },
+    });
+
+    expect(result.searchPlan.keywords).toEqual(
+      expect.arrayContaining([
+        'React',
+        'Vue',
+        'Node.js',
+        'Python',
+        'Java',
+        'AI',
+        'LLM',
+        'SQL',
+        'NoSQL',
+        '微服务',
+        'RESTful API',
+        'LangChain',
+      ]),
+    );
+    expect(result.searchPlan.keywords.slice(0, 5)).toEqual([
+      'React',
+      'Vue',
+      'Node.js',
+      'Python',
+      'Java',
+    ]);
+    expect(result.searchPlan.keywords).not.toEqual(
+      expect.arrayContaining([
+        '3年以上全栈开发经验',
+        '精通React/Vue及Node.js',
+        '熟悉Python或Java后端开发',
+        '有AI/LLM应用开发经验',
+        '掌握SQL及NoSQL数据库设计',
+      ]),
+    );
+  });
+
+  it('prefers structured search profile keywords from JD generation metadata', () => {
+    const result = buildScreeningPlanFromJd({
+      ...jd,
+      position: '全栈工程师',
+      positionDescription: '负责复杂业务系统开发',
+      content: {
+        title: '全栈工程师',
+        summary: '负责业务平台建设',
+        responsibilities: ['负责跨端业务交付和平台稳定性'],
+        requirements: ['三年以上复杂业务系统开发经验，熟悉前后端协作和工程化'],
+        bonus: ['有 AI 应用落地经验优先'],
+        highlights: ['高影响力业务'],
+      },
+      generationMeta: {
+        model: 'mock',
+        promptVersion: 'jd_v3.3',
+        action: 'initial_generate',
+        searchProfile: {
+          mustHaveKeywords: ['React', 'Node.js'],
+          niceToHaveKeywords: ['LangChain'],
+          broadKeywords: ['全栈工程师'],
+          negativeKeywords: [],
+          seniority: '高级',
+          searchQueries: ['React Node.js', '全栈工程师 LangChain'],
+        },
+      },
+    });
+
+    expect(result.searchPlan.keywords).toEqual(['React', 'Node.js', 'LangChain', '全栈工程师']);
+  });
 });
