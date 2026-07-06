@@ -441,6 +441,7 @@ export async function getDashboardOverview(params: {
           prisma.jobPublishTask.findMany({
             where: { userId: params.userId, jobDescriptionId: { in: jobIds } },
             orderBy: { createdAt: 'desc' },
+            take: 200,
           }),
           prisma.candidateScreeningResult.findMany({
             where: { userId: params.userId, jobDescriptionId: { in: jobIds } },
@@ -450,6 +451,7 @@ export async function getDashboardOverview(params: {
               decisionPriority: true,
               interviewStage: true,
             },
+            take: 1000,
           }),
         ])
       : [[], []];

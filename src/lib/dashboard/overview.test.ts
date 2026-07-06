@@ -302,5 +302,11 @@ describe('getDashboardOverview', () => {
         status: 'success',
       }),
     );
+    expect(prismaMock.jobPublishTask.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 200 }),
+    );
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 1000 }),
+    );
   });
 });
