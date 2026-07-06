@@ -18,6 +18,7 @@ jest.mock('@/lib/prisma', () => ({
     },
     candidateScreeningResult: {
       findMany: jest.fn(),
+      groupBy: jest.fn(),
     },
     $connect: jest.fn(),
   },
@@ -34,10 +35,38 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
     };
     candidateScreeningResult: {
       findMany: jest.Mock;
+      groupBy: jest.Mock;
     };
     $connect: jest.Mock;
   };
 };
+
+function dashboardJobRow(overrides: Record<string, unknown>) {
+  return {
+    id: 'jd-1',
+    userId: 'u1',
+    department: '技术部',
+    position: 'AI 应用工程师',
+    positionDescription: 'Build AI hiring tools',
+    salaryRange: '30-50K',
+    workLocations: ['上海'],
+    tone: 'tech',
+    status: 'published',
+    content: {
+      title: 'AI 应用工程师',
+      summary: '负责 AI 招聘产品',
+      responsibilities: [],
+      requirements: [],
+      bonus: [],
+      highlights: [],
+    },
+    evaluation: null,
+    generationMeta: null,
+    createdAt: new Date('2026-07-06T08:00:00.000Z'),
+    updatedAt: new Date('2026-07-06T10:00:00.000Z'),
+    ...overrides,
+  };
+}
 
 describe('dashboard overview helpers', () => {
   beforeEach(() => {
@@ -45,6 +74,7 @@ describe('dashboard overview helpers', () => {
     prismaMock.jobDescription.groupBy.mockReset();
     prismaMock.jobPublishTask.findMany.mockReset();
     prismaMock.candidateScreeningResult.findMany.mockReset();
+    prismaMock.candidateScreeningResult.groupBy.mockReset();
     prismaMock.$connect.mockReset();
   });
 
@@ -217,6 +247,7 @@ describe('getDashboardOverview', () => {
     prismaMock.jobDescription.groupBy.mockReset();
     prismaMock.jobPublishTask.findMany.mockReset();
     prismaMock.candidateScreeningResult.findMany.mockReset();
+    prismaMock.candidateScreeningResult.groupBy.mockReset();
   });
 
   it('returns status summaries, platform summaries, jobs and recent tasks', async () => {
@@ -226,31 +257,7 @@ describe('getDashboardOverview', () => {
       { status: 'publishing', _count: { _all: 1 } },
       { status: 'publish_failed', _count: { _all: 1 } },
     ]);
-    prismaMock.jobDescription.findMany.mockResolvedValueOnce([
-      {
-        id: 'jd-1',
-        userId: 'u1',
-        department: '技术部',
-        position: 'AI 应用工程师',
-        positionDescription: 'Build AI hiring tools',
-        salaryRange: '30-50K',
-        workLocations: ['上海'],
-        tone: 'tech',
-        status: 'published',
-        content: {
-          title: 'AI 应用工程师',
-          summary: '负责 AI 招聘产品',
-          responsibilities: [],
-          requirements: [],
-          bonus: [],
-          highlights: [],
-        },
-        evaluation: null,
-        generationMeta: null,
-        createdAt: new Date('2026-07-06T08:00:00.000Z'),
-        updatedAt: new Date('2026-07-06T10:00:00.000Z'),
-      },
-    ]);
+    prismaMock.jobDescription.findMany.mockResolvedValueOnce([dashboardJobRow({ id: 'jd-1' })]);
     prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([
       {
         id: 'task-1',
@@ -273,6 +280,15 @@ describe('getDashboardOverview', () => {
         decisionAction: 'chat',
         decisionPriority: 'high',
         interviewStage: 'to_contact',
+      },
+    ]);
+    prismaMock.candidateScreeningResult.groupBy.mockResolvedValueOnce([
+      {
+        jobDescriptionId: 'jd-1',
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        interviewStage: 'to_contact',
+        _count: { _all: 1 },
       },
     ]);
 
@@ -302,11 +318,144 @@ describe('getDashboardOverview', () => {
         status: 'success',
       }),
     );
-    expect(prismaMock.jobPublishTask.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 200 }),
+    expect(prismaMock.jobDescription.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ take: expect.any(Number) }),
     );
-    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 1000 }),
+    expect(prismaMock.jobPublishTask.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'u1', jobDescriptionId: { in: ['jd-1'] } },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
+    const taskQuery = prismaMock.jobPublishTask.findMany.mock.calls[0]?.[0];
+    expect(taskQuery).not.toHaveProperty('take');
+    expect(prismaMock.candidateScreeningResult.findMany).not.toHaveBeenCalled();
+    expect(prismaMock.candidateScreeningResult.groupBy).toHaveBeenCalledWith({
+      by: ['jobDescriptionId', 'decisionAction', 'decisionPriority', 'interviewStage'],
+      where: { userId: 'u1', jobDescriptionId: { in: ['jd-1'] } },
+      _count: { _all: true },
+    });
+  });
+
+  it('uses grouped candidate counts so large active groups are not capped', async () => {
+    prismaMock.jobDescription.groupBy.mockResolvedValueOnce([
+      { status: 'published', _count: { _all: 1 } },
+    ]);
+    prismaMock.jobDescription.findMany.mockResolvedValueOnce([dashboardJobRow({ id: 'jd-1' })]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+    prismaMock.candidateScreeningResult.groupBy.mockResolvedValueOnce([
+      {
+        jobDescriptionId: 'jd-1',
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        interviewStage: 'to_contact',
+        _count: { _all: 1200 },
+      },
+    ]);
+
+    const overview = await getDashboardOverview({
+      userId: 'u1',
+      filters: { status: 'published', limit: 25 },
+    });
+
+    expect(overview.summary.activeCandidates).toBe(1200);
+    expect(overview.jobs[0]?.candidateStats).toEqual(
+      expect.objectContaining({
+        totalCandidates: 1200,
+        activeCandidates: 1200,
+        highPriorityCandidates: 1200,
+        followUpCandidates: 1200,
+      }),
+    );
+    expect(prismaMock.candidateScreeningResult.findMany).not.toHaveBeenCalled();
+  });
+
+  it('applies platform filters after platform inference and before returned job slicing', async () => {
+    const newestUntracked = dashboardJobRow({
+      id: 'jd-new',
+      position: '未追踪职位',
+      content: {
+        title: '未追踪职位',
+        summary: '',
+        responsibilities: [],
+        requirements: [],
+        bonus: [],
+        highlights: [],
+      },
+      updatedAt: new Date('2026-07-06T12:00:00.000Z'),
+    });
+    const olderBossLike = dashboardJobRow({
+      id: 'jd-old',
+      position: 'BOSS 直聘职位',
+      content: {
+        title: 'BOSS 直聘职位',
+        summary: '',
+        responsibilities: [],
+        requirements: [],
+        bonus: [],
+        highlights: [],
+      },
+      updatedAt: new Date('2026-07-06T10:00:00.000Z'),
+    });
+
+    prismaMock.jobDescription.groupBy.mockResolvedValueOnce([
+      { status: 'published', _count: { _all: 2 } },
+    ]);
+    prismaMock.jobDescription.findMany.mockImplementationOnce((args: { take?: number }) =>
+      Promise.resolve([newestUntracked, olderBossLike].slice(0, args.take)),
+    );
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([
+      {
+        id: 'task-old',
+        userId: 'u1',
+        jobDescriptionId: 'jd-old',
+        skillId: 'skill-1',
+        platform: 'boss-like',
+        input: {},
+        currentStep: null,
+        status: 'success',
+        errorMessage: null,
+        trace: null,
+        createdAt: new Date('2026-07-06T09:00:00.000Z'),
+        updatedAt: new Date('2026-07-06T09:01:00.000Z'),
+      },
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+    prismaMock.candidateScreeningResult.groupBy.mockResolvedValueOnce([]);
+
+    const overview = await getDashboardOverview({
+      userId: 'u1',
+      filters: { status: 'published', platform: 'boss-like', limit: 1 },
+    });
+
+    expect(overview.jobs).toHaveLength(1);
+    expect(overview.jobs[0]).toEqual(
+      expect.objectContaining({
+        id: 'jd-old',
+        platform: expect.objectContaining({ platform: 'boss-like' }),
+      }),
+    );
+    expect(prismaMock.jobDescription.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ take: expect.any(Number) }),
+    );
+    expect(prismaMock.jobPublishTask.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'u1', jobDescriptionId: { in: ['jd-new', 'jd-old'] } },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
+    const platformsByKey = new Map(
+      overview.platforms.map((platform) => [platform.platform, platform]),
+    );
+    expect(platformsByKey.get('all')).toEqual(
+      expect.objectContaining({ recruitingJobs: 2, failedJobs: 0 }),
+    );
+    expect(platformsByKey.get('boss-like')).toEqual(
+      expect.objectContaining({ recruitingJobs: 1, failedJobs: 0 }),
+    );
+    expect(platformsByKey.get('untracked')).toEqual(
+      expect.objectContaining({ recruitingJobs: 1, failedJobs: 0 }),
     );
   });
 });

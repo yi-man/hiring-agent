@@ -79,11 +79,14 @@ type DashboardTaskRow = {
   updatedAt: Date | string;
 };
 
-type DashboardCandidateRow = {
+type DashboardCandidateCountRow = {
   jobDescriptionId: string;
   decisionAction: string;
   decisionPriority: string;
   interviewStage: string;
+  _count: {
+    _all: number;
+  };
 };
 
 type DashboardStatusCountRow = {
@@ -188,15 +191,6 @@ function mapTask(row: DashboardTaskRow): DashboardPublishTaskSummary {
   };
 }
 
-function mapCandidateSignal(row: DashboardCandidateRow): DashboardCandidateSignal {
-  return {
-    jobDescriptionId: row.jobDescriptionId,
-    decisionAction: row.decisionAction as DashboardCandidateSignal['decisionAction'],
-    decisionPriority: row.decisionPriority as DashboardCandidateSignal['decisionPriority'],
-    interviewStage: row.interviewStage as DashboardCandidateSignal['interviewStage'],
-  };
-}
-
 export function parseDashboardFilters(searchParams: URLSearchParams): DashboardFilters {
   const statusParam = searchParams.get('status');
   if (statusParam && !JD_STATUSES.includes(statusParam as JDStatus)) {
@@ -285,6 +279,40 @@ export function aggregateCandidateStats(
         current.followUpCandidates +
         (isActive && (signal.decisionAction === 'chat' || signal.decisionAction === 'collect')
           ? 1
+          : 0),
+    });
+  }
+
+  return statsByJob;
+}
+
+function aggregateCandidateCountStats(
+  rows: DashboardCandidateCountRow[],
+): Map<string, DashboardCandidateStats> {
+  const statsByJob = new Map<string, DashboardCandidateStats>();
+
+  for (const row of rows) {
+    const signal: DashboardCandidateSignal = {
+      jobDescriptionId: row.jobDescriptionId,
+      decisionAction: row.decisionAction as DashboardCandidateSignal['decisionAction'],
+      decisionPriority: row.decisionPriority as DashboardCandidateSignal['decisionPriority'],
+      interviewStage: row.interviewStage as DashboardCandidateSignal['interviewStage'],
+    };
+    const count = row._count._all;
+    const current = statsByJob.get(signal.jobDescriptionId) ?? emptyStats();
+    const isActive = isActiveDashboardCandidate(signal);
+
+    statsByJob.set(signal.jobDescriptionId, {
+      totalCandidates: current.totalCandidates + count,
+      activeCandidates: current.activeCandidates + (isActive ? count : 0),
+      interviewingCandidates:
+        current.interviewingCandidates + (isInterviewingDashboardCandidate(signal) ? count : 0),
+      highPriorityCandidates:
+        current.highPriorityCandidates + (signal.decisionPriority === 'high' ? count : 0),
+      followUpCandidates:
+        current.followUpCandidates +
+        (isActive && (signal.decisionAction === 'chat' || signal.decisionAction === 'collect')
+          ? count
           : 0),
     });
   }
@@ -429,7 +457,6 @@ export async function getDashboardOverview(params: {
     prisma.jobDescription.findMany({
       where: jobWhere,
       orderBy: { updatedAt: 'desc' },
-      take: params.filters.limit,
     }),
   ]);
 
@@ -441,26 +468,18 @@ export async function getDashboardOverview(params: {
           prisma.jobPublishTask.findMany({
             where: { userId: params.userId, jobDescriptionId: { in: jobIds } },
             orderBy: { createdAt: 'desc' },
-            take: 200,
           }),
-          prisma.candidateScreeningResult.findMany({
+          prisma.candidateScreeningResult.groupBy({
+            by: ['jobDescriptionId', 'decisionAction', 'decisionPriority', 'interviewStage'],
             where: { userId: params.userId, jobDescriptionId: { in: jobIds } },
-            select: {
-              jobDescriptionId: true,
-              decisionAction: true,
-              decisionPriority: true,
-              interviewStage: true,
-            },
-            take: 1000,
+            _count: { _all: true },
           }),
         ])
       : [[], []];
 
   const taskSummaries = (taskRows as DashboardTaskRow[]).map(mapTask);
   const tasksByJob = groupTasksByJob(taskSummaries);
-  const statsByJob = aggregateCandidateStats(
-    (candidateRows as DashboardCandidateRow[]).map(mapCandidateSignal),
-  );
+  const statsByJob = aggregateCandidateCountStats(candidateRows as DashboardCandidateCountRow[]);
 
   const dashboardJobs = jobs.map((job): DashboardJobDto => {
     const source = mapJobSource(job);
@@ -481,6 +500,7 @@ export async function getDashboardOverview(params: {
     };
   });
   const filteredJobs = applyPlatformFilter(dashboardJobs, params.filters.platform);
+  const returnedJobs = filteredJobs.slice(0, params.filters.limit);
   const filteredJobIds = new Set(filteredJobs.map((job) => job.id));
   const statusCountRows = statusRows as DashboardStatusCountRow[];
   const statusCounts = buildStatusCounts(statusCountRows);
@@ -498,7 +518,7 @@ export async function getDashboardOverview(params: {
     },
     statusCounts,
     platforms: aggregatePlatformSummaries(dashboardJobs),
-    jobs: filteredJobs,
+    jobs: returnedJobs,
     recentTasks: taskSummaries
       .filter((task) => filteredJobIds.has(task.jobDescriptionId))
       .slice(0, RECENT_TASK_LIMIT),
