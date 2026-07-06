@@ -249,6 +249,11 @@ describe('JD resource routes', () => {
   });
 
   it('updates editable content and status', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'created',
+      content: sampleJd,
+    });
     updateJobDescriptionMock.mockResolvedValueOnce({ id: 'jd-1', status: 'ready_to_publish' });
     const request = new Request('http://localhost/api/jd/jd-1', {
       method: 'PATCH',
@@ -272,6 +277,28 @@ describe('JD resource routes', () => {
         content: { ...sampleJd, summary: '手动调整后的 JD' },
       }),
     );
+  });
+
+  it('rejects PATCH updates for published JDs', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'published',
+      content: sampleJd,
+    });
+    const request = new Request('http://localhost/api/jd/jd-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { ...sampleJd, summary: '不应允许修改' },
+      }),
+    });
+
+    const response = await patchJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('published job descriptions cannot be modified');
+    expect(updateJobDescriptionMock).not.toHaveBeenCalled();
   });
 
   it('regenerates an existing JD using company context and saves the result', async () => {
@@ -309,5 +336,27 @@ describe('JD resource routes', () => {
         generationMeta: sampleAgentResponse.meta,
       }),
     );
+  });
+
+  it('rejects regeneration for published JDs', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'published',
+      content: sampleJd,
+      tone: 'tech',
+    });
+    const request = new Request('http://localhost/api/jd/jd-1/regenerate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extraInstruction: '改成更热情' }),
+    });
+
+    const response = await regenerateJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('published job descriptions cannot be modified');
+    expect(runJDAgentMock).not.toHaveBeenCalled();
+    expect(updateJobDescriptionMock).not.toHaveBeenCalled();
   });
 });

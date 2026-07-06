@@ -11,6 +11,14 @@ function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
 }
 
+function conflict(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
+}
+
+function isPublished(status: string): boolean {
+  return status === 'published';
+}
+
 function serverErrorResponse(error: unknown) {
   if (
     error instanceof UnauthorizedError ||
@@ -57,6 +65,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const { id } = await context.params;
     if (!id?.trim()) {
       return badRequest('job description id is required');
+    }
+
+    const current = await getJobDescriptionById(auth.user.id, id);
+    if (!current) {
+      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+    }
+    if (isPublished(current.status)) {
+      return conflict('published job descriptions cannot be modified');
     }
 
     const parsed = parseUpdateJobDescriptionPayload(await request.json());

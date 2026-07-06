@@ -8,6 +8,10 @@ function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
 }
 
+function conflict(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
+}
+
 function serverErrorResponse(error: unknown) {
   if (
     error instanceof UnauthorizedError ||
@@ -43,6 +47,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const current = await getJobDescriptionById(auth.user.id, id);
     if (!current) {
       return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+    }
+    if (current.status === 'published') {
+      return conflict('published job descriptions cannot be modified');
     }
 
     const parsed = parseRegenerateJobDescriptionPayload(
