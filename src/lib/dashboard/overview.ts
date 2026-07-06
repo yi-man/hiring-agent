@@ -1,4 +1,3 @@
-import { prisma } from '@/lib/prisma';
 import { JD_STATUSES, type JDStatus } from '@/types';
 import type {
   DashboardCandidateSignal,
@@ -25,7 +24,13 @@ const statusLabels: Record<JDStatus, string> = {
   archived: '已归档',
 };
 
-const platformLabels: Record<string, string> = {
+const dashboardPlatformFilters = [
+  DASHBOARD_PLATFORM_ALL,
+  'boss-like',
+  DASHBOARD_PLATFORM_UNTRACKED,
+] as const satisfies readonly DashboardPlatformFilter[];
+
+const platformLabels: Record<DashboardPlatformFilter, string> = {
   [DASHBOARD_PLATFORM_ALL]: '全部平台',
   'boss-like': 'BOSS-like',
   [DASHBOARD_PLATFORM_UNTRACKED]: '未记录平台',
@@ -43,7 +48,11 @@ export function labelForStatus(status: JDStatus): string {
 }
 
 export function labelForPlatform(platform: DashboardPlatformFilter): string {
-  return platformLabels[platform] ?? platform;
+  return platformLabels[platform];
+}
+
+function isDashboardPlatformFilter(value: string): value is DashboardPlatformFilter {
+  return dashboardPlatformFilters.includes(value as DashboardPlatformFilter);
 }
 
 export function parseDashboardFilters(searchParams: URLSearchParams): DashboardFilters {
@@ -52,8 +61,14 @@ export function parseDashboardFilters(searchParams: URLSearchParams): DashboardF
     throw new Error('status is invalid');
   }
 
-  const platformParam = searchParams.get('platform') as DashboardPlatformFilter | null;
-  const platform = platformParam || undefined;
+  const platformParam = searchParams.get('platform');
+  let platform: DashboardPlatformFilter | undefined;
+  if (platformParam) {
+    if (!isDashboardPlatformFilter(platformParam)) {
+      throw new Error('platform is invalid');
+    }
+    platform = platformParam;
+  }
 
   return {
     status: statusParam ? (statusParam as JDStatus) : undefined,
@@ -175,7 +190,6 @@ export async function getDashboardOverview(params: {
   userId: string;
   filters: DashboardFilters;
 }): Promise<DashboardOverviewDto> {
-  await prisma.$connect().catch(() => undefined);
   return {
     summary: {
       recruitingJobs: 0,

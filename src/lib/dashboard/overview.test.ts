@@ -66,6 +66,14 @@ describe('dashboard overview helpers', () => {
     ).toThrow('status is invalid');
   });
 
+  it('rejects invalid platform filters', () => {
+    expect(() =>
+      parseDashboardFilters(
+        new URL('http://localhost/api/dashboard?platform=unknown').searchParams,
+      ),
+    ).toThrow('platform is invalid');
+  });
+
   it('infers the latest successful publish platform for a JD', () => {
     const tasks: DashboardPublishTaskSummary[] = [
       {

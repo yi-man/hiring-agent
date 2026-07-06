@@ -9,10 +9,9 @@ import type { PublishPlatform, PublishTaskStatus } from '@/lib/jd-publishing/typ
 export const DASHBOARD_PLATFORM_ALL = 'all';
 export const DASHBOARD_PLATFORM_UNTRACKED = 'untracked';
 
-export type DashboardPlatformFilter =
-  | typeof DASHBOARD_PLATFORM_ALL
-  | PublishPlatform
-  | typeof DASHBOARD_PLATFORM_UNTRACKED;
+export type DashboardPlatformKey = PublishPlatform | typeof DASHBOARD_PLATFORM_UNTRACKED;
+
+export type DashboardPlatformFilter = typeof DASHBOARD_PLATFORM_ALL | DashboardPlatformKey;
 
 export type DashboardFilters = {
   status?: JDStatus;
@@ -38,7 +37,7 @@ export type DashboardCandidateStats = {
 export type DashboardPublishTaskSummary = {
   id: string;
   jobDescriptionId: string;
-  platform: DashboardPlatformFilter;
+  platform: PublishPlatform;
   status: PublishTaskStatus;
   errorMessage: string | null;
   createdAt: string;
@@ -46,7 +45,7 @@ export type DashboardPublishTaskSummary = {
 };
 
 export type DashboardPlatformSummary = {
-  platform: DashboardPlatformFilter;
+  platform: DashboardPlatformKey | typeof DASHBOARD_PLATFORM_ALL;
   label: string;
   recruitingJobs: number;
   failedJobs: number;
