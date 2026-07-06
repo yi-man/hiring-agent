@@ -1,33 +1,45 @@
 import { render, screen } from '@testing-library/react';
 import Home from '@/app/page';
+import { getServerAuthSession } from '@/lib/auth/session';
 
-describe('Home', () => {
-  it('应该显示页面标题', () => {
-    render(<Home />);
-    const h1 = screen.getByRole('heading', { level: 1 });
-    expect(h1.textContent).toMatch(/招聘全流程/);
+jest.mock('@/lib/auth/session', () => ({
+  getServerAuthSession: jest.fn(),
+}));
+
+jest.mock('@/components/auth/sign-in-button', () => ({
+  SignInButton: () => <a href="/auth/signin">登录</a>,
+}));
+
+jest.mock('@/components/dashboard/dashboard-page', () => ({
+  DashboardPage: () => <section aria-label="招聘岗位运营台">工作台内容</section>,
+}));
+
+const getServerAuthSessionMock = getServerAuthSession as jest.MockedFunction<
+  typeof getServerAuthSession
+>;
+
+describe('Home page', () => {
+  beforeEach(() => {
+    getServerAuthSessionMock.mockReset();
   });
 
-  it('应该显示主要操作入口', () => {
-    const { container } = render(<Home />);
-    expect(container.querySelector('a[href="/chat"]')).toBeTruthy();
-    expect(container.querySelector('a[href="/jd-generator"]')).toBeTruthy();
+  it('renders sign-in guidance when unauthenticated', async () => {
+    getServerAuthSessionMock.mockResolvedValueOnce(null);
+
+    render(await Home());
+
+    expect(screen.getByRole('heading', { name: /请先登录后继续/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /登录/i })).toHaveAttribute('href', '/auth/signin');
+    expect(screen.queryByText(/招聘全流程/)).not.toBeInTheDocument();
   });
 
-  it('应该显示核心能力区块与能力卡片', () => {
-    render(<Home />);
-    const coreHeading = screen
-      .getAllByRole('heading', { level: 2 })
-      .find((el) => (el.textContent ?? '').includes('核心'));
-    expect(coreHeading).toBeDefined();
-    expect(screen.getByText('智能对话')).toBeInTheDocument();
-    expect(screen.getByText('Workflow 学习')).toBeInTheDocument();
-    expect(screen.getByText('LLM 可观测')).toBeInTheDocument();
-  });
+  it('renders dashboard when authenticated', async () => {
+    getServerAuthSessionMock.mockResolvedValueOnce({
+      user: { id: 'u1', username: 'alice', name: 'Alice', email: null, image: null },
+    });
 
-  it('应该显示本地开发提示', () => {
-    render(<Home />);
-    expect(screen.getByRole('heading', { name: /本地开发/ })).toBeInTheDocument();
-    expect(screen.getByText(/bun install && bun run dev/)).toBeInTheDocument();
+    render(await Home());
+
+    expect(screen.getByRole('region', { name: /招聘岗位运营台/i })).toBeInTheDocument();
   });
 });
