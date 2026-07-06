@@ -37,6 +37,15 @@ export type JDScore = {
   specificity: number;
 };
 
+export type JDSearchProfile = {
+  mustHaveKeywords: string[];
+  niceToHaveKeywords: string[];
+  broadKeywords: string[];
+  negativeKeywords: string[];
+  seniority?: string | null;
+  searchQueries: string[];
+};
+
 export type EvaluationResult = {
   scores: JDScore;
   issues: string[];
@@ -119,6 +128,7 @@ export type JDAgentResponse = {
     timing?: JDAgentTimingMeta;
     tokens?: JDAgentTokenMeta;
     context?: JDAgentContextMeta;
+    searchProfile?: JDSearchProfile;
   };
   warnings?: string[];
 };

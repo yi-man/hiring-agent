@@ -128,6 +128,41 @@ describe('runJDAgent', () => {
     expect(Array.isArray(result.meta.tokens?.stages)).toBe(true);
   });
 
+  it('attaches a reusable candidate search profile to generated JD metadata', async () => {
+    runLLMMock
+      .mockResolvedValueOnce(mockLlmResult(generatedJd))
+      .mockResolvedValueOnce(mockLlmResult(goodEvaluation));
+
+    const result = await runJDAgent(
+      {
+        action: 'initial_generate',
+        jobInput: '高级前端工程师，熟悉 TypeScript、React，负责增长业务',
+        tone: 'tech',
+      },
+      {
+        userId: 'user-1',
+      },
+    );
+
+    const searchProfile = result.meta.searchProfile;
+
+    expect(searchProfile).toEqual(
+      expect.objectContaining({
+        mustHaveKeywords: expect.arrayContaining(['TypeScript', 'React']),
+        broadKeywords: expect.arrayContaining(['高级前端工程师']),
+        negativeKeywords: [],
+        seniority: '高级',
+      }),
+    );
+    expect(searchProfile).toEqual(
+      expect.objectContaining({
+        searchQueries: expect.arrayContaining([
+          expect.stringMatching(/TypeScript.*React|React.*TypeScript/),
+        ]),
+      }),
+    );
+  });
+
   it('uses company context and user instruction when continuing from edited JD', async () => {
     runLLMMock
       .mockResolvedValueOnce(mockLlmResult(goodEvaluation))

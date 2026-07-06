@@ -90,4 +90,35 @@ describe('candidate screening planner', () => {
       ]),
     );
   });
+
+  it('prefers structured search profile keywords from JD generation metadata', () => {
+    const result = buildScreeningPlanFromJd({
+      ...jd,
+      position: '全栈工程师',
+      positionDescription: '负责复杂业务系统开发',
+      content: {
+        title: '全栈工程师',
+        summary: '负责业务平台建设',
+        responsibilities: ['负责跨端业务交付和平台稳定性'],
+        requirements: ['三年以上复杂业务系统开发经验，熟悉前后端协作和工程化'],
+        bonus: ['有 AI 应用落地经验优先'],
+        highlights: ['高影响力业务'],
+      },
+      generationMeta: {
+        model: 'mock',
+        promptVersion: 'jd_v3.3',
+        action: 'initial_generate',
+        searchProfile: {
+          mustHaveKeywords: ['React', 'Node.js'],
+          niceToHaveKeywords: ['LangChain'],
+          broadKeywords: ['全栈工程师'],
+          negativeKeywords: [],
+          seniority: '高级',
+          searchQueries: ['React Node.js', '全栈工程师 LangChain'],
+        },
+      },
+    });
+
+    expect(result.searchPlan.keywords).toEqual(['React', 'Node.js', 'LangChain', '全栈工程师']);
+  });
 });
