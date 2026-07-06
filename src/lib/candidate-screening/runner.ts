@@ -1,3 +1,4 @@
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
 import { createCandidateSourceAdapter } from './adapters/factory';
 import type { CandidateSourceAdapter, StoredCandidateRef } from './adapters/types';
@@ -41,6 +42,7 @@ type CandidateContext = {
 };
 
 type CandidateEvaluation = Awaited<ReturnType<typeof evaluateCandidateForJd>>;
+type CandidateScreeningGraphRoute = 'execute_actions' | 'finalize';
 
 export type ScreeningRunnerDependencies = {
   buildPlan: typeof buildScreeningPlanFromJd;
@@ -84,6 +86,32 @@ const defaultDependencies: ScreeningRunnerDependencies = {
     upsertCandidate: upsertCandidateWithIdentity,
     claimActionLog: claimCandidateActionLog,
   },
+};
+
+const CandidateScreeningState = Annotation.Root({
+  runId: Annotation<string>(),
+  userId: Annotation<string>(),
+  jobDescription: Annotation<JobDescriptionDto>(),
+  request: Annotation<CreateScreeningRunRequest>(),
+  dependencies: Annotation<ScreeningRunnerDependencies>(),
+  stats: Annotation<ScreeningRunStats>(),
+  searchPlan: Annotation<SearchPlan | undefined>(),
+  evaluationSchema: Annotation<EvaluationSchema | undefined>(),
+  rawCandidates: Annotation<RawCandidate[]>(),
+  contexts: Annotation<Map<string, CandidateContext>>(),
+  liveInputs: Annotation<RankInput[]>(),
+  vectorInputs: Annotation<RankInput[]>(),
+  evaluations: Annotation<Map<string, CandidateEvaluation>>(),
+  rankedCandidates: Annotation<RankedCandidate[]>(),
+  route: Annotation<CandidateScreeningGraphRoute>(),
+});
+
+type CandidateScreeningGraphState = typeof CandidateScreeningState.State;
+type CandidateScreeningGraphUpdate = typeof CandidateScreeningState.Update;
+
+type CandidateScreeningGraphResources = {
+  adapter: CandidateSourceAdapter | null;
+  latestStats: ScreeningRunStats;
 };
 
 export function createEmptyStats(): ScreeningRunStats {
@@ -141,6 +169,28 @@ function incrementDecisionStats(stats: ScreeningRunStats, action: CandidateDecis
 
 function copyStats(stats: ScreeningRunStats): ScreeningRunStats {
   return { ...stats };
+}
+
+function rememberStats(
+  resources: CandidateScreeningGraphResources,
+  stats: ScreeningRunStats,
+): ScreeningRunStats {
+  resources.latestStats = copyStats(stats);
+  return stats;
+}
+
+function requireSearchPlan(state: CandidateScreeningGraphState): SearchPlan {
+  if (!state.searchPlan) {
+    throw new Error('candidate screening search plan is required');
+  }
+  return state.searchPlan;
+}
+
+function requireEvaluationSchema(state: CandidateScreeningGraphState): EvaluationSchema {
+  if (!state.evaluationSchema) {
+    throw new Error('candidate screening evaluation schema is required');
+  }
+  return state.evaluationSchema;
 }
 
 function createActionPlan(params: {
@@ -321,23 +371,14 @@ async function createPlannedActions(params: {
   }
 }
 
-export async function runCandidateScreening(params: {
-  runId: string;
-  userId: string;
-  jobDescription: JobDescriptionDto;
-  request: CreateScreeningRunRequest;
-  dependencies?: ScreeningRunnerDependencyOverrides;
-}): Promise<void> {
-  const dependencies = resolveDependencies(params.dependencies);
-  const stats = createEmptyStats();
-  const contexts = new Map<string, CandidateContext>();
-  const dedupe = createInMemoryDedupeState();
-  let adapter: CandidateSourceAdapter | null = null;
-
-  try {
-    await dependencies.repo.updateRun({
-      userId: params.userId,
-      runId: params.runId,
+function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources) {
+  async function startRunNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
+    await state.dependencies.repo.updateRun({
+      userId: state.userId,
+      runId: state.runId,
       status: 'running',
       currentStage: 'planning',
       startedAt: new Date(),
@@ -345,43 +386,78 @@ export async function runCandidateScreening(params: {
       stats: copyStats(stats),
     });
 
-    const { searchPlan, evaluationSchema } = dependencies.buildPlan(params.jobDescription);
-    await dependencies.repo.updateRun({
-      userId: params.userId,
-      runId: params.runId,
+    return {
+      stats: rememberStats(resources, stats),
+      rawCandidates: [],
+      contexts: new Map(),
+      liveInputs: [],
+      vectorInputs: [],
+      evaluations: new Map(),
+      rankedCandidates: [],
+      route: 'finalize',
+    };
+  }
+
+  async function planNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const { searchPlan, evaluationSchema } = state.dependencies.buildPlan(state.jobDescription);
+    await state.dependencies.repo.updateRun({
+      userId: state.userId,
+      runId: state.runId,
       searchPlan,
       evaluationSchema,
-      stats: copyStats(stats),
+      stats: copyStats(state.stats),
     });
 
+    return { searchPlan, evaluationSchema };
+  }
+
+  async function searchLiveNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
     await updateStage({
-      dependencies,
-      userId: params.userId,
-      runId: params.runId,
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
       currentStage: 'searching_live',
       stats,
     });
-    adapter = dependencies.createAdapter(params.request.platform);
+
+    const adapter = state.dependencies.createAdapter(state.request.platform);
+    resources.adapter = adapter;
     await adapter.loginIfNeeded();
     const rawCandidates = await collectRawCandidates({
       adapter,
-      searchPlan,
-      request: params.request,
+      searchPlan: requireSearchPlan(state),
+      request: state.request,
       stats,
     });
 
+    return { rawCandidates, stats: rememberStats(resources, stats) };
+  }
+
+  async function ingestLiveNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
+    const contexts = new Map(state.contexts);
+    const liveInputs: RankInput[] = [];
+    const dedupe = createInMemoryDedupeState();
+
     await updateStage({
-      dependencies,
-      userId: params.userId,
-      runId: params.runId,
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
       currentStage: 'ingesting_live',
       stats,
     });
-    const liveInputs: RankInput[] = [];
-    for (const rawCandidate of rawCandidates) {
-      const stored = await dependencies.ingestCandidate({
-        userId: params.userId,
-        sourcePlatform: params.request.platform,
+
+    for (const rawCandidate of state.rawCandidates) {
+      const stored = await state.dependencies.ingestCandidate({
+        userId: state.userId,
+        sourcePlatform: state.request.platform,
         rawCandidate,
       });
 
@@ -401,103 +477,231 @@ export async function runCandidateScreening(params: {
       liveInputs.push({ candidateId: stored.candidateId, matchScore: 1 });
     }
 
+    return { contexts, liveInputs, stats: rememberStats(resources, stats) };
+  }
+
+  async function recallVectorsNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
+    const contexts = new Map(state.contexts);
+    const searchPlan = requireSearchPlan(state);
+
     await updateStage({
-      dependencies,
-      userId: params.userId,
-      runId: params.runId,
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
       currentStage: 'recalling_vectors',
       stats,
     });
-    const recalledCandidates = await dependencies.recallCandidates({
-      userId: params.userId,
+
+    const recalledCandidates = await state.dependencies.recallCandidates({
+      userId: state.userId,
       retrievalQuery: searchPlan.retrievalQuery,
-      topK: params.request.maxCandidates,
-      allowAlreadyContacted: params.request.allowAlreadyContacted,
+      topK: state.request.maxCandidates,
+      allowAlreadyContacted: state.request.allowAlreadyContacted,
     });
     stats.vectorRecalled = recalledCandidates.length;
-    const vectorInputs = buildVectorInputs(recalledCandidates, contexts);
 
+    return {
+      contexts,
+      vectorInputs: buildVectorInputs(recalledCandidates, contexts),
+      stats: rememberStats(resources, stats),
+    };
+  }
+
+  async function evaluateNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
     await updateStage({
-      dependencies,
-      userId: params.userId,
-      runId: params.runId,
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
       currentStage: 'evaluating',
       stats,
     });
+
     const evaluations = await evaluateCandidates({
-      dependencies,
-      contexts,
-      jobDescription: params.jobDescription,
-      evaluationSchema,
+      dependencies: state.dependencies,
+      contexts: state.contexts,
+      jobDescription: state.jobDescription,
+      evaluationSchema: requireEvaluationSchema(state),
       stats,
-      strictEvaluation: params.request.mode === 'execution',
+      strictEvaluation: state.request.mode === 'execution',
     });
 
+    return { evaluations, stats: rememberStats(resources, stats) };
+  }
+
+  async function rankNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
     await updateStage({
-      dependencies,
-      userId: params.userId,
-      runId: params.runId,
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
       currentStage: 'ranking',
       stats,
     });
-    const rankedCandidates = dependencies.mergeAndRank({
-      live: liveInputs,
-      vector: vectorInputs,
-    });
 
+    return {
+      rankedCandidates: state.dependencies.mergeAndRank({
+        live: state.liveInputs,
+        vector: state.vectorInputs,
+      }),
+      stats: rememberStats(resources, stats),
+    };
+  }
+
+  async function planActionsNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
     await updateStage({
-      dependencies,
-      userId: params.userId,
-      runId: params.runId,
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
       currentStage: 'planning_actions',
       stats,
     });
     await createPlannedActions({
-      dependencies,
-      userId: params.userId,
-      runId: params.runId,
-      jobDescription: params.jobDescription,
-      request: params.request,
-      rankedCandidates,
-      contexts,
-      evaluations,
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescription: state.jobDescription,
+      request: state.request,
+      rankedCandidates: state.rankedCandidates,
+      contexts: state.contexts,
+      evaluations: state.evaluations,
       stats,
     });
 
-    if (params.request.mode === 'execution' && adapter) {
-      const executionAdapter = adapter;
-      await updateStage({
-        dependencies,
-        userId: params.userId,
-        runId: params.runId,
-        currentStage: 'executing_actions',
-        stats,
-      });
-      await executePlannedActionsForRun({
-        dependencies,
-        userId: params.userId,
-        runId: params.runId,
-        jobDescriptionId: params.jobDescription.id,
-        getAdapterAfterClaim: async () => executionAdapter,
-        request: {
-          confirmExecution: true,
-          maxChatActions: params.request.maxCandidates,
-          maxCollectActions: params.request.maxCandidates,
-        },
-        stats,
-      });
+    return {
+      stats: rememberStats(resources, stats),
+      route: state.request.mode === 'execution' ? 'execute_actions' : 'finalize',
+    };
+  }
+
+  async function executeActionsNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    const stats = copyStats(state.stats);
+    const adapter = resources.adapter;
+    if (!adapter) {
+      throw new Error('candidate screening execution requires an initialized adapter');
     }
 
-    await dependencies.repo.updateRun({
-      userId: params.userId,
-      runId: params.runId,
+    await updateStage({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      currentStage: 'executing_actions',
+      stats,
+    });
+    await executePlannedActionsForRun({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      getAdapterAfterClaim: async () => adapter,
+      request: {
+        confirmExecution: true,
+        maxChatActions: state.request.maxCandidates,
+        maxCollectActions: state.request.maxCandidates,
+      },
+      stats,
+    });
+
+    return { stats: rememberStats(resources, stats) };
+  }
+
+  async function finalizeNode(
+    state: CandidateScreeningGraphState,
+  ): Promise<CandidateScreeningGraphUpdate> {
+    await state.dependencies.repo.updateRun({
+      userId: state.userId,
+      runId: state.runId,
       status: 'success',
       currentStage: 'finalizing',
       errorMessage: null,
       finishedAt: new Date(),
-      stats: copyStats(stats),
+      stats: copyStats(state.stats),
     });
+    return {};
+  }
+
+  function routeAfterPlanning(state: CandidateScreeningGraphState): CandidateScreeningGraphRoute {
+    return state.route;
+  }
+
+  return new StateGraph(CandidateScreeningState)
+    .addNode('start_run', startRunNode)
+    .addNode('plan', planNode)
+    .addNode('search_live', searchLiveNode)
+    .addNode('ingest_live', ingestLiveNode)
+    .addNode('recall_vectors', recallVectorsNode)
+    .addNode('evaluate', evaluateNode)
+    .addNode('rank', rankNode)
+    .addNode('plan_actions', planActionsNode)
+    .addNode('execute_actions', executeActionsNode)
+    .addNode('finalize', finalizeNode)
+    .addEdge(START, 'start_run')
+    .addEdge('start_run', 'plan')
+    .addEdge('plan', 'search_live')
+    .addEdge('search_live', 'ingest_live')
+    .addEdge('ingest_live', 'recall_vectors')
+    .addEdge('recall_vectors', 'evaluate')
+    .addEdge('evaluate', 'rank')
+    .addEdge('rank', 'plan_actions')
+    .addConditionalEdges('plan_actions', routeAfterPlanning, {
+      execute_actions: 'execute_actions',
+      finalize: 'finalize',
+    })
+    .addEdge('execute_actions', 'finalize')
+    .addEdge('finalize', END)
+    .compile();
+}
+
+export const runCandidateScreeningGraph = async (params: {
+  runId: string;
+  userId: string;
+  jobDescription: JobDescriptionDto;
+  request: CreateScreeningRunRequest;
+  dependencies?: ScreeningRunnerDependencyOverrides;
+}): Promise<void> => {
+  const dependencies = resolveDependencies(params.dependencies);
+  const initialStats = createEmptyStats();
+  const resources: CandidateScreeningGraphResources = {
+    adapter: null,
+    latestStats: copyStats(initialStats),
+  };
+  const graph = makeCandidateScreeningGraph(resources);
+
+  try {
+    await graph.invoke(
+      {
+        runId: params.runId,
+        userId: params.userId,
+        jobDescription: params.jobDescription,
+        request: params.request,
+        dependencies,
+        stats: initialStats,
+        searchPlan: undefined,
+        evaluationSchema: undefined,
+        rawCandidates: [],
+        contexts: new Map(),
+        liveInputs: [],
+        vectorInputs: [],
+        evaluations: new Map(),
+        rankedCandidates: [],
+        route: 'finalize',
+      },
+      { recursionLimit: 50 },
+    );
   } catch (error) {
+    const stats = copyStats(resources.latestStats);
     stats.failed += 1;
     await dependencies.repo.updateRun({
       userId: params.userId,
@@ -508,9 +712,11 @@ export async function runCandidateScreening(params: {
       stats: copyStats(stats),
     });
   } finally {
-    await closeAdapterSafely(adapter);
+    await closeAdapterSafely(resources.adapter);
   }
-}
+};
+
+export const runCandidateScreening = runCandidateScreeningGraph;
 
 function getPlannedActionLog(
   detail: CandidateScreeningDetailDto,

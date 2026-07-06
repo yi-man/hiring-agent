@@ -20,6 +20,7 @@ import type {
 import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
 import {
   executeScreeningRunActions,
+  runCandidateScreeningGraph,
   runCandidateScreening,
   type ScreeningRunnerDependencies,
 } from './runner';
@@ -334,6 +335,10 @@ function makeDependencies(adapter = makeAdapter()): ScreeningRunnerDependencies 
 }
 
 describe('candidate screening runner', () => {
+  it('exposes a LangGraph screening runner entrypoint', () => {
+    expect(runCandidateScreeningGraph).toBe(runCandidateScreening);
+  });
+
   it('advances a dry-run through planning, live search, ingest, vector recall, evaluation, ranking, and action planning', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() =>

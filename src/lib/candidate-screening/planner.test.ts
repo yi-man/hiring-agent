@@ -34,4 +34,60 @@ describe('candidate screening planner', () => {
     );
     expect(result.searchPlan.retrievalQuery).toContain('高级后端工程师');
   });
+
+  it('extracts atomic boss-like search keywords from compound full-stack JD requirements', () => {
+    const result = buildScreeningPlanFromJd({
+      ...jd,
+      position: '全栈工程师',
+      positionDescription: '负责飞书团队的产品化，AI agent的开发。',
+      content: {
+        title: '全栈工程师（飞书团队·AI Agent方向）',
+        summary: '负责产品化及AI agent的开发与迭代。',
+        responsibilities: ['设计并实现AI agent逻辑与交互'],
+        requirements: [
+          '3年以上全栈开发经验',
+          '精通React/Vue及Node.js',
+          '熟悉Python或Java后端开发',
+          '有AI/LLM应用开发经验',
+          '掌握SQL及NoSQL数据库设计',
+          '理解微服务与RESTful API',
+        ],
+        bonus: ['熟悉LangChain或类似AI框架'],
+        highlights: ['技术挑战：高并发、复杂业务逻辑与AI推理的深度融合'],
+      },
+    });
+
+    expect(result.searchPlan.keywords).toEqual(
+      expect.arrayContaining([
+        'React',
+        'Vue',
+        'Node.js',
+        'Python',
+        'Java',
+        'AI',
+        'LLM',
+        'SQL',
+        'NoSQL',
+        '微服务',
+        'RESTful API',
+        'LangChain',
+      ]),
+    );
+    expect(result.searchPlan.keywords.slice(0, 5)).toEqual([
+      'React',
+      'Vue',
+      'Node.js',
+      'Python',
+      'Java',
+    ]);
+    expect(result.searchPlan.keywords).not.toEqual(
+      expect.arrayContaining([
+        '3年以上全栈开发经验',
+        '精通React/Vue及Node.js',
+        '熟悉Python或Java后端开发',
+        '有AI/LLM应用开发经验',
+        '掌握SQL及NoSQL数据库设计',
+      ]),
+    );
+  });
 });
