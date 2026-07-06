@@ -34,6 +34,10 @@ describe('AppSidebar', () => {
       'href',
       '/llm-observability',
     );
+    expect(screen.getByRole('link', { name: /公司设置/i })).toHaveAttribute(
+      'href',
+      '/settings/company',
+    );
   });
 
   it('highlights the active route branch', () => {

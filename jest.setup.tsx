@@ -65,6 +65,7 @@ jest.mock('lucide-react', () => ({
   ExternalLink: () => <div data-testid="external-link-icon" />,
   FileText: () => <div data-testid="file-text-icon" />,
   ListFilter: () => <div data-testid="list-filter-icon" />,
+  MapPin: () => <div data-testid="map-pin-icon" />,
   MessageCircle: () => <div data-testid="message-circle-icon" />,
   Plus: () => <div data-testid="plus-icon" />,
   RefreshCw: () => <div data-testid="refresh-cw-icon" />,
@@ -76,6 +77,7 @@ jest.mock('lucide-react', () => ({
   ChevronUp: () => <div data-testid="chevron-up-icon" />,
   Loader2: () => <div data-testid="loader2-icon" />,
   Sparkles: () => <div data-testid="sparkles-icon" />,
+  Trash2: () => <div data-testid="trash2-icon" />,
 }));
 
 global.ResizeObserver = jest.fn().mockImplementation(() => ({

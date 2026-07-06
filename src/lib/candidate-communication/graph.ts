@@ -99,6 +99,17 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function isJdContent(value: unknown): value is JD {
   if (!value || typeof value !== 'object') return false;
   const content = value as Record<string, unknown>;
@@ -139,6 +150,11 @@ function resolveJobDescriptionForEvaluation(
     department: jobDescription.department,
     position: jobDescription.position,
     positionDescription: jobDescription.positionDescription,
+    salaryRange:
+      typeof jobDescription.salaryRange === 'string' && jobDescription.salaryRange.trim()
+        ? jobDescription.salaryRange.trim()
+        : null,
+    workLocations: readStringList(jobDescription.workLocations),
     tone: isJdTone(jobDescription.tone) ? jobDescription.tone : 'tech',
     status: isJdStatus(jobDescription.status) ? jobDescription.status : 'created',
     content: jobDescription.content,

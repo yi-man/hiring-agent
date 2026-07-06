@@ -7,6 +7,8 @@ const jd = {
   department: '技术部',
   position: '高级后端工程师',
   positionDescription: '负责 Java 微服务和高并发系统',
+  salaryRange: null,
+  workLocations: [],
   tone: 'tech',
   status: 'published',
   content: {

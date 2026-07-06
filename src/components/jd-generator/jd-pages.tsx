@@ -25,6 +25,8 @@ import {
 } from '@/lib/candidate-communication/client';
 import { createCandidateScreeningRun } from '@/lib/candidate-screening/client';
 import type { CandidateScreeningRunDto } from '@/lib/candidate-screening/repo';
+import { fetchCompanyProfile } from '@/lib/company-profile/client';
+import type { CompanyProfileDto } from '@/lib/company-profile/types';
 import {
   createJobDescriptionFromInput,
   fetchJobDescription,
@@ -66,6 +68,17 @@ const toneOptions: Array<{ value: JDTone; label: string }> = [
   { value: 'startup', label: '创业吸引力' },
   { value: 'formal', label: '正式稳健' },
 ];
+
+const salaryRangeOptions = [
+  '10-15K',
+  '15-25K',
+  '20-30K',
+  '25-40K',
+  '30-50K',
+  '40-60K',
+  '60K以上',
+  '面议',
+] as const;
 
 const statusMeta: Record<JDStatus, { label: string; className: string }> = {
   created: {
@@ -328,7 +341,10 @@ export function JDCreateView() {
   );
   const [position, setPosition] = useState<string>(positions[0]);
   const [positionDescription, setPositionDescription] = useState('');
+  const [salaryRange, setSalaryRange] = useState('');
+  const [selectedWorkLocations, setSelectedWorkLocations] = useState<string[]>([]);
   const [tone, setTone] = useState<JDTone>('tech');
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -337,6 +353,34 @@ export function JDCreateView() {
       setPosition(positions[0]);
     }
   }, [position, positions]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadCompanyProfile() {
+      try {
+        const profile = await fetchCompanyProfile();
+        if (isActive) {
+          setCompanyProfile(profile);
+          setSelectedWorkLocations((current) =>
+            current.length > 0 || !profile?.locations[0]?.label
+              ? current
+              : [profile.locations[0].label],
+          );
+        }
+      } catch {
+        if (isActive) {
+          setCompanyProfile(null);
+        }
+      }
+    }
+
+    void loadCompanyProfile();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -347,6 +391,8 @@ export function JDCreateView() {
         department,
         position,
         positionDescription: positionDescription.trim(),
+        salaryRange,
+        workLocations: selectedWorkLocations,
         tone,
       });
       router.push(`/jd-generator/${jobDescription.id}`);
@@ -355,6 +401,16 @@ export function JDCreateView() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  const canCreateWithCompanyProfile = Boolean(
+    companyProfile?.name.trim() && companyProfile.locations.length > 0,
+  );
+
+  function toggleWorkLocation(label: string) {
+    setSelectedWorkLocations((current) =>
+      current.includes(label) ? current.filter((item) => item !== label) : [...current, label],
+    );
   }
 
   return (
@@ -437,6 +493,59 @@ export function JDCreateView() {
             <div className="text-foreground text-sm font-medium">生成设置</div>
           </div>
           <label className="block space-y-2">
+            <FieldLabel>公司名称</FieldLabel>
+            <input
+              aria-label="公司名称"
+              className="border-input bg-muted/40 text-foreground h-10 w-full rounded-md border px-3 text-sm"
+              readOnly
+              value={companyProfile?.name ?? '未设置公司信息'}
+            />
+          </label>
+          <label className="block space-y-2">
+            <FieldLabel>薪资范围</FieldLabel>
+            <select
+              aria-label="薪资范围"
+              className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+              value={salaryRange}
+              onChange={(event) => setSalaryRange(event.target.value)}
+            >
+              <option value="">请选择薪资范围</option>
+              {salaryRangeOptions.map((range) => (
+                <option key={range} value={range}>
+                  {range}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="space-y-2">
+            <FieldLabel>工作地点</FieldLabel>
+            <div
+              aria-label="工作地点"
+              className="border-border grid min-h-10 gap-2 rounded-md border px-3 py-2"
+              role="group"
+            >
+              {companyProfile?.locations.map((location) => (
+                <label key={location.id} className="flex items-center gap-2 text-sm leading-6">
+                  <input
+                    checked={selectedWorkLocations.includes(location.label)}
+                    className="h-4 w-4"
+                    type="checkbox"
+                    onChange={() => toggleWorkLocation(location.label)}
+                  />
+                  <span>{location.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {!canCreateWithCompanyProfile ? (
+            <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
+              <span className="text-muted-foreground">创建前请先维护公司名称和工作地点。</span>
+              <Link className="text-primary ml-2 hover:underline" href="/settings/company">
+                去公司设置
+              </Link>
+            </div>
+          ) : null}
+          <label className="block space-y-2">
             <FieldLabel>语气</FieldLabel>
             <select
               aria-label="语气"
@@ -455,7 +564,13 @@ export function JDCreateView() {
             className="w-full gap-2"
             color="primary"
             disableRipple
-            isDisabled={isSubmitting || !positionDescription.trim()}
+            isDisabled={
+              isSubmitting ||
+              !canCreateWithCompanyProfile ||
+              !positionDescription.trim() ||
+              !salaryRange ||
+              selectedWorkLocations.length === 0
+            }
             type="submit"
           >
             <Sparkles className="h-4 w-4" aria-hidden />
@@ -483,9 +598,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   );
   const [communicationSyncResult, setCommunicationSyncResult] =
     useState<SyncUnreadCandidateConversationsResult | null>(null);
-  const [publishCompany, setPublishCompany] = useState('星河智能');
-  const [publishSalary, setPublishSalary] = useState('25-40K');
-  const [publishLocation, setPublishLocation] = useState('上海');
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
+  const [publishCompany, setPublishCompany] = useState('');
+  const [publishSalary, setPublishSalary] = useState('');
+  const [selectedPublishLocations, setSelectedPublishLocations] = useState<string[]>([]);
   const [publishKeywords, setPublishKeywords] = useState('TypeScript, React');
   const [publishTasks, setPublishTasks] = useState<PublishTaskDto[]>([]);
   const [publishTrace, setPublishTrace] = useState<PublishTaskResult['trace'] | null>(null);
@@ -495,15 +611,26 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     setIsLoading(true);
     setError('');
     try {
-      const [data, tasks] = await Promise.all([
+      const [data, tasks, profile] = await Promise.all([
         fetchJobDescription(jobDescriptionId),
         fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
+        fetchCompanyProfile().catch(() => null),
       ]);
       setJobDescription(data);
       setForm(jdToForm(data.content));
       setStatus(data.status);
       setPublishTasks(tasks);
       setPublishTrace(tasks.find((task) => task.trace)?.trace ?? null);
+      setCompanyProfile(profile);
+      setPublishCompany(profile?.name ?? '');
+      setPublishSalary(data.salaryRange ?? '');
+      setSelectedPublishLocations(
+        data.workLocations.length > 0
+          ? data.workLocations
+          : profile?.locations[0]?.label
+            ? [profile.locations[0].label]
+            : [],
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载 JD 失败');
     } finally {
@@ -523,6 +650,8 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     try {
       const next = await updateJobDescriptionResource(jobDescription.id, {
         status,
+        salaryRange: publishSalary || null,
+        workLocations: selectedPublishLocations,
         content: formToJd(form),
       });
       setJobDescription(next);
@@ -563,6 +692,8 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     try {
       const saved = await updateJobDescriptionResource(jobDescription.id, {
         status: 'ready_to_publish',
+        salaryRange: publishSalary,
+        workLocations: selectedPublishLocations,
         content: formToJd(form),
       });
       setJobDescription(saved);
@@ -573,7 +704,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         platform: 'boss-like',
         company: publishCompany.trim(),
         salary: publishSalary.trim(),
-        location: publishLocation.trim(),
+        location: selectedPublishLocations.join('、'),
         keywords: parseKeywordInput(publishKeywords),
       });
       setJobDescription(result.jobDescription);
@@ -649,6 +780,15 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   const context = jobDescription?.generationMeta?.context ?? null;
   const canScreenCandidates = status === 'published' || status === 'ready_to_publish';
+  const canPublishWithCompanyProfile = Boolean(
+    companyProfile?.name.trim() && companyProfile.locations.length > 0,
+  );
+
+  function togglePublishLocation(label: string) {
+    setSelectedPublishLocations((current) =>
+      current.includes(label) ? current.filter((item) => item !== label) : [...current, label],
+    );
+  }
 
   if (isLoading) {
     return <div className="text-muted-foreground py-12 text-center text-sm">正在加载 JD…</div>;
@@ -805,31 +945,60 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 <FieldLabel>公司名称</FieldLabel>
                 <input
                   aria-label="发布公司名称"
-                  className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                  className="border-input bg-muted/40 text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                  readOnly
                   value={publishCompany}
-                  onChange={(event) => setPublishCompany(event.target.value)}
                 />
               </label>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block space-y-2">
                   <FieldLabel>薪资范围</FieldLabel>
-                  <input
+                  <select
                     aria-label="发布薪资范围"
                     className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
                     value={publishSalary}
                     onChange={(event) => setPublishSalary(event.target.value)}
-                  />
+                  >
+                    <option value="">请选择薪资范围</option>
+                    {salaryRangeOptions.map((range) => (
+                      <option key={range} value={range}>
+                        {range}
+                      </option>
+                    ))}
+                  </select>
                 </label>
-                <label className="block space-y-2">
+                <div className="space-y-2">
                   <FieldLabel>工作地点</FieldLabel>
-                  <input
+                  <div
                     aria-label="发布工作地点"
-                    className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
-                    value={publishLocation}
-                    onChange={(event) => setPublishLocation(event.target.value)}
-                  />
-                </label>
+                    className="border-border grid min-h-10 gap-2 rounded-md border px-3 py-2"
+                    role="group"
+                  >
+                    {companyProfile?.locations.map((location) => (
+                      <label
+                        key={location.id}
+                        className="flex items-center gap-2 text-sm leading-6"
+                      >
+                        <input
+                          checked={selectedPublishLocations.includes(location.label)}
+                          className="h-4 w-4"
+                          type="checkbox"
+                          onChange={() => togglePublishLocation(location.label)}
+                        />
+                        <span>{location.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
+              {!canPublishWithCompanyProfile ? (
+                <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
+                  <span className="text-muted-foreground">发布前请先维护公司名称和工作地点。</span>
+                  <Link className="text-primary ml-2 hover:underline" href="/settings/company">
+                    去公司设置
+                  </Link>
+                </div>
+              ) : null}
               <label className="block space-y-2">
                 <FieldLabel>技能标签</FieldLabel>
                 <input
@@ -845,9 +1014,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 disableRipple
                 isDisabled={
                   isPublishing ||
+                  !canPublishWithCompanyProfile ||
                   !publishCompany.trim() ||
                   !publishSalary.trim() ||
-                  !publishLocation.trim()
+                  selectedPublishLocations.length === 0
                 }
                 type="button"
                 onClick={() => void handlePublish()}

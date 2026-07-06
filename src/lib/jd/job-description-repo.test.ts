@@ -58,6 +58,8 @@ const row = {
   department: '技术部',
   position: '前端工程师',
   positionDescription: '负责增长业务体验建设',
+  salaryRange: '30-50K',
+  workLocations: ['上海张江', '远程'],
   tone: 'tech',
   status: 'created',
   content: sampleJd,
@@ -84,6 +86,8 @@ describe('job description repository', () => {
       department: '技术部',
       position: '前端工程师',
       positionDescription: '负责增长业务体验建设',
+      salaryRange: '30-50K',
+      workLocations: ['上海张江', '远程'],
       tone: 'tech',
       content: sampleJd,
       evaluation: null,
@@ -96,6 +100,8 @@ describe('job description repository', () => {
         department: '技术部',
         position: '前端工程师',
         positionDescription: '负责增长业务体验建设',
+        salaryRange: '30-50K',
+        workLocations: ['上海张江', '远程'],
         tone: 'tech',
         status: 'created',
         content: sampleJd,
@@ -107,6 +113,8 @@ describe('job description repository', () => {
       status: 'created',
       content: sampleJd,
       generationMeta: sampleMeta,
+      salaryRange: '30-50K',
+      workLocations: ['上海张江', '远程'],
       updatedAt: '2026-06-25T02:00:00.000Z',
     });
   });
@@ -142,6 +150,8 @@ describe('job description repository', () => {
     prismaMock.jobDescription.findFirst.mockResolvedValueOnce({
       ...row,
       status: 'ready_to_publish',
+      salaryRange: '40-60K',
+      workLocations: ['远程'],
       content: { ...sampleJd, summary: '手动调整后的 JD' },
     });
 
@@ -149,6 +159,8 @@ describe('job description repository', () => {
       userId: 'u1',
       id: 'jd-1',
       status: 'ready_to_publish',
+      salaryRange: '40-60K',
+      workLocations: ['远程'],
       content: { ...sampleJd, summary: '手动调整后的 JD' },
     });
 
@@ -156,6 +168,8 @@ describe('job description repository', () => {
       where: { id: 'jd-1', userId: 'u1' },
       data: expect.objectContaining({
         status: 'ready_to_publish',
+        salaryRange: '40-60K',
+        workLocations: ['远程'],
         content: { ...sampleJd, summary: '手动调整后的 JD' },
       }),
     });

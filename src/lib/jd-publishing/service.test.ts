@@ -35,6 +35,8 @@ const sampleJobDescription: JobDescriptionDto = {
   department: '技术部',
   position: '前端工程师',
   positionDescription: '负责招聘产品前端体验',
+  salaryRange: null,
+  workLocations: [],
   tone: 'tech',
   status: 'ready_to_publish',
   content: sampleJd,

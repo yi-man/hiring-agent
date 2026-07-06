@@ -19,6 +19,8 @@ const jobDescription: JobDescriptionDto = {
   department: '技术部',
   position: '高级后端工程师',
   positionDescription: '负责 Java 微服务和分布式系统',
+  salaryRange: null,
+  workLocations: [],
   tone: 'tech',
   status: 'published',
   content: jdContent,

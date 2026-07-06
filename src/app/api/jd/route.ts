@@ -88,6 +88,8 @@ export async function POST(request: Request) {
       department: value.department,
       position: value.position,
       positionDescription: value.positionDescription,
+      salaryRange: value.salaryRange,
+      workLocations: value.workLocations,
       tone: value.tone,
       content: agentResponse.jd,
       evaluation: agentResponse.evaluation,

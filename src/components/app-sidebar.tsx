@@ -2,7 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BrainCircuit, Circle, Eye, FileCode, FileText, MessageCircle } from 'lucide-react';
+import {
+  BrainCircuit,
+  Building2,
+  Circle,
+  Eye,
+  FileCode,
+  FileText,
+  MessageCircle,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 type AppMenuItem = {
@@ -48,6 +56,12 @@ const appMenuItems: AppMenuItem[] = [
     description: '调用与趋势',
     href: '/llm-observability',
     Icon: Eye,
+  },
+  {
+    label: '公司设置',
+    description: '公司与地点',
+    href: '/settings/company',
+    Icon: Building2,
   },
 ];
 

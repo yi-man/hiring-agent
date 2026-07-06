@@ -20,6 +20,8 @@ export type CandidateCommunicationSubject = {
     department: string;
     position: string;
     positionDescription: string;
+    salaryRange?: string | null;
+    workLocations?: unknown | null;
     tone: string;
     status: string;
     content: unknown;
