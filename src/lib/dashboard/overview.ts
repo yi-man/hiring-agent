@@ -49,32 +49,21 @@ const publishPlatforms = ['boss-like'] as const satisfies readonly PublishPlatfo
 
 type DashboardJobRow = {
   id: string;
-  userId: string;
   department: string;
   position: string;
-  positionDescription: string;
   salaryRange: string | null;
   workLocations: unknown | null;
-  tone: string;
   status: string;
   content: unknown;
-  evaluation: unknown | null;
-  generationMeta: unknown | null;
-  createdAt: Date | string;
   updatedAt: Date | string;
 };
 
 type DashboardTaskRow = {
   id: string;
-  userId: string;
   jobDescriptionId: string;
-  skillId: string;
   platform: string;
-  input: unknown;
-  currentStep: string | null;
   status: string;
   errorMessage: string | null;
-  trace?: unknown | null;
   createdAt: Date | string;
   updatedAt: Date | string;
 };
@@ -95,6 +84,27 @@ type DashboardStatusCountRow = {
     _all: number;
   };
 };
+
+const dashboardJobSelect = {
+  id: true,
+  department: true,
+  position: true,
+  salaryRange: true,
+  workLocations: true,
+  status: true,
+  content: true,
+  updatedAt: true,
+} as const;
+
+const dashboardTaskSelect = {
+  id: true,
+  jobDescriptionId: true,
+  platform: true,
+  status: true,
+  errorMessage: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
@@ -457,6 +467,7 @@ export async function getDashboardOverview(params: {
     prisma.jobDescription.findMany({
       where: jobWhere,
       orderBy: { updatedAt: 'desc' },
+      select: dashboardJobSelect,
     }),
   ]);
 
@@ -466,8 +477,13 @@ export async function getDashboardOverview(params: {
     jobIds.length > 0
       ? await Promise.all([
           prisma.jobPublishTask.findMany({
-            where: { userId: params.userId, jobDescriptionId: { in: jobIds } },
+            where: {
+              userId: params.userId,
+              jobDescriptionId: { in: jobIds },
+              status: { in: ['success', 'failed', 'running'] },
+            },
             orderBy: { createdAt: 'desc' },
+            select: dashboardTaskSelect,
           }),
           prisma.candidateScreeningResult.groupBy({
             by: ['jobDescriptionId', 'decisionAction', 'decisionPriority', 'interviewStage'],
