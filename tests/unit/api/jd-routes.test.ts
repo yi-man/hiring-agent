@@ -13,6 +13,7 @@ const countJobDescriptionsMock = jest.fn();
 const createJobDescriptionMock = jest.fn();
 const getJobDescriptionByIdMock = jest.fn();
 const updateJobDescriptionMock = jest.fn();
+const listJdScreeningSummariesMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -44,6 +45,18 @@ jest.mock('@/lib/jd/job-description-repo', () => ({
   createJobDescription: (...args: unknown[]) => createJobDescriptionMock(...args),
   getJobDescriptionById: (...args: unknown[]) => getJobDescriptionByIdMock(...args),
   updateJobDescription: (...args: unknown[]) => updateJobDescriptionMock(...args),
+}));
+
+jest.mock('@/lib/jd/screening-summary', () => ({
+  listJdScreeningSummaries: (...args: unknown[]) => listJdScreeningSummariesMock(...args),
+  getDefaultJdScreeningSummary: () => ({
+    status: 'not_started',
+    totalCandidateCount: 0,
+    qualifiedCandidateCount: 0,
+    latestRunId: null,
+    latestRunStatus: null,
+    latestRunUpdatedAt: null,
+  }),
 }));
 
 const runJDAgentMock = runJDAgent as jest.MockedFunction<typeof runJDAgent>;
@@ -89,8 +102,10 @@ describe('JD resource routes', () => {
     createJobDescriptionMock.mockReset();
     getJobDescriptionByIdMock.mockReset();
     updateJobDescriptionMock.mockReset();
+    listJdScreeningSummariesMock.mockReset();
     runJDAgentMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
+    listJdScreeningSummariesMock.mockResolvedValue({});
     runJDAgentMock.mockResolvedValue(sampleAgentResponse);
   });
 
@@ -111,6 +126,48 @@ describe('JD resource routes', () => {
       limit: 10,
       offset: 0,
       status: undefined,
+    });
+  });
+
+  it('lists published job descriptions with screening summaries', async () => {
+    listJobDescriptionsPaginatedMock.mockResolvedValueOnce([
+      { id: 'jd-1', position: '前端工程师' },
+    ]);
+    countJobDescriptionsMock.mockResolvedValueOnce(1);
+    listJdScreeningSummariesMock.mockResolvedValueOnce({
+      'jd-1': {
+        status: 'screened',
+        totalCandidateCount: 3,
+        qualifiedCandidateCount: 2,
+        latestRunId: 'run-1',
+        latestRunStatus: 'success',
+        latestRunUpdatedAt: '2026-07-06T03:00:00.000Z',
+      },
+    });
+
+    const response = await listJds({
+      url: 'http://localhost/api/jd?page=1&limit=10&status=published',
+    } as Request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.jobDescriptions[0].screeningSummary).toEqual({
+      status: 'screened',
+      totalCandidateCount: 3,
+      qualifiedCandidateCount: 2,
+      latestRunId: 'run-1',
+      latestRunStatus: 'success',
+      latestRunUpdatedAt: '2026-07-06T03:00:00.000Z',
+    });
+    expect(listJobDescriptionsPaginatedMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      limit: 10,
+      offset: 0,
+      status: 'published',
+    });
+    expect(listJdScreeningSummariesMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionIds: ['jd-1'],
     });
   });
 
@@ -165,6 +222,30 @@ describe('JD resource routes', () => {
     expect(response.status).toBe(200);
     expect(body.jobDescription.id).toBe('jd-1');
     expect(getJobDescriptionByIdMock).toHaveBeenCalledWith('u1', 'jd-1');
+  });
+
+  it('returns one JD with a screening summary', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({ id: 'jd-1', content: sampleJd });
+    listJdScreeningSummariesMock.mockResolvedValueOnce({
+      'jd-1': {
+        status: 'running',
+        totalCandidateCount: 1,
+        qualifiedCandidateCount: 1,
+        latestRunId: 'run-2',
+        latestRunStatus: 'running',
+        latestRunUpdatedAt: '2026-07-06T03:30:00.000Z',
+      },
+    });
+
+    const response = await getJd({} as Request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.jobDescription.screeningSummary.status).toBe('running');
+    expect(listJdScreeningSummariesMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionIds: ['jd-1'],
+    });
   });
 
   it('updates editable content and status', async () => {

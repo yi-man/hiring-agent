@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { getJobDescriptionById, updateJobDescription } from '@/lib/jd/job-description-repo';
+import {
+  getDefaultJdScreeningSummary,
+  listJdScreeningSummaries,
+} from '@/lib/jd/screening-summary';
 import { parseUpdateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {
@@ -31,8 +35,17 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (!jobDescription) {
       return NextResponse.json({ error: 'job description not found' }, { status: 404 });
     }
+    const summaries = await listJdScreeningSummaries({
+      userId: auth.user.id,
+      jobDescriptionIds: [jobDescription.id],
+    });
 
-    return NextResponse.json({ jobDescription });
+    return NextResponse.json({
+      jobDescription: {
+        ...jobDescription,
+        screeningSummary: summaries[jobDescription.id] ?? getDefaultJdScreeningSummary(),
+      },
+    });
   } catch (error) {
     return serverErrorResponse(error);
   }
