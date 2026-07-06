@@ -1,4 +1,6 @@
-import { JD_STATUSES, type JDStatus } from '@/types';
+import { prisma } from '@/lib/prisma';
+import type { PublishPlatform, PublishTaskStatus } from '@/lib/jd-publishing/types';
+import { JD_STATUSES, type JD, type JDStatus } from '@/types';
 import type {
   DashboardCandidateSignal,
   DashboardCandidateStats,
@@ -9,10 +11,17 @@ import type {
   DashboardPlatformSummary,
   DashboardPublishTaskSummary,
 } from './types';
-import { DASHBOARD_PLATFORM_ALL, DASHBOARD_PLATFORM_UNTRACKED } from './types';
+import {
+  DASHBOARD_PLATFORM_ALL,
+  DASHBOARD_PLATFORM_UNTRACKED,
+  type DashboardJobDto,
+  type DashboardPlatformKey,
+  type DashboardStatusSummary,
+} from './types';
 
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 25;
+const RECENT_TASK_LIMIT = 8;
 
 const statusLabels: Record<JDStatus, string> = {
   created: '已创建',
@@ -36,6 +45,54 @@ const platformLabels: Record<DashboardPlatformFilter, string> = {
   [DASHBOARD_PLATFORM_UNTRACKED]: '未记录平台',
 };
 
+const publishPlatforms = ['boss-like'] as const satisfies readonly PublishPlatform[];
+
+type DashboardJobRow = {
+  id: string;
+  userId: string;
+  department: string;
+  position: string;
+  positionDescription: string;
+  salaryRange: string | null;
+  workLocations: unknown | null;
+  tone: string;
+  status: string;
+  content: unknown;
+  evaluation: unknown | null;
+  generationMeta: unknown | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+};
+
+type DashboardTaskRow = {
+  id: string;
+  userId: string;
+  jobDescriptionId: string;
+  skillId: string;
+  platform: string;
+  input: unknown;
+  currentStep: string | null;
+  status: string;
+  errorMessage: string | null;
+  trace?: unknown | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+};
+
+type DashboardCandidateRow = {
+  jobDescriptionId: string;
+  decisionAction: string;
+  decisionPriority: string;
+  interviewStage: string;
+};
+
+type DashboardStatusCountRow = {
+  status: string;
+  _count: {
+    _all: number;
+  };
+};
+
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
   const parsed = Number(value);
@@ -53,6 +110,91 @@ export function labelForPlatform(platform: DashboardPlatformFilter): string {
 
 function isDashboardPlatformFilter(value: string): value is DashboardPlatformFilter {
   return dashboardPlatformFilters.includes(value as DashboardPlatformFilter);
+}
+
+function isPublishPlatform(value: string): value is PublishPlatform {
+  return publishPlatforms.includes(value as PublishPlatform);
+}
+
+function toPublishPlatform(value: string): PublishPlatform {
+  if (!isPublishPlatform(value)) {
+    throw new Error(`Unsupported publish platform: ${value}`);
+  }
+
+  return value;
+}
+
+function iso(value: Date | string): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+function readString(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function mapJobContent(value: unknown, fallbackTitle: string): JD {
+  const content = toRecord(value);
+  return {
+    title: readString(content.title, fallbackTitle),
+    summary: readString(content.summary, ''),
+    responsibilities: toStringArray(content.responsibilities),
+    requirements: toStringArray(content.requirements),
+    bonus: toStringArray(content.bonus),
+    highlights: toStringArray(content.highlights),
+  };
+}
+
+function mapJobSource(row: DashboardJobRow): DashboardJobSource {
+  return {
+    id: row.id,
+    department: row.department,
+    position: row.position,
+    status: row.status as JDStatus,
+    salaryRange: row.salaryRange,
+    workLocations: toStringArray(row.workLocations),
+    updatedAt: iso(row.updatedAt),
+    content: mapJobContent(row.content, row.position),
+  };
+}
+
+function mapTask(row: DashboardTaskRow): DashboardPublishTaskSummary {
+  return {
+    id: row.id,
+    jobDescriptionId: row.jobDescriptionId,
+    platform: toPublishPlatform(row.platform),
+    status: row.status as PublishTaskStatus,
+    errorMessage: row.errorMessage,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+  };
+}
+
+function mapCandidateSignal(row: DashboardCandidateRow): DashboardCandidateSignal {
+  return {
+    jobDescriptionId: row.jobDescriptionId,
+    decisionAction: row.decisionAction as DashboardCandidateSignal['decisionAction'],
+    decisionPriority: row.decisionPriority as DashboardCandidateSignal['decisionPriority'],
+    interviewStage: row.interviewStage as DashboardCandidateSignal['interviewStage'],
+  };
 }
 
 export function parseDashboardFilters(searchParams: URLSearchParams): DashboardFilters {
@@ -93,7 +235,7 @@ export function isInterviewingDashboardCandidate(signal: DashboardCandidateSigna
   );
 }
 
-function emptyCandidateStats(): DashboardCandidateStats {
+function emptyStats(): DashboardCandidateStats {
   return {
     totalCandidates: 0,
     activeCandidates: 0,
@@ -130,7 +272,7 @@ export function aggregateCandidateStats(
   const statsByJob = new Map<string, DashboardCandidateStats>();
 
   for (const signal of signals) {
-    const current = statsByJob.get(signal.jobDescriptionId) ?? emptyCandidateStats();
+    const current = statsByJob.get(signal.jobDescriptionId) ?? emptyStats();
     const isActive = isActiveDashboardCandidate(signal);
     statsByJob.set(signal.jobDescriptionId, {
       totalCandidates: current.totalCandidates + 1,
@@ -186,22 +328,178 @@ export function readDashboardJobTitle(job: DashboardJobSource): string {
   return job.content.title?.trim() || job.position;
 }
 
+function countForStatus(rows: DashboardStatusCountRow[], status: JDStatus): number {
+  return rows.find((row) => row.status === status)?._count._all ?? 0;
+}
+
+function groupTasksByJob(
+  tasks: DashboardPublishTaskSummary[],
+): Map<string, DashboardPublishTaskSummary[]> {
+  const tasksByJob = new Map<string, DashboardPublishTaskSummary[]>();
+
+  for (const task of tasks) {
+    const current = tasksByJob.get(task.jobDescriptionId) ?? [];
+    current.push(task);
+    tasksByJob.set(task.jobDescriptionId, current);
+  }
+
+  return tasksByJob;
+}
+
+function applyPlatformFilter(
+  jobs: DashboardJobDto[],
+  platform: DashboardPlatformFilter | undefined,
+): DashboardJobDto[] {
+  if (!platform || platform === DASHBOARD_PLATFORM_ALL) {
+    return jobs;
+  }
+
+  return jobs.filter((job) => job.platform.platform === platform);
+}
+
+function aggregatePlatformSummaries(jobs: DashboardJobDto[]): DashboardPlatformSummary[] {
+  const byPlatform = new Map<
+    DashboardPlatformKey,
+    Pick<DashboardPlatformSummary, 'recruitingJobs' | 'failedJobs'>
+  >();
+  let recruitingJobs = 0;
+  let failedJobs = 0;
+
+  for (const job of jobs) {
+    if (job.platform.platform === DASHBOARD_PLATFORM_ALL) {
+      continue;
+    }
+
+    recruitingJobs += job.platform.recruitingJobs;
+    failedJobs += job.platform.failedJobs;
+
+    const current = byPlatform.get(job.platform.platform) ?? {
+      recruitingJobs: 0,
+      failedJobs: 0,
+    };
+    byPlatform.set(job.platform.platform, {
+      recruitingJobs: current.recruitingJobs + job.platform.recruitingJobs,
+      failedJobs: current.failedJobs + job.platform.failedJobs,
+    });
+  }
+
+  return dashboardPlatformFilters.map((platform) => {
+    if (platform === DASHBOARD_PLATFORM_ALL) {
+      return {
+        platform,
+        label: labelForPlatform(platform),
+        recruitingJobs,
+        failedJobs,
+      };
+    }
+
+    const stats = byPlatform.get(platform) ?? { recruitingJobs: 0, failedJobs: 0 };
+    return {
+      platform,
+      label: labelForPlatform(platform),
+      recruitingJobs: stats.recruitingJobs,
+      failedJobs: stats.failedJobs,
+    };
+  });
+}
+
+function buildStatusCounts(rows: DashboardStatusCountRow[]): DashboardStatusSummary[] {
+  return JD_STATUSES.map((status) => ({
+    status,
+    label: labelForStatus(status),
+    count: countForStatus(rows, status),
+  }));
+}
+
 export async function getDashboardOverview(params: {
   userId: string;
   filters: DashboardFilters;
 }): Promise<DashboardOverviewDto> {
+  const jobWhere = {
+    userId: params.userId,
+    ...(params.filters.status ? { status: params.filters.status } : {}),
+  };
+
+  const [statusRows, jobRows] = await Promise.all([
+    prisma.jobDescription.groupBy({
+      by: ['status'],
+      where: { userId: params.userId },
+      _count: { _all: true },
+    }),
+    prisma.jobDescription.findMany({
+      where: jobWhere,
+      orderBy: { updatedAt: 'desc' },
+      take: params.filters.limit,
+    }),
+  ]);
+
+  const jobs = jobRows as DashboardJobRow[];
+  const jobIds = jobs.map((job) => job.id);
+  const [taskRows, candidateRows] =
+    jobIds.length > 0
+      ? await Promise.all([
+          prisma.jobPublishTask.findMany({
+            where: { userId: params.userId, jobDescriptionId: { in: jobIds } },
+            orderBy: { createdAt: 'desc' },
+          }),
+          prisma.candidateScreeningResult.findMany({
+            where: { userId: params.userId, jobDescriptionId: { in: jobIds } },
+            select: {
+              jobDescriptionId: true,
+              decisionAction: true,
+              decisionPriority: true,
+              interviewStage: true,
+            },
+          }),
+        ])
+      : [[], []];
+
+  const taskSummaries = (taskRows as DashboardTaskRow[]).map(mapTask);
+  const tasksByJob = groupTasksByJob(taskSummaries);
+  const statsByJob = aggregateCandidateStats(
+    (candidateRows as DashboardCandidateRow[]).map(mapCandidateSignal),
+  );
+
+  const dashboardJobs = jobs.map((job): DashboardJobDto => {
+    const source = mapJobSource(job);
+    const jobTasks = tasksByJob.get(job.id) ?? [];
+
+    return {
+      id: source.id,
+      department: source.department,
+      position: source.position,
+      title: readDashboardJobTitle(source),
+      status: source.status,
+      salaryRange: source.salaryRange,
+      workLocations: source.workLocations,
+      updatedAt: source.updatedAt,
+      platform: inferDashboardPlatform(source.status, jobTasks),
+      candidateStats: statsByJob.get(job.id) ?? emptyStats(),
+      latestTask: jobTasks[0] ?? null,
+    };
+  });
+  const filteredJobs = applyPlatformFilter(dashboardJobs, params.filters.platform);
+  const filteredJobIds = new Set(filteredJobs.map((job) => job.id));
+  const statusCountRows = statusRows as DashboardStatusCountRow[];
+  const statusCounts = buildStatusCounts(statusCountRows);
+
   return {
     summary: {
-      recruitingJobs: 0,
-      readyToPublishJobs: 0,
-      publishingJobs: 0,
-      publishFailedJobs: 0,
-      activeCandidates: 0,
+      recruitingJobs: countForStatus(statusCountRows, 'published'),
+      readyToPublishJobs: countForStatus(statusCountRows, 'ready_to_publish'),
+      publishingJobs: countForStatus(statusCountRows, 'publishing'),
+      publishFailedJobs: countForStatus(statusCountRows, 'publish_failed'),
+      activeCandidates: filteredJobs.reduce(
+        (total, job) => total + job.candidateStats.activeCandidates,
+        0,
+      ),
     },
-    statusCounts: [],
-    platforms: [],
-    jobs: [],
-    recentTasks: [],
+    statusCounts,
+    platforms: aggregatePlatformSummaries(dashboardJobs),
+    jobs: filteredJobs,
+    recentTasks: taskSummaries
+      .filter((task) => filteredJobIds.has(task.jobDescriptionId))
+      .slice(0, RECENT_TASK_LIMIT),
     filters: params.filters,
   };
 }

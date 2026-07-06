@@ -1,6 +1,7 @@
 import {
   aggregateCandidateStats,
   findLatestDashboardTask,
+  getDashboardOverview,
   inferDashboardPlatform,
   parseDashboardFilters,
 } from './overview';
@@ -207,5 +208,99 @@ describe('dashboard overview helpers', () => {
       highPriorityCandidates: 1,
       followUpCandidates: 2,
     });
+  });
+});
+
+describe('getDashboardOverview', () => {
+  beforeEach(() => {
+    prismaMock.jobDescription.findMany.mockReset();
+    prismaMock.jobDescription.groupBy.mockReset();
+    prismaMock.jobPublishTask.findMany.mockReset();
+    prismaMock.candidateScreeningResult.findMany.mockReset();
+  });
+
+  it('returns status summaries, platform summaries, jobs and recent tasks', async () => {
+    prismaMock.jobDescription.groupBy.mockResolvedValueOnce([
+      { status: 'published', _count: { _all: 2 } },
+      { status: 'ready_to_publish', _count: { _all: 1 } },
+      { status: 'publishing', _count: { _all: 1 } },
+      { status: 'publish_failed', _count: { _all: 1 } },
+    ]);
+    prismaMock.jobDescription.findMany.mockResolvedValueOnce([
+      {
+        id: 'jd-1',
+        userId: 'u1',
+        department: '技术部',
+        position: 'AI 应用工程师',
+        positionDescription: 'Build AI hiring tools',
+        salaryRange: '30-50K',
+        workLocations: ['上海'],
+        tone: 'tech',
+        status: 'published',
+        content: {
+          title: 'AI 应用工程师',
+          summary: '负责 AI 招聘产品',
+          responsibilities: [],
+          requirements: [],
+          bonus: [],
+          highlights: [],
+        },
+        evaluation: null,
+        generationMeta: null,
+        createdAt: new Date('2026-07-06T08:00:00.000Z'),
+        updatedAt: new Date('2026-07-06T10:00:00.000Z'),
+      },
+    ]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([
+      {
+        id: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        skillId: 'skill-1',
+        platform: 'boss-like',
+        input: {},
+        currentStep: null,
+        status: 'success',
+        errorMessage: null,
+        trace: null,
+        createdAt: new Date('2026-07-06T09:00:00.000Z'),
+        updatedAt: new Date('2026-07-06T09:01:00.000Z'),
+      },
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([
+      {
+        jobDescriptionId: 'jd-1',
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        interviewStage: 'to_contact',
+      },
+    ]);
+
+    const overview = await getDashboardOverview({
+      userId: 'u1',
+      filters: { status: 'published', limit: 25 },
+    });
+
+    expect(overview.summary).toEqual({
+      recruitingJobs: 2,
+      readyToPublishJobs: 1,
+      publishingJobs: 1,
+      publishFailedJobs: 1,
+      activeCandidates: 1,
+    });
+    expect(overview.jobs[0]).toEqual(
+      expect.objectContaining({
+        id: 'jd-1',
+        platform: expect.objectContaining({ platform: 'boss-like', label: 'BOSS-like' }),
+        candidateStats: expect.objectContaining({ totalCandidates: 1, activeCandidates: 1 }),
+      }),
+    );
+    expect(overview.recentTasks[0]).toEqual(
+      expect.objectContaining({
+        id: 'task-1',
+        platform: 'boss-like',
+        status: 'success',
+      }),
+    );
   });
 });
