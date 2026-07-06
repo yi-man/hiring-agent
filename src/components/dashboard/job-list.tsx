@@ -85,6 +85,10 @@ function CandidateLink({ job }: { job: DashboardJobDto }) {
 
 function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOverviewDto }) {
   const location = job.workLocations.length > 0 ? job.workLocations.join(' / ') : '地点待定';
+  const publishFailureMessage =
+    job.status === 'publish_failed'
+      ? `发布失败：${job.latestTask?.errorMessage?.trim() || '请查看发布记录'}`
+      : null;
 
   return (
     <article className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1.35fr)_120px_118px_132px_132px_92px] xl:items-center">
@@ -101,6 +105,12 @@ function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOv
           {job.salaryRange ? <span className="shrink-0">{job.salaryRange}</span> : null}
         </div>
         <div className="text-muted-foreground mt-1 truncate text-xs">{location}</div>
+        {publishFailureMessage ? (
+          <div className="mt-2 flex min-w-0 items-start gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 break-words">{publishFailureMessage}</span>
+          </div>
+        ) : null}
       </div>
 
       <StatusChip overview={overview} status={job.status} />
