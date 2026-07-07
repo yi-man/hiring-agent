@@ -28,6 +28,8 @@ const fetchCandidateScreeningRunMock = jest.fn();
 const fetchJdCandidatesMock = jest.fn();
 const fetchJdCandidateDetailMock = jest.fn();
 const fetchCandidateTrackingOverviewMock = jest.fn();
+const fetchCandidateResumeLibraryMock = jest.fn();
+const fetchCandidateInterviewRecordsMock = jest.fn();
 const updateJdCandidateProgressMock = jest.fn();
 const fetchCandidateInterviewFeedbacksMock = jest.fn();
 const saveCandidateInterviewFeedbackMock = jest.fn();
@@ -56,6 +58,9 @@ jest.mock('@/lib/candidate-screening/client', () => ({
   fetchCandidateScreeningRun: (...args: unknown[]) => fetchCandidateScreeningRunMock(...args),
   fetchCandidateTrackingOverview: (...args: unknown[]) =>
     fetchCandidateTrackingOverviewMock(...args),
+  fetchCandidateResumeLibrary: (...args: unknown[]) => fetchCandidateResumeLibraryMock(...args),
+  fetchCandidateInterviewRecords: (...args: unknown[]) =>
+    fetchCandidateInterviewRecordsMock(...args),
   fetchJdCandidates: (...args: unknown[]) => fetchJdCandidatesMock(...args),
   fetchJdCandidateDetail: (...args: unknown[]) => fetchJdCandidateDetailMock(...args),
   fetchCandidateInterviewFeedbacks: (...args: unknown[]) =>
@@ -397,6 +402,8 @@ describe('candidate screening UI', () => {
     fetchJdCandidatesMock.mockReset();
     fetchJdCandidateDetailMock.mockReset();
     fetchCandidateTrackingOverviewMock.mockReset();
+    fetchCandidateResumeLibraryMock.mockReset();
+    fetchCandidateInterviewRecordsMock.mockReset();
     updateJdCandidateProgressMock.mockReset();
     fetchCandidateInterviewFeedbacksMock.mockReset();
     saveCandidateInterviewFeedbackMock.mockReset();

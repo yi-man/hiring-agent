@@ -1,6 +1,8 @@
 import type {
   CandidateDecisionResultDto,
   CandidateInterviewFeedbackDto,
+  CandidateInterviewRecordDto,
+  CandidateResumeLibraryItemDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultDto,
   CandidateScreeningResultListItem,
@@ -92,6 +94,32 @@ export async function fetchCandidateTrackingOverview(
     jobs: data.jobs,
     candidates: data.candidates,
   };
+}
+
+export async function fetchCandidateResumeLibrary(
+  limit = 200,
+): Promise<CandidateResumeLibraryItemDto[]> {
+  const params = new URLSearchParams();
+  appendSearchParam(params, 'limit', limit);
+  const response = await fetch(`/api/resumes?${params.toString()}`);
+  const data = await readJson<{ resumes?: CandidateResumeLibraryItemDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.resumes)) {
+    throw new Error(data.error || '加载简历列表失败');
+  }
+  return data.resumes;
+}
+
+export async function fetchCandidateInterviewRecords(
+  limit = 200,
+): Promise<CandidateInterviewRecordDto[]> {
+  const params = new URLSearchParams();
+  appendSearchParam(params, 'limit', limit);
+  const response = await fetch(`/api/interviews?${params.toString()}`);
+  const data = await readJson<{ interviews?: CandidateInterviewRecordDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.interviews)) {
+    throw new Error(data.error || '加载面试记录失败');
+  }
+  return data.interviews;
 }
 
 export async function executeCandidateScreeningActions(
