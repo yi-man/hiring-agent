@@ -20,6 +20,8 @@ import {
   POST as upsertCandidateInterviewFeedbackRoute,
 } from '@/app/api/jd/[id]/candidates/[candidateId]/interview-feedbacks/route';
 import { GET as openOriginalProfile } from '@/app/api/jd/[id]/candidates/[candidateId]/original-profile/route';
+import { GET as listResumeLibraryRoute } from '@/app/api/resumes/route';
+import { GET as listInterviewRecordsRoute } from '@/app/api/interviews/route';
 import type {
   CandidateDto,
   CandidateInterviewFeedbackDto,
@@ -46,6 +48,8 @@ const listCandidateInterviewFeedbacksMock = jest.fn();
 const upsertCandidateInterviewFeedbackMock = jest.fn();
 const evaluateCandidateHiringDecisionMock = jest.fn();
 const executeScreeningRunActionsMock = jest.fn();
+const listCandidateResumeLibraryMock = jest.fn();
+const listCandidateInterviewRecordsMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -94,6 +98,8 @@ jest.mock('@/lib/candidate-screening/repo', () => ({
     listCandidateInterviewFeedbacksMock(...args),
   upsertCandidateInterviewFeedback: (...args: unknown[]) =>
     upsertCandidateInterviewFeedbackMock(...args),
+  listCandidateResumeLibrary: (...args: unknown[]) => listCandidateResumeLibraryMock(...args),
+  listCandidateInterviewRecords: (...args: unknown[]) => listCandidateInterviewRecordsMock(...args),
 }));
 
 jest.mock('@/lib/candidate-screening/hiring-decision', () => ({
@@ -375,6 +381,8 @@ describe('candidate screening API routes', () => {
     upsertCandidateInterviewFeedbackMock.mockReset();
     evaluateCandidateHiringDecisionMock.mockReset();
     executeScreeningRunActionsMock.mockReset();
+    listCandidateResumeLibraryMock.mockReset();
+    listCandidateInterviewRecordsMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
   });
 
@@ -642,6 +650,69 @@ describe('candidate screening API routes', () => {
       userId: 'u1',
       limit: 80,
     });
+  });
+
+  it('lists resume library records for the current user', async () => {
+    listCandidateResumeLibraryMock.mockResolvedValueOnce([
+      {
+        resume: sampleResume,
+        candidate: sampleCandidate,
+        mountedJobs: [
+          {
+            screeningResultId: 'result-1',
+            candidateId: 'cand-1',
+            resumeId: 'resume-1',
+            finalScore: 89,
+            interviewStage: 'to_contact',
+            decisionAction: 'chat',
+            updatedAt: now,
+            jobDescription: {
+              id: 'jd-1',
+              department: 'Engineering',
+              position: 'Frontend Engineer',
+              status: 'published',
+              title: 'Frontend Engineer',
+              updatedAt: now,
+            },
+          },
+        ],
+      },
+    ]);
+
+    const response = await listResumeLibraryRoute(
+      new Request('http://localhost/api/resumes?limit=9999'),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.resumes).toHaveLength(1);
+    expect(listCandidateResumeLibraryMock).toHaveBeenCalledWith({ userId: 'u1', limit: 500 });
+  });
+
+  it('lists interview records for the current user', async () => {
+    listCandidateInterviewRecordsMock.mockResolvedValueOnce([
+      {
+        ...sampleFeedback,
+        candidate: sampleCandidate,
+        jobDescription: {
+          id: 'jd-1',
+          department: 'Engineering',
+          position: 'Frontend Engineer',
+          status: 'published',
+          title: 'Frontend Engineer',
+          updatedAt: now,
+        },
+      },
+    ]);
+
+    const response = await listInterviewRecordsRoute(
+      new Request('http://localhost/api/interviews?limit=abc'),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.interviews).toHaveLength(1);
+    expect(listCandidateInterviewRecordsMock).toHaveBeenCalledWith({ userId: 'u1', limit: 200 });
   });
 
   it('returns 404 when listing candidates for a missing scoped JD', async () => {
