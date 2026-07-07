@@ -14,6 +14,7 @@ import type {
   CandidateInterviewFeedbackDecision,
   CandidateInterviewFeedbackStage,
 } from '@/lib/candidate-screening/types';
+import { withReturnTarget } from '@/lib/navigation/return-url';
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -40,6 +41,7 @@ function textList(values: string[]) {
 }
 
 export function InterviewRecordList() {
+  const returnTarget = { href: '/interviews', label: '返回面试记录' };
   const [records, setRecords] = useState<CandidateInterviewRecordDto[]>([]);
   const [jobDescriptionId, setJobDescriptionId] = useState('');
   const [stage, setStage] = useState<'' | CandidateInterviewFeedbackStage>('');
@@ -200,7 +202,10 @@ export function InterviewRecordList() {
                   <div className="min-w-0">
                     <Link
                       className="text-foreground block truncate text-sm font-medium hover:underline"
-                      href={`/jd-generator/${record.jobDescription.id}/candidates/${record.candidate.id}`}
+                      href={withReturnTarget(
+                        `/jd-generator/${record.jobDescription.id}/candidates/${record.candidate.id}`,
+                        returnTarget,
+                      )}
                     >
                       {record.candidate.displayName}
                     </Link>
@@ -211,7 +216,10 @@ export function InterviewRecordList() {
                   <div className="min-w-0">
                     <Link
                       className="text-foreground block truncate text-sm font-medium hover:underline"
-                      href={`/jd-generator/${record.jobDescription.id}`}
+                      href={withReturnTarget(
+                        `/jd-generator/${record.jobDescription.id}`,
+                        returnTarget,
+                      )}
                     >
                       {record.jobDescription.title}
                     </Link>

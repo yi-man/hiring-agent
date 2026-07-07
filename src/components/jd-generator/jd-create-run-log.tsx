@@ -2,9 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, CheckCircle2, FileText, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { fetchJobDescription } from '@/lib/jd/client';
+import {
+  currentPathWithSearch,
+  getReturnTarget,
+  withReturnTarget,
+} from '@/lib/navigation/return-url';
 import type { JobDescriptionDto } from '@/types';
 
 function formatTime(value: string) {
@@ -17,6 +23,15 @@ function formatTime(value: string) {
 }
 
 export function JDCreateRunLog({ jobDescriptionId }: { jobDescriptionId: string }) {
+  const searchParams = useSearchParams();
+  const returnTarget = getReturnTarget(searchParams, {
+    href: '/jd-generator',
+    label: '返回列表',
+  });
+  const createRunReturnTarget = {
+    href: currentPathWithSearch(`/jd-generator/${jobDescriptionId}/runs/create`, searchParams),
+    label: '返回创建记录',
+  };
   const [jobDescription, setJobDescription] = useState<JobDescriptionDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -53,9 +68,9 @@ export function JDCreateRunLog({ jobDescriptionId }: { jobDescriptionId: string 
   if (!jobDescription) {
     return (
       <div className="space-y-4">
-        <Button as={Link} className="gap-2 px-0" href="/jd-generator" variant="light">
+        <Button as={Link} className="gap-2 px-0" href={returnTarget.href} variant="light">
           <ArrowLeft className="h-4 w-4" aria-hidden />
-          返回 JD 工作台
+          {returnTarget.label}
         </Button>
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
           {error || 'JD 创建记录不存在'}
@@ -84,9 +99,9 @@ export function JDCreateRunLog({ jobDescriptionId }: { jobDescriptionId: string 
     <div className="space-y-4">
       <div className="border-border flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <Button as={Link} className="mb-3 gap-2 px-0" href="/jd-generator" variant="light">
+          <Button as={Link} className="mb-3 gap-2 px-0" href={returnTarget.href} variant="light">
             <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回列表
+            {returnTarget.label}
           </Button>
           <div className="flex flex-wrap items-center gap-2">
             <CheckCircle2 className="h-5 w-5 text-emerald-600" aria-hidden />
@@ -114,7 +129,7 @@ export function JDCreateRunLog({ jobDescriptionId }: { jobDescriptionId: string 
             as={Link}
             className="gap-2"
             color="primary"
-            href={`/jd-generator/${jobDescription.id}`}
+            href={withReturnTarget(`/jd-generator/${jobDescription.id}`, createRunReturnTarget)}
           >
             <FileText className="h-4 w-4" aria-hidden />
             查看详情

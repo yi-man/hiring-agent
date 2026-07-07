@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   BadgeCheck,
@@ -36,6 +36,11 @@ import type {
   CandidateInterviewFeedbackStage,
   CandidateInterviewStage,
 } from '@/lib/candidate-screening/types';
+import {
+  currentPathWithSearch,
+  getReturnTarget,
+  withReturnTarget,
+} from '@/lib/navigation/return-url';
 
 type InterviewFeedbackForm = {
   stage: CandidateInterviewFeedbackStage;
@@ -117,6 +122,18 @@ export function CandidateDetail({
   candidateId: string;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTarget = getReturnTarget(searchParams, {
+    href: `/jd-generator/${jobDescriptionId}/candidates`,
+    label: '返回候选人',
+  });
+  const detailReturnTarget = {
+    href: currentPathWithSearch(
+      `/jd-generator/${jobDescriptionId}/candidates/${candidateId}`,
+      searchParams,
+    ),
+    label: '返回候选人详情',
+  };
   const [candidate, setCandidate] = useState<CandidateScreeningDetailDto | null>(null);
   const [feedbacks, setFeedbacks] = useState<CandidateInterviewFeedbackDto[]>([]);
   const [feedbackForms, setFeedbackForms] = useState<
@@ -250,7 +267,9 @@ export function CandidateDetail({
         sourceScreeningRunId: candidate?.runId,
         platform: 'boss-like',
       });
-      router.push(`/jd-generator/communication-runs/${run.id}`);
+      router.push(
+        withReturnTarget(`/jd-generator/communication-runs/${run.id}`, detailReturnTarget),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动单点沟通失败');
     } finally {
@@ -265,14 +284,9 @@ export function CandidateDetail({
   if (!candidate) {
     return (
       <div className="space-y-4">
-        <Button
-          as={Link}
-          className="gap-2 px-0"
-          href={`/jd-generator/${jobDescriptionId}/candidates`}
-          variant="light"
-        >
+        <Button as={Link} className="gap-2 px-0" href={returnTarget.href} variant="light">
           <ArrowLeft className="h-4 w-4" aria-hidden />
-          返回候选人
+          {returnTarget.label}
         </Button>
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
           {error || '候选人不存在'}
@@ -285,14 +299,9 @@ export function CandidateDetail({
     <div className="space-y-4">
       <div className="border-border flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <Button
-            as={Link}
-            className="mb-3 gap-2 px-0"
-            href={`/jd-generator/${jobDescriptionId}/candidates`}
-            variant="light"
-          >
+          <Button as={Link} className="mb-3 gap-2 px-0" href={returnTarget.href} variant="light">
             <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回候选人
+            {returnTarget.label}
           </Button>
           <div className="flex flex-wrap items-center gap-2">
             <BadgeCheck className="text-muted-foreground h-5 w-5" aria-hidden />

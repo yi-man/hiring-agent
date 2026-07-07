@@ -92,19 +92,29 @@ const overview: DashboardOverviewDto = {
   },
 };
 
+function parsedHref(href: string) {
+  return new URL(href, 'http://localhost');
+}
+
+function expectReturnContext(href: string, returnTo: string, returnLabel: string) {
+  const url = parsedHref(href);
+  expect(url.searchParams.get('returnTo')).toBe(returnTo);
+  expect(url.searchParams.get('returnLabel')).toBe(returnLabel);
+}
+
 describe('DashboardJobList', () => {
   it('renders publish failed warning and job links', () => {
     render(<DashboardJobList overview={overview} />);
 
     expect(screen.getByText('发布失败：BOSS 平台定位失败')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '高级前端工程师' })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1',
-    );
-    expect(screen.getByRole('link', { name: /5 候选人/ })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1/candidates',
-    );
+    const detailHref =
+      screen.getByRole('link', { name: '高级前端工程师' }).getAttribute('href') ?? '';
+    expect(parsedHref(detailHref).pathname).toBe('/jd-generator/jd-1');
+    expectReturnContext(detailHref, '/?status=publish_failed&platform=boss-like', '返回工作台');
+    const candidatesHref =
+      screen.getByRole('link', { name: /5 候选人/ }).getAttribute('href') ?? '';
+    expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-1/candidates');
+    expectReturnContext(candidatesHref, '/?status=publish_failed&platform=boss-like', '返回工作台');
   });
 
   it('links row status and platform to filtered dashboard views', () => {

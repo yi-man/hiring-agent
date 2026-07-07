@@ -134,6 +134,16 @@ const overview: DashboardOverviewDto = {
   },
 };
 
+function parsedHref(href: string) {
+  return new URL(href, 'http://localhost');
+}
+
+function expectReturnContext(href: string, returnTo: string, returnLabel: string) {
+  const url = parsedHref(href);
+  expect(url.searchParams.get('returnTo')).toBe(returnTo);
+  expect(url.searchParams.get('returnLabel')).toBe(returnLabel);
+}
+
 describe('DashboardPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -148,10 +158,10 @@ describe('DashboardPage', () => {
     render(<DashboardPage />);
 
     expect(screen.getByText('正在加载工作台…')).toBeInTheDocument();
-    expect(await screen.findByRole('link', { name: /5 候选人/ })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1/candidates',
-    );
+    const candidatesHref =
+      (await screen.findByRole('link', { name: /5 候选人/ })).getAttribute('href') ?? '';
+    expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-1/candidates');
+    expectReturnContext(candidatesHref, '/?status=published&platform=boss-like', '返回工作台');
     expect(fetchDashboardOverview).toHaveBeenCalledWith('status=published&platform=boss-like');
     expect(screen.getByRole('link', { name: /候选人跟踪/ })).toHaveAttribute('href', '/candidates');
     expect(screen.getByRole('link', { name: /同步沟通/ })).toHaveAttribute('href', '/candidates');
@@ -178,6 +188,18 @@ describe('DashboardPage', () => {
       'href',
       '/?status=publish_failed',
     );
+    const jdLinks = screen
+      .getAllByRole('link', { name: '高级前端工程师' })
+      .map((link) => link.getAttribute('href') ?? '');
+    expect(
+      jdLinks.some((href) => {
+        const url = parsedHref(href);
+        return (
+          url.pathname === '/jd-generator/jd-1' &&
+          url.searchParams.get('returnTo') === '/?status=published&platform=boss-like'
+        );
+      }),
+    ).toBe(true);
   });
 
   it('renders an error banner when the dashboard request fails', async () => {

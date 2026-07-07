@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, ExternalLink, Eye, ListFilter, MessageCircle, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
@@ -16,6 +16,11 @@ import type {
   CandidateDecisionAction,
   CandidateInterviewStage,
 } from '@/lib/candidate-screening/types';
+import {
+  currentPathWithSearch,
+  getOptionalReturnTarget,
+  withReturnTarget,
+} from '@/lib/navigation/return-url';
 
 const actionOptions: Array<{ value: '' | CandidateDecisionAction; label: string }> = [
   { value: '', label: '全部动作' },
@@ -76,6 +81,12 @@ function isActiveCandidate(item: CandidateTrackingCandidateDto) {
 
 export function CandidateTrackingDashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTarget = getOptionalReturnTarget(searchParams);
+  const dashboardReturnTarget = {
+    href: currentPathWithSearch('/candidates', searchParams),
+    label: '返回候选人列表',
+  };
   const [overview, setOverview] = useState<CandidateTrackingOverviewDto>({
     jobs: [],
     candidates: [],
@@ -115,7 +126,9 @@ export function CandidateTrackingDashboard() {
         platform: 'boss-like',
         maxPasses: 10,
       });
-      router.push(`/jd-generator/communication-runs/${run.id}`);
+      router.push(
+        withReturnTarget(`/jd-generator/communication-runs/${run.id}`, dashboardReturnTarget),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人沟通失败');
     } finally {
@@ -140,10 +153,12 @@ export function CandidateTrackingDashboard() {
     <div className="space-y-4">
       <div className="border-border flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <Button as={Link} className="mb-3 gap-2 px-0" href="/jd-generator" variant="light">
-            <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回 JD 工作台
-          </Button>
+          {returnTarget ? (
+            <Button as={Link} className="mb-3 gap-2 px-0" href={returnTarget.href} variant="light">
+              <ArrowLeft className="h-4 w-4" aria-hidden />
+              {returnTarget.label}
+            </Button>
+          ) : null}
           <div className="flex items-center gap-2">
             <ListFilter className="text-muted-foreground h-5 w-5" aria-hidden />
             <h1 className="text-foreground text-2xl font-semibold tracking-normal">候选人跟踪</h1>
@@ -280,7 +295,10 @@ export function CandidateTrackingDashboard() {
                 <div className="min-w-0">
                   <Link
                     className="text-foreground block truncate text-sm font-medium hover:underline"
-                    href={`/jd-generator/${item.jobDescription.id}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}`,
+                      dashboardReturnTarget,
+                    )}
                   >
                     {item.jobDescription.position}
                   </Link>
@@ -300,7 +318,10 @@ export function CandidateTrackingDashboard() {
                 <Button
                   as={Link}
                   className="gap-2 justify-self-start lg:justify-self-end"
-                  href={`/jd-generator/${item.jobDescription.id}/candidates`}
+                  href={withReturnTarget(
+                    `/jd-generator/${item.jobDescription.id}/candidates`,
+                    dashboardReturnTarget,
+                  )}
                   size="sm"
                   variant="light"
                 >
@@ -338,7 +359,10 @@ export function CandidateTrackingDashboard() {
                 <div className="min-w-0">
                   <Link
                     className="text-foreground block truncate text-sm font-medium hover:underline"
-                    href={`/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`,
+                      dashboardReturnTarget,
+                    )}
                   >
                     {item.candidate.displayName}
                   </Link>
@@ -349,7 +373,10 @@ export function CandidateTrackingDashboard() {
                 <div className="min-w-0">
                   <Link
                     className="text-muted-foreground block truncate text-xs hover:underline"
-                    href={`/jd-generator/${item.jobDescription.id}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}`,
+                      dashboardReturnTarget,
+                    )}
                   >
                     {item.jobDescription.position}
                   </Link>
@@ -372,7 +399,10 @@ export function CandidateTrackingDashboard() {
                 <div className="flex flex-wrap gap-2 xl:justify-end">
                   <Button
                     as={Link}
-                    href={`/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`,
+                      dashboardReturnTarget,
+                    )}
                     size="sm"
                     variant="light"
                   >

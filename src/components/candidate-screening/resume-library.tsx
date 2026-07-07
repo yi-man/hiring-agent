@@ -9,6 +9,7 @@ import type {
   CandidateResumeLibraryItemDto,
   CandidateResumeMountedJobDto,
 } from '@/lib/candidate-screening/repo';
+import { withReturnTarget, type ReturnTarget } from '@/lib/navigation/return-url';
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -35,8 +36,11 @@ function candidateSubtitle(item: CandidateResumeLibraryItemDto) {
     .join(' · ');
 }
 
-function mountedCandidateHref(job: CandidateResumeMountedJobDto) {
-  return `/jd-generator/${job.jobDescription.id}/candidates/${job.candidateId}`;
+function mountedCandidateHref(job: CandidateResumeMountedJobDto, returnTarget: ReturnTarget) {
+  return withReturnTarget(
+    `/jd-generator/${job.jobDescription.id}/candidates/${job.candidateId}`,
+    returnTarget,
+  );
 }
 
 function originalProfileHref(item: CandidateResumeLibraryItemDto) {
@@ -48,6 +52,7 @@ function originalProfileHref(item: CandidateResumeLibraryItemDto) {
 }
 
 export function ResumeLibrary() {
+  const returnTarget = { href: '/resumes', label: '返回简历列表' };
   const [items, setItems] = useState<CandidateResumeLibraryItemDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -134,7 +139,7 @@ export function ResumeLibrary() {
                       {primaryMountedJob ? (
                         <Link
                           className="text-foreground block truncate text-sm font-medium hover:underline"
-                          href={mountedCandidateHref(primaryMountedJob)}
+                          href={mountedCandidateHref(primaryMountedJob, returnTarget)}
                         >
                           {item.candidate.displayName}
                         </Link>
@@ -175,7 +180,10 @@ export function ResumeLibrary() {
                           >
                             <Link
                               className="text-foreground inline-flex max-w-full items-center gap-2 text-xs hover:underline"
-                              href={`/jd-generator/${job.jobDescription.id}`}
+                              href={withReturnTarget(
+                                `/jd-generator/${job.jobDescription.id}`,
+                                returnTarget,
+                              )}
                             >
                               <span className="truncate">{job.jobDescription.title}</span>
                               <span className="text-muted-foreground font-mono" aria-hidden>
@@ -185,7 +193,7 @@ export function ResumeLibrary() {
                             <Link
                               aria-label={`查看 ${job.jobDescription.title} 的候选人详情`}
                               className="text-muted-foreground text-xs hover:underline"
-                              href={mountedCandidateHref(job)}
+                              href={mountedCandidateHref(job, returnTarget)}
                             >
                               候选人详情
                             </Link>
