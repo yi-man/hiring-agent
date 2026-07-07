@@ -1,10 +1,27 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getJobDescriptionById, updateJobDescription } from '@/lib/jd/job-description-repo';
+import { getJobDescriptionById, updateMutableJobDescription } from '@/lib/jd/job-description-repo';
+import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { parseUpdateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+function conflict(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
+}
+
+function isPublished(status: string): boolean {
+  return status === 'published';
+}
+
+async function mutableUpdateMissResponse(userId: string, id: string) {
+  const latest = await getJobDescriptionById(userId, id);
+  if (latest && isPublished(latest.status)) {
+    return conflict('published job descriptions cannot be modified');
+  }
+  return NextResponse.json({ error: 'job description not found' }, { status: 404 });
 }
 
 function serverErrorResponse(error: unknown) {
@@ -31,8 +48,17 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (!jobDescription) {
       return NextResponse.json({ error: 'job description not found' }, { status: 404 });
     }
+    const summaries = await listJdScreeningSummaries({
+      userId: auth.user.id,
+      jobDescriptionIds: [jobDescription.id],
+    });
 
-    return NextResponse.json({ jobDescription });
+    return NextResponse.json({
+      jobDescription: {
+        ...jobDescription,
+        screeningSummary: summaries[jobDescription.id] ?? getDefaultJdScreeningSummary(),
+      },
+    });
   } catch (error) {
     return serverErrorResponse(error);
   }
@@ -46,19 +72,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return badRequest('job description id is required');
     }
 
+    const current = await getJobDescriptionById(auth.user.id, id);
+    if (!current) {
+      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+    }
+    if (isPublished(current.status)) {
+      return conflict('published job descriptions cannot be modified');
+    }
+
     const parsed = parseUpdateJobDescriptionPayload(await request.json());
     if (!parsed.ok) {
       return badRequest(parsed.error);
     }
     const value = parsed.value;
 
-    const jobDescription = await updateJobDescription({
+    const jobDescription = await updateMutableJobDescription({
       userId: auth.user.id,
       id,
       ...value,
     });
     if (!jobDescription) {
-      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+      return mutableUpdateMissResponse(auth.user.id, id);
     }
 
     return NextResponse.json({ jobDescription });

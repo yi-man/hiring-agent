@@ -68,6 +68,14 @@ type ScreeningRunnerDependencyOverrides = Partial<Omit<ScreeningRunnerDependenci
   repo?: Partial<ScreeningRunnerDependencies['repo']>;
 };
 
+export type ExecuteSingleCandidateActionResult = {
+  status: 'success' | 'failed';
+  candidateId: string;
+  candidateName: string | null;
+  detail: string;
+  errorMessage?: string | null;
+};
+
 const defaultDependencies: ScreeningRunnerDependencies = {
   buildPlan: buildScreeningPlanFromJd,
   createAdapter: createCandidateSourceAdapter,
@@ -1038,6 +1046,118 @@ export async function executeScreeningRunActions(params: {
       finishedAt: new Date(),
       stats: copyStats(stats),
     });
+  } finally {
+    await closeAdapterSafely(adapter);
+  }
+}
+
+export async function executeSingleCandidateAction(params: {
+  runId: string;
+  userId: string;
+  jobDescriptionId: string;
+  candidateId: string;
+  dependencies?: ScreeningRunnerDependencyOverrides;
+}): Promise<ExecuteSingleCandidateActionResult> {
+  const dependencies = resolveDependencies(params.dependencies);
+  const run = await dependencies.repo.getRun({ userId: params.userId, runId: params.runId });
+  if (!run) {
+    throw new Error('candidate screening run not found');
+  }
+
+  const detail = await dependencies.repo.getDetail({
+    userId: params.userId,
+    jobDescriptionId: params.jobDescriptionId,
+    candidateId: params.candidateId,
+  });
+  if (!detail) {
+    throw new Error('candidate screening detail not found');
+  }
+
+  const actionPlan = detail.actionPlan;
+  if (!actionPlan || actionPlan.action !== 'chat') {
+    throw new Error('candidate does not have a planned chat action');
+  }
+
+  const actionLog = getPlannedActionLog(detail, actionPlan.action, params.runId);
+  if (!actionLog) {
+    throw new Error('candidate has no planned chat action for this run');
+  }
+
+  const claimedActionLog = await dependencies.repo.claimActionLog({
+    userId: params.userId,
+    id: actionLog.id,
+  });
+  if (!claimedActionLog) {
+    throw new Error('candidate planned chat action is already running or finished');
+  }
+
+  const stats = createEmptyStats();
+  let adapter: CandidateSourceAdapter | null = null;
+  try {
+    adapter = dependencies.createAdapter(run.platform);
+    await adapter.loginIfNeeded();
+    const executionResult = await adapter.chatCandidate(
+      createStoredCandidateRef(detail),
+      actionPlan,
+    );
+
+    if (!executionResult.success) {
+      await markExecutionFailed({
+        dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        result: detail,
+        actionPlan,
+        actionLog: claimedActionLog,
+        errorMessage: executionResult.error ?? 'action execution failed',
+        browserTrace: executionResult.browserTrace ?? null,
+        stats,
+      });
+      return {
+        status: 'failed',
+        candidateId: params.candidateId,
+        candidateName: detail.candidate.displayName,
+        detail: executionResult.error ?? '单点沟通发送失败',
+        errorMessage: executionResult.error ?? 'action execution failed',
+      };
+    }
+
+    await persistExecutionResult({
+      dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      result: detail,
+      actionPlan,
+      actionLog: claimedActionLog,
+      executionResult,
+      stats,
+    });
+    return {
+      status: 'success',
+      candidateId: params.candidateId,
+      candidateName: detail.candidate.displayName,
+      detail: '已发送单点沟通消息',
+      errorMessage: null,
+    };
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+    await markExecutionFailed({
+      dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      result: detail,
+      actionPlan,
+      actionLog: claimedActionLog,
+      errorMessage,
+      stats,
+    });
+    return {
+      status: 'failed',
+      candidateId: params.candidateId,
+      candidateName: detail.candidate.displayName,
+      detail: errorMessage,
+      errorMessage,
+    };
   } finally {
     await closeAdapterSafely(adapter);
   }

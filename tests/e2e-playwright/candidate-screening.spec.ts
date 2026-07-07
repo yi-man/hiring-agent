@@ -183,7 +183,7 @@ test.describe('candidate screening UI', () => {
         '/jd-generator/jd-screening-1/candidates',
       );
 
-      await page.getByRole('button', { name: '启动沟通', exact: true }).click();
+      await page.getByRole('button', { name: '批量沟通', exact: true }).click();
 
       expect(communicationSyncPayload).toMatchObject({
         platform: 'boss-like',

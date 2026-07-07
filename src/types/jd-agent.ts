@@ -12,6 +12,19 @@ export const JD_STATUSES = [
 
 export type JDStatus = (typeof JD_STATUSES)[number];
 
+export type JDScreeningRunStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled';
+
+export type JDScreeningStatus = 'not_started' | 'running' | 'screened' | 'failed';
+
+export type JDScreeningSummary = {
+  status: JDScreeningStatus;
+  totalCandidateCount: number;
+  qualifiedCandidateCount: number;
+  latestRunId: string | null;
+  latestRunStatus: JDScreeningRunStatus | null;
+  latestRunUpdatedAt: string | null;
+};
+
 export type JobSchema = {
   title: string;
   seniority: string;
@@ -146,6 +159,7 @@ export type JobDescriptionDto = {
   content: JD;
   evaluation: EvaluationResult | null;
   generationMeta: JDAgentResponse['meta'] | null;
+  screeningSummary?: JDScreeningSummary;
   createdAt: string;
   updatedAt: string;
 };

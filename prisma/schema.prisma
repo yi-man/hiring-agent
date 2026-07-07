@@ -51,6 +51,7 @@ model User {
   candidateConversationMessages  CandidateConversationMessage[]
   candidateConversationDecisions CandidateConversationDecision[]
   candidateConversationMemories  CandidateConversationMemory[]
+  candidateCommunicationRuns     CandidateCommunicationRun[]
   companyProfile                 CompanyProfile?
 
   @@map("users")
@@ -110,6 +111,7 @@ model JobDescription {
   candidateConversationMessages  CandidateConversationMessage[]
   candidateConversationDecisions CandidateConversationDecision[]
   candidateConversationMemories  CandidateConversationMemory[]
+  candidateCommunicationRuns     CandidateCommunicationRun[]
 
   @@index([userId], map: "idx_job_descriptions_user_id")
   @@index([status], map: "idx_job_descriptions_status")
@@ -352,6 +354,7 @@ model Candidate {
   conversationMessages  CandidateConversationMessage[]
   conversationDecisions CandidateConversationDecision[]
   conversationMemories  CandidateConversationMemory[]
+  communicationRuns     CandidateCommunicationRun[]
 
   @@unique([id, userId], map: "candidates_id_user_id_key")
   @@unique([userId, sourcePlatform, identityHash], map: "candidates_user_source_identity_hash_key")
@@ -574,6 +577,32 @@ model CandidateConversation {
   @@index([userId, stage, updatedAt(sort: Desc)], map: "idx_candidate_conversations_user_stage_updated")
   @@index([candidateId], map: "idx_candidate_conversations_candidate_id")
   @@map("candidate_conversations")
+}
+
+model CandidateCommunicationRun {
+  id               String          @id @default(uuid())
+  userId           String          @map("user_id")
+  jobDescriptionId String?         @map("job_description_id")
+  candidateId      String?         @map("candidate_id")
+  platform         String
+  mode             String
+  status           String          @default("running")
+  stats            Json?
+  errorMessage     String?         @map("error_message")
+  startedAt        DateTime?       @map("started_at")
+  finishedAt       DateTime?       @map("finished_at")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription? @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate        Candidate?      @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([id, userId], map: "candidate_communication_runs_id_user_id_key")
+  @@index([userId, createdAt(sort: Desc)], map: "idx_candidate_communication_runs_user_created")
+  @@index([userId, jobDescriptionId, createdAt(sort: Desc)], map: "idx_candidate_communication_runs_user_jd_created")
+  @@index([userId, candidateId, createdAt(sort: Desc)], map: "idx_candidate_communication_runs_user_candidate_created")
+  @@index([status, updatedAt(sort: Desc)], map: "idx_candidate_communication_runs_status_updated")
+  @@map("candidate_communication_runs")
 }
 
 model CandidateConversationMessage {

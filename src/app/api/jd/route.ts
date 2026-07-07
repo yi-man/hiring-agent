@@ -6,6 +6,7 @@ import {
   createJobDescription,
   listJobDescriptionsPaginated,
 } from '@/lib/jd/job-description-repo';
+import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { composeJDJobInput, isJDStatus, parseCreateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {
@@ -52,9 +53,16 @@ export async function GET(request: Request) {
       listJobDescriptionsPaginated({ userId: auth.user.id, limit, offset, status }),
       countJobDescriptions(auth.user.id, status),
     ]);
+    const summaries = await listJdScreeningSummaries({
+      userId: auth.user.id,
+      jobDescriptionIds: jobDescriptions.map((item) => item.id),
+    });
 
     return NextResponse.json({
-      jobDescriptions,
+      jobDescriptions: jobDescriptions.map((item) => ({
+        ...item,
+        screeningSummary: summaries[item.id] ?? getDefaultJdScreeningSummary(),
+      })),
       total,
       page,
       limit,

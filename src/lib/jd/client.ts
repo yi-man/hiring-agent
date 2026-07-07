@@ -1,5 +1,6 @@
 import type {
   CreateJobDescriptionRequest,
+  JDStatus,
   JobDescriptionDto,
   RegenerateJobDescriptionRequest,
   UpdateJobDescriptionRequest,
@@ -11,8 +12,15 @@ async function readJson<T>(response: Response): Promise<T & { error?: string }> 
   return (await response.json().catch(() => ({}))) as T & { error?: string };
 }
 
-export async function fetchJobDescriptions(): Promise<JobDescriptionDto[]> {
-  const response = await fetch('/api/jd');
+export async function fetchJobDescriptions(
+  status: JDStatus | 'all' = 'all',
+): Promise<JobDescriptionDto[]> {
+  const params = new URLSearchParams();
+  if (status !== 'all') {
+    params.set('status', status);
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/jd${query ? `?${query}` : ''}`);
   const data = await readJson<{ jobDescriptions?: JobDescriptionDto[] }>(response);
   if (!response.ok || !Array.isArray(data.jobDescriptions)) {
     throw new Error(data.error || '加载 JD 列表失败');

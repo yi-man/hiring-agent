@@ -17,12 +17,8 @@ import {
   Save,
   Sparkles,
 } from 'lucide-react';
-import { CandidateCommunicationSyncResultPanel } from '@/components/candidate-communication/sync-result-panel';
 import { Button, Chip } from '@/components/ui';
-import {
-  syncUnreadCandidateConversations,
-  type SyncUnreadCandidateConversationsResult,
-} from '@/lib/candidate-communication/client';
+import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
 import { createCandidateScreeningRun } from '@/lib/candidate-screening/client';
 import type { CandidateScreeningRunDto } from '@/lib/candidate-screening/repo';
 import { fetchCompanyProfile } from '@/lib/company-profile/client';
@@ -38,7 +34,14 @@ import {
 } from '@/lib/jd/client';
 import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
 import { JD_STATUSES } from '@/types';
-import type { JD, JDStatus, JDTone, JobDescriptionDto } from '@/types';
+import type {
+  JD,
+  JDScreeningStatus,
+  JDScreeningSummary,
+  JDStatus,
+  JDTone,
+  JobDescriptionDto,
+} from '@/types';
 
 const DEPARTMENT_OPTIONS = [
   {
@@ -115,6 +118,49 @@ const statusMeta: Record<JDStatus, { label: string; className: string }> = {
   },
 };
 
+type JDStatusFilter = JDStatus | 'all';
+
+const statusFilterOptions: Array<{ value: JDStatusFilter; label: string }> = [
+  { value: 'published', label: 'published' },
+  { value: 'created', label: 'created' },
+  { value: 'ready_to_publish', label: 'ready_to_publish' },
+  { value: 'publishing', label: 'publishing' },
+  { value: 'publish_failed', label: 'publish_failed' },
+  { value: 'offline', label: 'offline' },
+  { value: 'archived', label: 'archived' },
+  { value: 'all', label: '全部状态' },
+];
+
+const defaultScreeningSummary: JDScreeningSummary = {
+  status: 'not_started',
+  totalCandidateCount: 0,
+  qualifiedCandidateCount: 0,
+  latestRunId: null,
+  latestRunStatus: null,
+  latestRunUpdatedAt: null,
+};
+
+const screeningStatusMeta: Record<JDScreeningStatus, { label: string; className: string }> = {
+  not_started: {
+    label: '未筛选',
+    className: 'border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60',
+  },
+  running: {
+    label: '筛选中',
+    className:
+      'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40',
+  },
+  screened: {
+    label: '已筛选',
+    className:
+      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40',
+  },
+  failed: {
+    label: '筛选失败',
+    className: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40',
+  },
+};
+
 type JDForm = {
   title: string;
   summary: string;
@@ -142,6 +188,28 @@ function StatusChip({ status }: { status: JDStatus }) {
       {meta.label}
     </Chip>
   );
+}
+
+function ScreeningSummaryChip({ summary }: { summary: JDScreeningSummary }) {
+  const meta = screeningStatusMeta[summary.status] ?? screeningStatusMeta.not_started;
+  return (
+    <Chip className={`border text-xs ${meta.className}`} size="sm" variant="flat">
+      {meta.label}
+    </Chip>
+  );
+}
+
+function getScreeningSummary(jobDescription: JobDescriptionDto): JDScreeningSummary {
+  return jobDescription.screeningSummary ?? defaultScreeningSummary;
+}
+
+function getScreeningActionLabel(summary: JDScreeningSummary): string {
+  if (summary.status === 'failed') {
+    return '重新筛选';
+  }
+  return summary.status === 'screened' || summary.totalCandidateCount > 0
+    ? '继续筛选'
+    : '筛选并执行';
 }
 
 function ErrorBanner({ message }: { message: string }) {
@@ -197,9 +265,12 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 }
 
 export function JDListView() {
+  const router = useRouter();
   const [items, setItems] = useState<JobDescriptionDto[]>([]);
+  const [statusFilter, setStatusFilter] = useState<JDStatusFilter>('published');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [startingScreeningId, setStartingScreeningId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
   async function loadJds(options?: { silent?: boolean }) {
@@ -210,7 +281,7 @@ export function JDListView() {
     }
     setError('');
     try {
-      setItems(await fetchJobDescriptions());
+      setItems(await fetchJobDescriptions(statusFilter));
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载 JD 列表失败');
     } finally {
@@ -221,7 +292,140 @@ export function JDListView() {
 
   useEffect(() => {
     void loadJds();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
+
+  async function handleStartScreeningFromList(item: JobDescriptionDto) {
+    setStartingScreeningId(item.id);
+    setError('');
+    try {
+      const run = await createCandidateScreeningRun(item.id, {
+        platform: 'boss-like',
+        mode: 'execution',
+      });
+      router.push(`/jd-generator/${item.id}/screening-runs/${run.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动候选人筛选失败');
+    } finally {
+      setStartingScreeningId(null);
+    }
+  }
+
+  function renderPublishedActions(item: JobDescriptionDto) {
+    const summary = getScreeningSummary(item);
+    const runHref = summary.latestRunId
+      ? `/jd-generator/${item.id}/screening-runs/${summary.latestRunId}`
+      : null;
+
+    return (
+      <>
+        {renderDetailAction(item)}
+        {summary.status === 'running' && runHref ? (
+          <Button
+            as={Link}
+            className="gap-2"
+            disableRipple
+            href={runHref}
+            size="sm"
+            variant="bordered"
+          >
+            <Eye className="h-4 w-4" aria-hidden />
+            查看进度
+          </Button>
+        ) : (
+          <Button
+            className="gap-2"
+            color={summary.status === 'not_started' ? 'primary' : 'default'}
+            disableRipple
+            isDisabled={startingScreeningId === item.id}
+            size="sm"
+            type="button"
+            variant={summary.status === 'not_started' ? 'solid' : 'bordered'}
+            onClick={() => void handleStartScreeningFromList(item)}
+          >
+            <ListFilter className="h-4 w-4" aria-hidden />
+            {startingScreeningId === item.id ? '启动中' : getScreeningActionLabel(summary)}
+          </Button>
+        )}
+        {runHref ? (
+          <Button
+            as={Link}
+            className="gap-2"
+            disableRipple
+            href={runHref}
+            size="sm"
+            variant="light"
+          >
+            <Eye className="h-4 w-4" aria-hidden />
+            筛选记录
+          </Button>
+        ) : null}
+        <Button
+          as={Link}
+          className="gap-2"
+          disableRipple
+          href={`/jd-generator/${item.id}/candidates`}
+          size="sm"
+          variant="light"
+        >
+          <ListFilter className="h-4 w-4" aria-hidden />
+          候选人
+        </Button>
+      </>
+    );
+  }
+
+  function renderDetailAction(item: JobDescriptionDto) {
+    return (
+      <Button
+        as={Link}
+        className="gap-2"
+        disableRipple
+        href={`/jd-generator/${item.id}`}
+        size="sm"
+        variant="light"
+      >
+        <Eye className="h-4 w-4" aria-hidden />
+        详情
+      </Button>
+    );
+  }
+
+  function renderRowActions(item: JobDescriptionDto) {
+    if (item.status === 'published') {
+      return renderPublishedActions(item);
+    }
+
+    const actionMeta: Record<
+      Exclude<JDStatus, 'published'>,
+      { label: string; icon: React.ReactNode; variant?: 'light' | 'bordered' | 'solid' }
+    > = {
+      created: { label: '编辑', icon: <FileText className="h-4 w-4" aria-hidden /> },
+      ready_to_publish: { label: '发布', icon: <Rocket className="h-4 w-4" aria-hidden /> },
+      publishing: { label: '发布记录', icon: <Eye className="h-4 w-4" aria-hidden /> },
+      publish_failed: { label: '重试发布', icon: <RefreshCw className="h-4 w-4" aria-hidden /> },
+      offline: { label: '查看', icon: <Eye className="h-4 w-4" aria-hidden /> },
+      archived: { label: '查看', icon: <Eye className="h-4 w-4" aria-hidden /> },
+    };
+    const meta = actionMeta[item.status];
+
+    return (
+      <>
+        {renderDetailAction(item)}
+        <Button
+          as={Link}
+          className="gap-2"
+          disableRipple
+          href={`/jd-generator/${item.id}`}
+          size="sm"
+          variant={meta.variant ?? 'light'}
+        >
+          {meta.icon}
+          {meta.label}
+        </Button>
+      </>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -270,13 +474,30 @@ export function JDListView() {
       {error ? <ErrorBanner message={error} /> : null}
 
       <section className="border-border overflow-hidden rounded-lg border">
-        <div className="border-border flex items-center justify-between border-b px-4 py-3">
+        <div className="border-border flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2 text-sm font-medium">
             <ListFilter className="text-muted-foreground h-4 w-4" aria-hidden />
             JD 列表
           </div>
-          <div className="text-muted-foreground text-xs">
-            {isLoading ? '加载中' : `${items.length} 条`}
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">发布状态</span>
+              <select
+                aria-label="JD 状态筛选"
+                className="border-input bg-background text-foreground h-8 rounded-md border px-2 text-xs"
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as JDStatusFilter)}
+              >
+                {statusFilterOptions.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="text-muted-foreground text-xs">
+              {isLoading ? '加载中' : `${items.length} 条`}
+            </div>
           </div>
         </div>
 
@@ -295,7 +516,7 @@ export function JDListView() {
             {items.map((item) => (
               <article
                 key={item.id}
-                className="grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_160px_170px_88px] md:items-center"
+                className="grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_128px_170px_170px_360px] md:items-center"
               >
                 <div className="min-w-0">
                   <div className="text-foreground min-w-0 truncate text-sm font-medium">
@@ -307,20 +528,22 @@ export function JDListView() {
                   </div>
                 </div>
                 <StatusChip status={item.status} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <ScreeningSummaryChip summary={getScreeningSummary(item)} />
+                  <span className="text-muted-foreground text-xs">
+                    合格 {getScreeningSummary(item).qualifiedCandidateCount} / 全部{' '}
+                    {getScreeningSummary(item).totalCandidateCount}
+                  </span>
+                </div>
                 <div className="text-muted-foreground text-xs">
                   {formatUpdatedAt(item.updatedAt)}
                 </div>
-                <Button
-                  as={Link}
-                  className="gap-2 justify-self-start md:justify-self-end"
-                  disableRipple
-                  href={`/jd-generator/${item.id}`}
-                  size="sm"
-                  variant="light"
+                <div
+                  aria-label="JD 操作"
+                  className="flex w-full flex-wrap gap-2 justify-self-start md:w-[360px] md:justify-end md:justify-self-end"
                 >
-                  <Eye className="h-4 w-4" aria-hidden />
-                  查看
-                </Button>
+                  {renderRowActions(item)}
+                </div>
               </article>
             ))}
           </div>
@@ -395,7 +618,7 @@ export function JDCreateView() {
         workLocations: selectedWorkLocations,
         tone,
       });
-      router.push(`/jd-generator/${jobDescription.id}`);
+      router.push(`/jd-generator/${jobDescription.id}/runs/create`);
     } catch (e) {
       setError(e instanceof Error ? e.message : '创建 JD 失败');
     } finally {
@@ -583,6 +806,7 @@ export function JDCreateView() {
 }
 
 export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string }) {
+  const router = useRouter();
   const [jobDescription, setJobDescription] = useState<JobDescriptionDto | null>(null);
   const [form, setForm] = useState<JDForm | null>(null);
   const [status, setStatus] = useState<JDStatus>('created');
@@ -596,8 +820,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [latestScreeningRun, setLatestScreeningRun] = useState<CandidateScreeningRunDto | null>(
     null,
   );
-  const [communicationSyncResult, setCommunicationSyncResult] =
-    useState<SyncUnreadCandidateConversationsResult | null>(null);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
   const [publishCompany, setPublishCompany] = useState('');
   const [publishSalary, setPublishSalary] = useState('');
@@ -645,6 +867,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   async function handleSave() {
     if (!jobDescription || !form) return;
+    if (status === 'published') return;
     setIsSaving(true);
     setError('');
     try {
@@ -666,6 +889,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   async function handleRegenerate() {
     if (!jobDescription || !form) return;
+    if (status === 'published') return;
     setIsRegenerating(true);
     setError('');
     try {
@@ -686,6 +910,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   async function handlePublish() {
     if (!jobDescription || !form) return;
+    if (status === 'published') return;
     setIsPublishing(true);
     setError('');
     setPublishTrace(null);
@@ -754,6 +979,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         mode: 'execution',
       });
       setLatestScreeningRun(run);
+      router.push(`/jd-generator/${jobDescription.id}/screening-runs/${run.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人筛选失败');
     } finally {
@@ -763,14 +989,15 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   async function handleSyncCommunication() {
     setIsSyncingCommunication(true);
-    setCommunicationSyncResult(null);
     setError('');
     try {
-      const result = await syncUnreadCandidateConversations({
+      const run = await startCandidateCommunicationRun({
+        mode: 'batch',
+        jobDescriptionId: jobDescription?.id ?? jobDescriptionId,
         platform: 'boss-like',
         maxPasses: 10,
       });
-      setCommunicationSyncResult(result);
+      router.push(`/jd-generator/communication-runs/${run.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人沟通失败');
     } finally {
@@ -780,6 +1007,13 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   const context = jobDescription?.generationMeta?.context ?? null;
   const canScreenCandidates = status === 'published' || status === 'ready_to_publish';
+  const isPublished = status === 'published';
+  const isEditable = !isPublished;
+  const screeningSummary = jobDescription
+    ? getScreeningSummary(jobDescription)
+    : defaultScreeningSummary;
+  const screeningActionLabel = getScreeningActionLabel(screeningSummary);
+  const latestRunId = latestScreeningRun?.id ?? screeningSummary.latestRunId;
   const canPublishWithCompanyProfile = Boolean(
     companyProfile?.name.trim() && companyProfile.locations.length > 0,
   );
@@ -830,18 +1064,99 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
             {jobDescription.department} · {formatUpdatedAt(jobDescription.updatedAt)}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            className="gap-2"
-            disableRipple
-            isDisabled={isSaving}
-            type="button"
-            variant="bordered"
-            onClick={() => void handleSave()}
-          >
-            <Save className="h-4 w-4" aria-hidden />
-            {isSaving ? '保存中' : '保存修改'}
-          </Button>
+        <div aria-label="JD 详情主操作" className="flex flex-wrap gap-2">
+          {isEditable ? (
+            <>
+              <Button
+                className="gap-2"
+                disableRipple
+                isDisabled={isSaving}
+                type="button"
+                variant="bordered"
+                onClick={() => void handleSave()}
+              >
+                <Save className="h-4 w-4" aria-hidden />
+                {isSaving ? '保存中' : '保存修改'}
+              </Button>
+              <Button
+                className="gap-2"
+                disableRipple
+                isDisabled={isRegenerating}
+                type="button"
+                variant="bordered"
+                onClick={() => void handleRegenerate()}
+              >
+                <Sparkles className="h-4 w-4" aria-hidden />
+                {isRegenerating ? '生成中' : '重新生成'}
+              </Button>
+              <Button
+                className="gap-2"
+                color="primary"
+                disableRipple
+                isDisabled={
+                  isPublishing ||
+                  !canPublishWithCompanyProfile ||
+                  !publishCompany.trim() ||
+                  !publishSalary.trim() ||
+                  selectedPublishLocations.length === 0
+                }
+                type="button"
+                onClick={() => void handlePublish()}
+              >
+                <Rocket className="h-4 w-4" aria-hidden />
+                {isPublishing ? '发布中' : '发布到 Boss-like'}
+              </Button>
+            </>
+          ) : null}
+          {canScreenCandidates ? (
+            <>
+              <Button
+                className="gap-2"
+                color={isEditable ? 'default' : 'primary'}
+                disableRipple
+                isDisabled={isScreening}
+                type="button"
+                variant={isEditable ? 'bordered' : 'solid'}
+                onClick={() => void handleStartScreening()}
+              >
+                <ListFilter className="h-4 w-4" aria-hidden />
+                {isScreening ? '启动中' : screeningActionLabel}
+              </Button>
+              {latestRunId ? (
+                <Button
+                  as={Link}
+                  className="gap-2"
+                  disableRipple
+                  href={`/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`}
+                  variant="bordered"
+                >
+                  <Eye className="h-4 w-4" aria-hidden />
+                  筛选记录
+                </Button>
+              ) : null}
+              <Button
+                as={Link}
+                className="gap-2"
+                disableRipple
+                href={`/jd-generator/${jobDescription.id}/candidates`}
+                variant="bordered"
+              >
+                <ListFilter className="h-4 w-4" aria-hidden />
+                已筛选候选人
+              </Button>
+              <Button
+                className="gap-2"
+                disableRipple
+                isDisabled={isSyncingCommunication}
+                type="button"
+                variant="bordered"
+                onClick={() => void handleSyncCommunication()}
+              >
+                <MessageCircle className="h-4 w-4" aria-hidden />
+                {isSyncingCommunication ? '启动中' : '批量沟通'}
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -859,8 +1174,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
             <input
               aria-label="JD 标题"
               className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+              readOnly={!isEditable}
               value={form.title}
-              onChange={(event) => setForm({ ...form, title: event.target.value })}
+              onChange={(event) =>
+                isEditable ? setForm({ ...form, title: event.target.value }) : undefined
+              }
             />
           </label>
 
@@ -869,8 +1187,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
             <textarea
               aria-label="岗位摘要"
               className="border-input bg-background text-foreground min-h-24 w-full rounded-md border px-3 py-2 text-sm"
+              readOnly={!isEditable}
               value={form.summary}
-              onChange={(event) => setForm({ ...form, summary: event.target.value })}
+              onChange={(event) =>
+                isEditable ? setForm({ ...form, summary: event.target.value }) : undefined
+              }
             />
           </label>
 
@@ -880,8 +1201,13 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               <textarea
                 aria-label="岗位职责"
                 className="border-input bg-background text-foreground min-h-48 w-full rounded-md border px-3 py-2 text-sm"
+                readOnly={!isEditable}
                 value={form.responsibilities}
-                onChange={(event) => setForm({ ...form, responsibilities: event.target.value })}
+                onChange={(event) =>
+                  isEditable
+                    ? setForm({ ...form, responsibilities: event.target.value })
+                    : undefined
+                }
               />
             </label>
             <label className="block space-y-2">
@@ -889,8 +1215,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               <textarea
                 aria-label="任职要求"
                 className="border-input bg-background text-foreground min-h-48 w-full rounded-md border px-3 py-2 text-sm"
+                readOnly={!isEditable}
                 value={form.requirements}
-                onChange={(event) => setForm({ ...form, requirements: event.target.value })}
+                onChange={(event) =>
+                  isEditable ? setForm({ ...form, requirements: event.target.value }) : undefined
+                }
               />
             </label>
             <label className="block space-y-2">
@@ -898,8 +1227,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               <textarea
                 aria-label="加分项"
                 className="border-input bg-background text-foreground min-h-32 w-full rounded-md border px-3 py-2 text-sm"
+                readOnly={!isEditable}
                 value={form.bonus}
-                onChange={(event) => setForm({ ...form, bonus: event.target.value })}
+                onChange={(event) =>
+                  isEditable ? setForm({ ...form, bonus: event.target.value }) : undefined
+                }
               />
             </label>
             <label className="block space-y-2">
@@ -907,8 +1239,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               <textarea
                 aria-label="岗位亮点"
                 className="border-input bg-background text-foreground min-h-32 w-full rounded-md border px-3 py-2 text-sm"
+                readOnly={!isEditable}
                 value={form.highlights}
-                onChange={(event) => setForm({ ...form, highlights: event.target.value })}
+                onChange={(event) =>
+                  isEditable ? setForm({ ...form, highlights: event.target.value }) : undefined
+                }
               />
             </label>
           </div>
@@ -925,8 +1260,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               <select
                 aria-label="发布状态"
                 className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                disabled={!isEditable}
                 value={status}
-                onChange={(event) => setStatus(event.target.value as JDStatus)}
+                onChange={(event) =>
+                  isEditable ? setStatus(event.target.value as JDStatus) : undefined
+                }
               >
                 {JD_STATUSES.map((item) => (
                   <option key={item} value={item}>
@@ -956,8 +1294,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                   <select
                     aria-label="发布薪资范围"
                     className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                    disabled={!isEditable}
                     value={publishSalary}
-                    onChange={(event) => setPublishSalary(event.target.value)}
+                    onChange={(event) =>
+                      isEditable ? setPublishSalary(event.target.value) : undefined
+                    }
                   >
                     <option value="">请选择薪资范围</option>
                     {salaryRangeOptions.map((range) => (
@@ -982,8 +1323,13 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                         <input
                           checked={selectedPublishLocations.includes(location.label)}
                           className="h-4 w-4"
+                          disabled={!isEditable}
                           type="checkbox"
-                          onChange={() => togglePublishLocation(location.label)}
+                          onChange={() => {
+                            if (isEditable) {
+                              togglePublishLocation(location.label);
+                            }
+                          }}
                         />
                         <span>{location.label}</span>
                       </label>
@@ -1004,27 +1350,13 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 <input
                   aria-label="发布技能标签"
                   className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+                  readOnly={!isEditable}
                   value={publishKeywords}
-                  onChange={(event) => setPublishKeywords(event.target.value)}
+                  onChange={(event) =>
+                    isEditable ? setPublishKeywords(event.target.value) : undefined
+                  }
                 />
               </label>
-              <Button
-                className="w-full gap-2"
-                color="primary"
-                disableRipple
-                isDisabled={
-                  isPublishing ||
-                  !canPublishWithCompanyProfile ||
-                  !publishCompany.trim() ||
-                  !publishSalary.trim() ||
-                  selectedPublishLocations.length === 0
-                }
-                type="button"
-                onClick={() => void handlePublish()}
-              >
-                <Rocket className="h-4 w-4" aria-hidden />
-                {isPublishing ? '发布中' : '发布到 Boss-like'}
-              </Button>
               {publishTrace ? (
                 <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
                   <div className="text-foreground flex items-center justify-between gap-2 font-medium">
@@ -1066,39 +1398,12 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                   <ListFilter className="text-muted-foreground h-4 w-4" aria-hidden />
                   <div className="text-foreground text-sm font-medium">候选人筛选</div>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Button
-                    className="gap-2"
-                    color="primary"
-                    disableRipple
-                    isDisabled={isScreening}
-                    type="button"
-                    onClick={() => void handleStartScreening()}
-                  >
-                    <ListFilter className="h-4 w-4" aria-hidden />
-                    {isScreening ? '启动中' : '筛选并执行'}
-                  </Button>
-                  <Button
-                    as={Link}
-                    className="gap-2"
-                    disableRipple
-                    href={`/jd-generator/${jobDescription.id}/candidates`}
-                    variant="bordered"
-                  >
-                    <ListFilter className="h-4 w-4" aria-hidden />
-                    已筛选候选人
-                  </Button>
-                  <Button
-                    className="gap-2 sm:col-span-2"
-                    disableRipple
-                    isDisabled={isSyncingCommunication}
-                    type="button"
-                    variant="bordered"
-                    onClick={() => void handleSyncCommunication()}
-                  >
-                    <MessageCircle className="h-4 w-4" aria-hidden />
-                    {isSyncingCommunication ? '启动中' : '启动沟通'}
-                  </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <ScreeningSummaryChip summary={screeningSummary} />
+                  <span className="text-muted-foreground text-xs">
+                    合格 {screeningSummary.qualifiedCandidateCount} / 全部{' '}
+                    {screeningSummary.totalCandidateCount}
+                  </span>
                 </div>
                 {latestScreeningRun ? (
                   <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
@@ -1108,43 +1413,39 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     </div>
                     <Link
                       className="text-primary mt-1 inline-flex text-xs hover:underline"
-                      href={`/jd-generator/${jobDescription.id}/candidates`}
+                      href={`/jd-generator/${jobDescription.id}/screening-runs/${latestScreeningRun.id}`}
                     >
-                      查看筛选结果
+                      查看执行日志
                     </Link>
                   </div>
                 ) : null}
-                {communicationSyncResult ? (
-                  <CandidateCommunicationSyncResultPanel result={communicationSyncResult} />
+                {latestRunId && !latestScreeningRun ? (
+                  <Link
+                    className="text-primary inline-flex text-xs hover:underline"
+                    href={`/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`}
+                  >
+                    查看最近筛选记录
+                  </Link>
                 ) : null}
               </div>
             ) : null}
           </section>
 
-          <section className="border-border space-y-3 rounded-lg border p-4">
-            <div className="flex items-center gap-2">
-              <Sparkles className="text-muted-foreground h-4 w-4" aria-hidden />
-              <div className="text-foreground text-sm font-medium">追加要求</div>
-            </div>
-            <textarea
-              aria-label="追加要求"
-              className="border-input bg-background text-foreground min-h-28 w-full rounded-md border px-3 py-2 text-sm"
-              placeholder="例如：更强调 AI 招聘产品经验，弱化纯前端框架要求。"
-              value={extraInstruction}
-              onChange={(event) => setExtraInstruction(event.target.value)}
-            />
-            <Button
-              className="w-full gap-2"
-              color="primary"
-              disableRipple
-              isDisabled={isRegenerating}
-              type="button"
-              onClick={() => void handleRegenerate()}
-            >
-              <Sparkles className="h-4 w-4" aria-hidden />
-              {isRegenerating ? '生成中' : '重新生成'}
-            </Button>
-          </section>
+          {isEditable ? (
+            <section className="border-border space-y-3 rounded-lg border p-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="text-muted-foreground h-4 w-4" aria-hidden />
+                <div className="text-foreground text-sm font-medium">追加要求</div>
+              </div>
+              <textarea
+                aria-label="追加要求"
+                className="border-input bg-background text-foreground min-h-28 w-full rounded-md border px-3 py-2 text-sm"
+                placeholder="例如：更强调 AI 招聘产品经验，弱化纯前端框架要求。"
+                value={extraInstruction}
+                onChange={(event) => setExtraInstruction(event.target.value)}
+              />
+            </section>
+          ) : null}
 
           <section className="border-border space-y-3 rounded-lg border p-4">
             <div className="flex items-center justify-between gap-3">

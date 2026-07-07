@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   BadgeCheck,
@@ -9,9 +10,11 @@ import {
   ClipboardCheck,
   ExternalLink,
   FileText,
+  MessageCircle,
   Save,
 } from 'lucide-react';
 import { Button, Card, CardBody, Chip } from '@/components/ui';
+import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
 import {
   evaluateJdCandidateDecision,
   fetchCandidateInterviewFeedbacks,
@@ -113,6 +116,7 @@ export function CandidateDetail({
   jobDescriptionId: string;
   candidateId: string;
 }) {
+  const router = useRouter();
   const [candidate, setCandidate] = useState<CandidateScreeningDetailDto | null>(null);
   const [feedbacks, setFeedbacks] = useState<CandidateInterviewFeedbackDto[]>([]);
   const [feedbackForms, setFeedbackForms] = useState<
@@ -126,6 +130,7 @@ export function CandidateDetail({
   const [savingFeedbackStage, setSavingFeedbackStage] =
     useState<CandidateInterviewFeedbackStage | null>(null);
   const [isEvaluatingDecision, setIsEvaluatingDecision] = useState(false);
+  const [isStartingCommunication, setIsStartingCommunication] = useState(false);
   const [error, setError] = useState('');
 
   const originalProfileHref =
@@ -234,6 +239,25 @@ export function CandidateDetail({
     }
   }
 
+  async function handleStartSingleCommunication() {
+    setIsStartingCommunication(true);
+    setError('');
+    try {
+      const run = await startCandidateCommunicationRun({
+        mode: 'single',
+        jobDescriptionId,
+        candidateId,
+        sourceScreeningRunId: candidate?.runId,
+        platform: 'boss-like',
+      });
+      router.push(`/jd-generator/communication-runs/${run.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动单点沟通失败');
+    } finally {
+      setIsStartingCommunication(false);
+    }
+  }
+
   if (isLoading) {
     return <div className="text-muted-foreground py-12 text-center text-sm">正在加载候选人…</div>;
   }
@@ -290,6 +314,16 @@ export function CandidateDetail({
           </p>
         </div>
         <div className="flex flex-col items-start gap-2 lg:items-end">
+          <Button
+            className="gap-2"
+            isDisabled={isStartingCommunication}
+            type="button"
+            variant="bordered"
+            onClick={() => void handleStartSingleCommunication()}
+          >
+            <MessageCircle className="h-4 w-4" aria-hidden />
+            {isStartingCommunication ? '启动中' : '单点沟通'}
+          </Button>
           {originalProfileHref ? (
             <Button
               as={Link}

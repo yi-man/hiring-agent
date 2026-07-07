@@ -593,7 +593,7 @@ describe('candidate screening API routes', () => {
 
     const response = await listJdCandidates(
       {
-        url: 'http://localhost/api/jd/jd-1/candidates?interviewStage=to_contact&limit=25&offset=5',
+        url: 'http://localhost/api/jd/jd-1/candidates?interviewStage=to_contact&limit=25&offset=5&minScore=70&runId=run-1',
       } as Request,
       { params: params({ id: 'jd-1' }) },
     );
@@ -608,7 +608,24 @@ describe('candidate screening API routes', () => {
       limit: 25,
       offset: 5,
       interviewStage: 'to_contact',
+      minScore: 70,
+      runId: 'run-1',
     });
+  });
+
+  it('rejects invalid candidate minScore filters', async () => {
+    const response = await listJdCandidates(
+      {
+        url: 'http://localhost/api/jd/jd-1/candidates?minScore=overqualified',
+      } as Request,
+      { params: params({ id: 'jd-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('minScore is invalid');
+    expect(getJobDescriptionByIdMock).not.toHaveBeenCalled();
+    expect(listCandidateScreeningResultsMock).not.toHaveBeenCalled();
   });
 
   it('returns cross-JD candidate tracking overview for the current user', async () => {

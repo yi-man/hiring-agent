@@ -20,6 +20,21 @@ export type UnreadSyncPayload = {
   maxPasses?: number;
 };
 
+export type CandidateCommunicationRunPayload =
+  | {
+      mode: 'batch';
+      jobDescriptionId?: string;
+      platform: CandidateScreeningPlatform;
+      maxPasses?: number;
+    }
+  | {
+      mode: 'single';
+      jobDescriptionId: string;
+      candidateId: string;
+      sourceScreeningRunId?: string;
+      platform: CandidateScreeningPlatform;
+    };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -124,6 +139,60 @@ export function parseUnreadSyncPayload(body: unknown): ValidationResult<UnreadSy
       platform: body.platform,
       ...(jobDescriptionId ? { jobDescriptionId } : {}),
       ...(body.maxPasses !== undefined ? { maxPasses: body.maxPasses } : {}),
+    },
+  };
+}
+
+export function parseCandidateCommunicationRunPayload(
+  body: unknown,
+): ValidationResult<CandidateCommunicationRunPayload> {
+  if (!isRecord(body)) {
+    return { ok: false, error: 'invalid JSON body' };
+  }
+
+  if (body.mode !== 'batch' && body.mode !== 'single') {
+    return { ok: false, error: 'mode is invalid' };
+  }
+
+  if (!isCandidatePlatform(body.platform)) {
+    return { ok: false, error: 'platform is invalid' };
+  }
+
+  const jobDescriptionId = cleanText(body.jobDescriptionId);
+
+  if (body.mode === 'batch') {
+    if (body.maxPasses !== undefined && !isIntegerInRange(body.maxPasses, 1, 20)) {
+      return { ok: false, error: 'maxPasses must be between 1 and 20' };
+    }
+    return {
+      ok: true,
+      value: {
+        mode: 'batch',
+        platform: body.platform,
+        ...(jobDescriptionId ? { jobDescriptionId } : {}),
+        ...(body.maxPasses !== undefined ? { maxPasses: body.maxPasses } : {}),
+      },
+    };
+  }
+
+  if (!jobDescriptionId) {
+    return { ok: false, error: 'jobDescriptionId is required' };
+  }
+
+  const candidateId = cleanText(body.candidateId);
+  if (!candidateId) {
+    return { ok: false, error: 'candidateId is required' };
+  }
+  const sourceScreeningRunId = cleanText(body.sourceScreeningRunId);
+
+  return {
+    ok: true,
+    value: {
+      mode: 'single',
+      jobDescriptionId,
+      candidateId,
+      ...(sourceScreeningRunId ? { sourceScreeningRunId } : {}),
+      platform: body.platform,
     },
   };
 }

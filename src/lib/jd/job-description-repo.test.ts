@@ -3,6 +3,7 @@ import {
   getJobDescriptionById,
   listJobDescriptionsPaginated,
   updateJobDescription,
+  updateMutableJobDescription,
 } from '@/lib/jd/job-description-repo';
 import type { JD, JDAgentResponse } from '@/types';
 
@@ -175,5 +176,30 @@ describe('job description repository', () => {
     });
     expect(result?.status).toBe('ready_to_publish');
     expect(result?.content.summary).toBe('手动调整后的 JD');
+  });
+
+  it('updates a JD only while it has not been published', async () => {
+    prismaMock.jobDescription.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescription.findFirst.mockResolvedValueOnce({
+      ...row,
+      status: 'ready_to_publish',
+      content: { ...sampleJd, summary: '手动调整后的 JD' },
+    });
+
+    const result = await updateMutableJobDescription({
+      userId: 'u1',
+      id: 'jd-1',
+      status: 'ready_to_publish',
+      content: { ...sampleJd, summary: '手动调整后的 JD' },
+    });
+
+    expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
+      where: { id: 'jd-1', userId: 'u1', status: { not: 'published' } },
+      data: expect.objectContaining({
+        status: 'ready_to_publish',
+        content: { ...sampleJd, summary: '手动调整后的 JD' },
+      }),
+    });
+    expect(result?.status).toBe('ready_to_publish');
   });
 });
