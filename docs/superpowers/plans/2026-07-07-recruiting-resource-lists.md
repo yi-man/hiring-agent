@@ -53,6 +53,7 @@
 ### Task 1: Repository DTO 与简历/面试查询
 
 **Files:**
+
 - Modify: `src/lib/candidate-screening/repo.test.ts`
 - Modify: `src/lib/candidate-screening/repo.ts`
 
@@ -196,7 +197,14 @@ it('lists latest candidate resumes with mounted JD summaries', async () => {
       candidateId: 'candidate-1',
       resumeId: 'resume-1',
       source: 'both',
-      tags: { skills: [], domainKnowledge: [], generalAbility: [], risk: [], activity: [], custom: [] },
+      tags: {
+        skills: [],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
       scoreDetail: { skill: 90, domain: 80, ability: 88, risk: 95, llmBonus: 0, total: 89 },
       finalScore: 89,
       rank: 1,
@@ -268,7 +276,7 @@ it('lists latest candidate resumes with mounted JD summaries', async () => {
 Run:
 
 ```bash
-bun run test -- src/lib/candidate-screening/repo.test.ts -t "lists latest candidate resumes with mounted JD summaries"
+bunx jest --runInBand src/lib/candidate-screening/repo.test.ts -t "lists latest candidate resumes with mounted JD summaries" --coverage=false
 ```
 
 Expected: FAIL，错误包含 `listCandidateResumeLibrary is not a function` 或导出不存在。
@@ -384,7 +392,7 @@ export async function listCandidateResumeLibrary(params: {
 Run:
 
 ```bash
-bun run test -- src/lib/candidate-screening/repo.test.ts -t "lists latest candidate resumes with mounted JD summaries"
+bunx jest --runInBand src/lib/candidate-screening/repo.test.ts -t "lists latest candidate resumes with mounted JD summaries" --coverage=false
 ```
 
 Expected: PASS。
@@ -442,7 +450,7 @@ it('lists resumes without mounted JDs', async () => {
 Run:
 
 ```bash
-bun run test -- src/lib/candidate-screening/repo.test.ts -t "lists resumes without mounted JDs"
+bunx jest --runInBand src/lib/candidate-screening/repo.test.ts -t "lists resumes without mounted JDs" --coverage=false
 ```
 
 Expected: PASS。
@@ -530,7 +538,7 @@ it('lists interview records with candidate and JD context', async () => {
 Run:
 
 ```bash
-bun run test -- src/lib/candidate-screening/repo.test.ts -t "lists interview records with candidate and JD context"
+bunx jest --runInBand src/lib/candidate-screening/repo.test.ts -t "lists interview records with candidate and JD context" --coverage=false
 ```
 
 Expected: FAIL，错误包含 `listCandidateInterviewRecords is not a function` 或导出不存在。
@@ -578,7 +586,7 @@ export async function listCandidateInterviewRecords(params: {
 Run:
 
 ```bash
-bun run test -- src/lib/candidate-screening/repo.test.ts
+bunx jest --runInBand src/lib/candidate-screening/repo.test.ts --coverage=false
 ```
 
 Expected: PASS。
@@ -595,6 +603,7 @@ git commit -m "feat: add recruiting resource repository queries"
 ### Task 2: 顶层简历和面试 API
 
 **Files:**
+
 - Create: `src/app/api/resumes/route.ts`
 - Create: `src/app/api/interviews/route.ts`
 - Modify: `tests/unit/api/candidate-screening-routes.test.ts`
@@ -701,7 +710,7 @@ it('lists interview records for the current user', async () => {
 Run:
 
 ```bash
-bun run test -- tests/unit/api/candidate-screening-routes.test.ts -t "lists resume library records|lists interview records"
+bunx jest --runInBand tests/unit/api/candidate-screening-routes.test.ts -t "lists resume library records|lists interview records" --coverage=false
 ```
 
 Expected: FAIL，错误包含无法解析 `@/app/api/resumes/route` 或 `@/app/api/interviews/route`。
@@ -803,7 +812,7 @@ export async function GET(request: Request) {
 Run:
 
 ```bash
-bun run test -- tests/unit/api/candidate-screening-routes.test.ts -t "lists resume library records|lists interview records"
+bunx jest --runInBand tests/unit/api/candidate-screening-routes.test.ts -t "lists resume library records|lists interview records" --coverage=false
 ```
 
 Expected: PASS。
@@ -820,6 +829,7 @@ git commit -m "feat: add recruiting resource API routes"
 ### Task 3: Client fetch 函数
 
 **Files:**
+
 - Modify: `src/lib/candidate-screening/client.ts`
 
 - [ ] **Step 1: 写组件测试前置 mock 签名**
@@ -908,6 +918,7 @@ git commit -m "feat: add recruiting resource client fetchers"
 ### Task 4: 简历列表与面试记录组件
 
 **Files:**
+
 - Create: `src/components/candidate-screening/resume-library.tsx`
 - Create: `src/components/candidate-screening/interview-record-list.tsx`
 - Modify: `tests/unit/components/CandidateScreening.test.tsx`
@@ -982,7 +993,7 @@ it('renders resume library with mounted JD links and source profile action', asy
 Run:
 
 ```bash
-bun run test -- tests/unit/components/CandidateScreening.test.tsx -t "renders resume library"
+bunx jest --runInBand tests/unit/components/CandidateScreening.test.tsx -t "renders resume library" --coverage=false
 ```
 
 Expected: FAIL，错误包含无法解析 `resume-library`。
@@ -1086,13 +1097,9 @@ export function ResumeLibrary() {
           </div>
         </div>
         {isLoading ? (
-          <div className="text-muted-foreground px-4 py-10 text-center text-sm">
-            正在加载简历…
-          </div>
+          <div className="text-muted-foreground px-4 py-10 text-center text-sm">正在加载简历…</div>
         ) : items.length === 0 ? (
-          <div className="text-muted-foreground px-4 py-10 text-center text-sm">
-            暂无简历记录
-          </div>
+          <div className="text-muted-foreground px-4 py-10 text-center text-sm">暂无简历记录</div>
         ) : (
           <div className="divide-border divide-y">
             {items.map((item) => {
@@ -1235,7 +1242,7 @@ it('renders interview records with candidate and JD links', async () => {
 Run:
 
 ```bash
-bun run test -- tests/unit/components/CandidateScreening.test.tsx -t "renders interview records"
+bunx jest --runInBand tests/unit/components/CandidateScreening.test.tsx -t "renders interview records" --coverage=false
 ```
 
 Expected: FAIL，错误包含无法解析 `interview-record-list`。
@@ -1377,7 +1384,9 @@ export function InterviewRecordList() {
               aria-label="面试阶段筛选"
               className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
               value={stage}
-              onChange={(event) => setStage(event.target.value as '' | CandidateInterviewFeedbackStage)}
+              onChange={(event) =>
+                setStage(event.target.value as '' | CandidateInterviewFeedbackStage)
+              }
             >
               {stageOptions.map((option) => (
                 <option key={option.label} value={option.value}>
@@ -1424,9 +1433,7 @@ export function InterviewRecordList() {
             正在加载面试记录…
           </div>
         ) : filteredItems.length === 0 ? (
-          <div className="text-muted-foreground px-4 py-10 text-center text-sm">
-            暂无面试记录
-          </div>
+          <div className="text-muted-foreground px-4 py-10 text-center text-sm">暂无面试记录</div>
         ) : (
           <div className="divide-border divide-y">
             {filteredItems.map((item) => (
@@ -1478,7 +1485,7 @@ export function InterviewRecordList() {
 Run:
 
 ```bash
-bun run test -- tests/unit/components/CandidateScreening.test.tsx -t "renders resume library|renders interview records"
+bunx jest --runInBand tests/unit/components/CandidateScreening.test.tsx -t "renders resume library|renders interview records" --coverage=false
 ```
 
 Expected: PASS。
@@ -1495,6 +1502,7 @@ git commit -m "feat: add resume and interview resource lists"
 ### Task 5: 候选人列表路由与结束状态映射
 
 **Files:**
+
 - Modify: `src/components/candidate-screening/tracking-dashboard.tsx`
 - Modify: `tests/unit/components/CandidateScreening.test.tsx`
 - Create: `src/app/candidates/page.tsx`
@@ -1556,7 +1564,7 @@ it('candidate tracking dashboard separates active and ended candidates', async (
 Run:
 
 ```bash
-bun run test -- tests/unit/components/CandidateScreening.test.tsx -t "separates active and ended candidates"
+bunx jest --runInBand tests/unit/components/CandidateScreening.test.tsx -t "separates active and ended candidates" --coverage=false
 ```
 
 Expected: FAIL，`跟踪范围` 下拉没有 `ended` 行为或没有 `淘汰`/`录取/Offer` 文案。
@@ -1626,7 +1634,8 @@ if (scope === 'ended' && !isEndedCandidate(candidate)) return false;
 如果 grid 列数不够，把候选人行布局改为：
 
 ```tsx
-className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_72px_96px_100px_100px_140px] xl:items-center"
+className =
+  'grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_72px_96px_100px_100px_140px] xl:items-center';
 ```
 
 - [ ] **Step 4: 创建 `/candidates` 页面**
@@ -1698,7 +1707,7 @@ export default async function CandidateTrackingPage() {
 Run:
 
 ```bash
-bun run test -- tests/unit/components/CandidateScreening.test.tsx -t "candidate tracking dashboard"
+bunx jest --runInBand tests/unit/components/CandidateScreening.test.tsx -t "candidate tracking dashboard" --coverage=false
 ```
 
 Expected: PASS。
@@ -1715,6 +1724,7 @@ git commit -m "feat: add candidate resource route"
 ### Task 6: 页面路由、侧边栏菜单与工作台入口
 
 **Files:**
+
 - Create: `src/app/resumes/page.tsx`
 - Create: `src/app/interviews/page.tsx`
 - Modify: `src/components/app-sidebar.tsx`
@@ -1768,9 +1778,7 @@ export default async function InterviewsPage() {
       {!session?.user ? (
         <div className="border-border bg-background/60 rounded-xl border p-8 text-center backdrop-blur">
           <h1 className="text-foreground text-xl font-semibold">请先登录后继续</h1>
-          <p className="text-muted-foreground mt-2 text-sm">
-            登录本地账号后即可查看面试记录。
-          </p>
+          <p className="text-muted-foreground mt-2 text-sm">登录本地账号后即可查看面试记录。</p>
           <div className="mt-6 flex justify-center">
             <SignInButton />
           </div>
@@ -1816,24 +1824,16 @@ describe('AppSidebar', () => {
   it('renders recruiting resource menu entries', () => {
     render(<AppSidebar />);
 
-    expect(screen.getByRole('link', { name: /候选人列表/ })).toHaveAttribute(
-      'href',
-      '/candidates',
-    );
+    expect(screen.getByRole('link', { name: /候选人列表/ })).toHaveAttribute('href', '/candidates');
     expect(screen.getByRole('link', { name: /简历列表/ })).toHaveAttribute('href', '/resumes');
-    expect(screen.getByRole('link', { name: /面试记录/ })).toHaveAttribute(
-      'href',
-      '/interviews',
-    );
+    expect(screen.getByRole('link', { name: /面试记录/ })).toHaveAttribute('href', '/interviews');
   });
 
   it('marks resume route active independently from JD workbench', () => {
     render(<AppSidebar />);
 
     expect(screen.getByRole('link', { name: /简历列表/ }).className).toContain('text-primary');
-    expect(screen.getByRole('link', { name: /JD 工作台/ }).className).not.toContain(
-      'text-primary',
-    );
+    expect(screen.getByRole('link', { name: /JD 工作台/ }).className).not.toContain('text-primary');
   });
 });
 ```
@@ -1843,7 +1843,7 @@ describe('AppSidebar', () => {
 Run:
 
 ```bash
-bun run test -- tests/unit/components/AppSidebar.test.tsx
+bunx jest --runInBand tests/unit/components/AppSidebar.test.tsx --coverage=false
 ```
 
 Expected: FAIL，找不到新增菜单项或 lucide icon 导入不存在。
@@ -1894,7 +1894,7 @@ import {
 Modify `src/components/dashboard/dashboard-page.tsx`，把两个候选人相关按钮 href 从 `/jd-generator/candidates` 改成：
 
 ```tsx
-href="/candidates"
+href = '/candidates';
 ```
 
 - [ ] **Step 6: 运行侧边栏和 dashboard 测试**
@@ -1902,7 +1902,7 @@ href="/candidates"
 Run:
 
 ```bash
-bun run test -- tests/unit/components/AppSidebar.test.tsx src/components/dashboard/dashboard-page.test.tsx
+bunx jest --runInBand tests/unit/components/AppSidebar.test.tsx src/components/dashboard/dashboard-page.test.tsx --coverage=false
 ```
 
 Expected: PASS。
@@ -1919,6 +1919,7 @@ git commit -m "feat: add recruiting resource navigation"
 ### Task 7: 全量相关验证与收尾
 
 **Files:**
+
 - Verify only, no planned edits.
 
 - [ ] **Step 1: 运行 repository 测试**
@@ -1926,7 +1927,7 @@ git commit -m "feat: add recruiting resource navigation"
 Run:
 
 ```bash
-bun run test -- src/lib/candidate-screening/repo.test.ts
+bunx jest --runInBand src/lib/candidate-screening/repo.test.ts --coverage=false
 ```
 
 Expected: PASS。
@@ -1936,7 +1937,7 @@ Expected: PASS。
 Run:
 
 ```bash
-bun run test -- tests/unit/api/candidate-screening-routes.test.ts
+bunx jest --runInBand tests/unit/api/candidate-screening-routes.test.ts --coverage=false
 ```
 
 Expected: PASS。
@@ -1946,7 +1947,7 @@ Expected: PASS。
 Run:
 
 ```bash
-bun run test -- tests/unit/components/CandidateScreening.test.tsx tests/unit/components/AppSidebar.test.tsx src/components/dashboard/dashboard-page.test.tsx
+bunx jest --runInBand tests/unit/components/CandidateScreening.test.tsx tests/unit/components/AppSidebar.test.tsx src/components/dashboard/dashboard-page.test.tsx --coverage=false
 ```
 
 Expected: PASS。
