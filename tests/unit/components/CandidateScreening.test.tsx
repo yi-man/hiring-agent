@@ -465,10 +465,11 @@ describe('candidate screening UI', () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
     expect(await screen.findByRole('button', { name: '筛选并执行' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /已筛选候选人/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /已筛选候选人/ })).toHaveAttribute(
       'href',
       '/jd-generator/jd-1/candidates',
     );
+    expect(screen.queryByRole('button', { name: '批量沟通' })).not.toBeInTheDocument();
   });
 
   it('JD list links to the cross-JD candidate tracking dashboard', async () => {
@@ -619,15 +620,14 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('已跳过')).toBeInTheDocument();
   });
 
-  it('starts a JD-scoped batch communication run from JD detail', async () => {
-    render(<JDDetailView jobDescriptionId="jd-1" />);
+  it('starts a global batch communication run from the JD workbench', async () => {
+    render(<JDListView />);
 
     fireEvent.click(await screen.findByRole('button', { name: '批量沟通' }));
 
     await waitFor(() =>
       expect(startCandidateCommunicationRunMock).toHaveBeenCalledWith({
         mode: 'batch',
-        jobDescriptionId: 'jd-1',
         platform: 'boss-like',
         maxPasses: 10,
       }),

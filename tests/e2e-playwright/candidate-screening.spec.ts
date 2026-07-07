@@ -111,25 +111,90 @@ test.describe('candidate screening UI', () => {
       await page.route('**/api/jd/jd-screening-1/publish', async (route) => {
         await route.fulfill({ json: { tasks: [] } });
       });
-      let communicationSyncPayload: unknown = null;
-      await page.route('**/api/candidate-conversations/sync-unread', async (route) => {
+      await page.route(/\/api\/jd\?status=published$/, async (route) => {
+        await route.fulfill({
+          json: {
+            jobDescriptions: [
+              {
+                id: 'jd-screening-1',
+                userId: seeded.userId,
+                department: '技术部',
+                position: '高级后端工程师',
+                positionDescription: '负责 Java 微服务',
+                tone: 'tech',
+                status: 'published',
+                content: {
+                  title: '高级后端工程师',
+                  summary: '负责核心系统',
+                  responsibilities: ['建设 Java 微服务'],
+                  requirements: ['Java'],
+                  bonus: [],
+                  highlights: [],
+                },
+                evaluation: null,
+                generationMeta: null,
+                screeningSummary: {
+                  status: 'not_started',
+                  totalCandidateCount: 0,
+                  qualifiedCandidateCount: 0,
+                  latestRunId: null,
+                  latestRunStatus: null,
+                  latestRunUpdatedAt: null,
+                },
+                createdAt: '2026-06-29T00:00:00.000Z',
+                updatedAt: '2026-06-29T00:00:00.000Z',
+              },
+            ],
+            total: 1,
+          },
+        });
+      });
+      const communicationRun = {
+        id: 'comm-run-1',
+        userId: seeded.userId,
+        jobDescriptionId: null,
+        candidateId: null,
+        platform: 'boss-like',
+        mode: 'batch',
+        status: 'success',
+        stats: {
+          total: 3,
+          selected: 2,
+          processed: 2,
+          failed: 0,
+          passes: 3,
+          records: [
+            {
+              candidateId: 'cand-1',
+              candidateName: 'Ada Lovelace',
+              status: 'success',
+              detail: '已处理未读消息',
+            },
+          ],
+        },
+        errorMessage: null,
+        startedAt: '2026-06-29T00:00:00.000Z',
+        finishedAt: '2026-06-29T00:02:00.000Z',
+        createdAt: '2026-06-29T00:00:00.000Z',
+        updatedAt: '2026-06-29T00:02:00.000Z',
+      };
+      let communicationRunPayload: unknown = null;
+      await page.route('**/api/candidate-conversations/runs', async (route) => {
         expect(route.request().method()).toBe('POST');
-        communicationSyncPayload = route.request().postDataJSON();
-        expect(communicationSyncPayload).toMatchObject({
+        communicationRunPayload = route.request().postDataJSON();
+        expect(communicationRunPayload).toMatchObject({
+          mode: 'batch',
           platform: 'boss-like',
           maxPasses: 10,
         });
-        expect(communicationSyncPayload).not.toHaveProperty('jobDescriptionId');
+        expect(communicationRunPayload).not.toHaveProperty('jobDescriptionId');
         await route.fulfill({
           status: 202,
-          json: {
-            status: 'success',
-            stoppedReason: 'no_unread_messages',
-            processed: 2,
-            failed: 0,
-            passes: 3,
-          },
+          json: { run: communicationRun },
         });
+      });
+      await page.route('**/api/candidate-conversations/runs/comm-run-1', async (route) => {
+        await route.fulfill({ json: { run: communicationRun } });
       });
       await page.route('**/api/jd/jd-screening-1/candidate-screening/runs', async (route) => {
         if (route.request().method() === 'POST') {
@@ -163,6 +228,45 @@ test.describe('candidate screening UI', () => {
         }
         await route.fulfill({ json: { runs: [] } });
       });
+      await page.route('**/api/candidate-screening/runs/run-1', async (route) => {
+        await route.fulfill({
+          json: {
+            run: {
+              id: 'run-1',
+              userId: seeded.userId,
+              jobDescriptionId: 'jd-screening-1',
+              platform: 'boss-like',
+              mode: 'execution',
+              status: 'success',
+              currentStage: 'finalizing',
+              searchPlan: null,
+              evaluationSchema: null,
+              stats: {
+                fetched: 0,
+                deduped: 0,
+                stored: 0,
+                vectorRecalled: 0,
+                evaluated: 0,
+                recommendedChat: 0,
+                recommendedCollect: 0,
+                skipped: 0,
+                failed: 0,
+              },
+              errorMessage: null,
+              startedAt: '2026-06-29T00:00:00.000Z',
+              finishedAt: '2026-06-29T00:02:00.000Z',
+              createdAt: '2026-06-29T00:00:00.000Z',
+              updatedAt: '2026-06-29T00:02:00.000Z',
+            },
+          },
+        });
+      });
+      await page.route(
+        /\/api\/jd\/jd-screening-1\/candidates\?runId=run-1&limit=100$/,
+        async (route) => {
+          await route.fulfill({ json: { candidates: [] } });
+        },
+      );
 
       await page.goto('/jd-generator/jd-screening-1');
       const startScreeningButton = page.getByRole('button', {
@@ -170,28 +274,31 @@ test.describe('candidate screening UI', () => {
         exact: true,
       });
       await expect(startScreeningButton).toBeVisible();
-      await expect(page.getByRole('button', { name: '已筛选候选人', exact: true })).toHaveAttribute(
+      await expect(page.getByRole('link', { name: '已筛选候选人', exact: true })).toHaveAttribute(
         'href',
         '/jd-generator/jd-screening-1/candidates',
       );
 
       await startScreeningButton.click();
 
-      await expect(page.getByText(/筛选任务 run-1/)).toBeVisible();
-      await expect(page.getByRole('link', { name: '查看筛选结果' })).toHaveAttribute(
+      await expect(page.getByText('筛选执行日志')).toBeVisible();
+      await expect(page.getByRole('button', { name: '全部候选人' })).toHaveAttribute(
         'href',
         '/jd-generator/jd-screening-1/candidates',
       );
 
+      await page.goto('/jd-generator');
       await page.getByRole('button', { name: '批量沟通', exact: true }).click();
 
-      expect(communicationSyncPayload).toMatchObject({
+      expect(communicationRunPayload).toMatchObject({
+        mode: 'batch',
         platform: 'boss-like',
         maxPasses: 10,
       });
-      expect(communicationSyncPayload).not.toHaveProperty('jobDescriptionId');
-      await expect(page.getByText('沟通流程完成')).toBeVisible();
-      await expect(page.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeVisible();
+      expect(communicationRunPayload).not.toHaveProperty('jobDescriptionId');
+      await expect(page.getByText('沟通执行日志')).toBeVisible();
+      await expect(page.getByText('批量沟通').first()).toBeVisible();
+      await expect(page.getByText('2 条已处理')).toBeVisible();
     } finally {
       await cleanupSeededUser(seeded.userId);
     }

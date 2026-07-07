@@ -14,7 +14,6 @@ import {
   Plus,
   RefreshCw,
   Rocket,
-  Save,
   Sparkles,
 } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
@@ -271,6 +270,7 @@ export function JDListView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [startingScreeningId, setStartingScreeningId] = useState<string | null>(null);
+  const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
   const [error, setError] = useState('');
 
   async function loadJds(options?: { silent?: boolean }) {
@@ -311,6 +311,23 @@ export function JDListView() {
     }
   }
 
+  async function handleSyncCommunication() {
+    setIsSyncingCommunication(true);
+    setError('');
+    try {
+      const run = await startCandidateCommunicationRun({
+        mode: 'batch',
+        platform: 'boss-like',
+        maxPasses: 10,
+      });
+      router.push(`/jd-generator/communication-runs/${run.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动候选人沟通失败');
+    } finally {
+      setIsSyncingCommunication(false);
+    }
+  }
+
   function renderPublishedActions(item: JobDescriptionDto) {
     const summary = getScreeningSummary(item);
     const runHref = summary.latestRunId
@@ -348,29 +365,21 @@ export function JDListView() {
           </Button>
         )}
         {runHref ? (
-          <Button
-            as={Link}
-            className="gap-2"
-            disableRipple
+          <Link
+            className="text-primary hover:text-primary/80 inline-flex h-8 items-center gap-1 text-sm font-medium hover:underline"
             href={runHref}
-            size="sm"
-            variant="light"
           >
             <Eye className="h-4 w-4" aria-hidden />
             筛选记录
-          </Button>
+          </Link>
         ) : null}
-        <Button
-          as={Link}
-          className="gap-2"
-          disableRipple
+        <Link
+          className="text-primary hover:text-primary/80 inline-flex h-8 items-center gap-1 text-sm font-medium hover:underline"
           href={`/jd-generator/${item.id}/candidates`}
-          size="sm"
-          variant="light"
         >
           <ListFilter className="h-4 w-4" aria-hidden />
           候选人
-        </Button>
+        </Link>
       </>
     );
   }
@@ -457,6 +466,17 @@ export function JDListView() {
           >
             <ListFilter className="h-4 w-4" aria-hidden />
             候选人跟踪
+          </Button>
+          <Button
+            className="gap-2"
+            disableRipple
+            isDisabled={isSyncingCommunication}
+            type="button"
+            variant="bordered"
+            onClick={() => void handleSyncCommunication()}
+          >
+            <MessageCircle className="h-4 w-4" aria-hidden />
+            {isSyncingCommunication ? '启动中' : '批量沟通'}
           </Button>
           <Button
             as={Link}
@@ -812,11 +832,9 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [status, setStatus] = useState<JDStatus>('created');
   const [extraInstruction, setExtraInstruction] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isScreening, setIsScreening] = useState(false);
-  const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
   const [latestScreeningRun, setLatestScreeningRun] = useState<CandidateScreeningRunDto | null>(
     null,
   );
@@ -865,28 +883,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobDescriptionId]);
 
-  async function handleSave() {
-    if (!jobDescription || !form) return;
-    if (status === 'published') return;
-    setIsSaving(true);
-    setError('');
-    try {
-      const next = await updateJobDescriptionResource(jobDescription.id, {
-        status,
-        salaryRange: publishSalary || null,
-        workLocations: selectedPublishLocations,
-        content: formToJd(form),
-      });
-      setJobDescription(next);
-      setForm(jdToForm(next.content));
-      setStatus(next.status);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存 JD 失败');
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   async function handleRegenerate() {
     if (!jobDescription || !form) return;
     if (status === 'published') return;
@@ -911,6 +907,13 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   async function handlePublish() {
     if (!jobDescription || !form) return;
     if (status === 'published') return;
+    const trimmedCompany = publishCompany.trim();
+    const trimmedSalary = publishSalary.trim();
+    const publishLocation = selectedPublishLocations.join('、');
+    if (!canPublishWithCompanyProfile || !trimmedCompany || !trimmedSalary || !publishLocation) {
+      setError('发布前请完善公司名称、薪资范围和工作地点。');
+      return;
+    }
     setIsPublishing(true);
     setError('');
     setPublishTrace(null);
@@ -927,9 +930,9 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
       const result = await publishJobDescriptionResource(saved.id, {
         platform: 'boss-like',
-        company: publishCompany.trim(),
-        salary: publishSalary.trim(),
-        location: selectedPublishLocations.join('、'),
+        company: trimmedCompany,
+        salary: trimmedSalary,
+        location: publishLocation,
         keywords: parseKeywordInput(publishKeywords),
       });
       setJobDescription(result.jobDescription);
@@ -984,24 +987,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setError(e instanceof Error ? e.message : '启动候选人筛选失败');
     } finally {
       setIsScreening(false);
-    }
-  }
-
-  async function handleSyncCommunication() {
-    setIsSyncingCommunication(true);
-    setError('');
-    try {
-      const run = await startCandidateCommunicationRun({
-        mode: 'batch',
-        jobDescriptionId: jobDescription?.id ?? jobDescriptionId,
-        platform: 'boss-like',
-        maxPasses: 10,
-      });
-      router.push(`/jd-generator/communication-runs/${run.id}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '启动候选人沟通失败');
-    } finally {
-      setIsSyncingCommunication(false);
     }
   }
 
@@ -1069,42 +1054,14 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
             <>
               <Button
                 className="gap-2"
-                disableRipple
-                isDisabled={isSaving}
-                type="button"
-                variant="bordered"
-                onClick={() => void handleSave()}
-              >
-                <Save className="h-4 w-4" aria-hidden />
-                {isSaving ? '保存中' : '保存修改'}
-              </Button>
-              <Button
-                className="gap-2"
-                disableRipple
-                isDisabled={isRegenerating}
-                type="button"
-                variant="bordered"
-                onClick={() => void handleRegenerate()}
-              >
-                <Sparkles className="h-4 w-4" aria-hidden />
-                {isRegenerating ? '生成中' : '重新生成'}
-              </Button>
-              <Button
-                className="gap-2"
                 color="primary"
                 disableRipple
-                isDisabled={
-                  isPublishing ||
-                  !canPublishWithCompanyProfile ||
-                  !publishCompany.trim() ||
-                  !publishSalary.trim() ||
-                  selectedPublishLocations.length === 0
-                }
+                isDisabled={isPublishing}
                 type="button"
                 onClick={() => void handlePublish()}
               >
                 <Rocket className="h-4 w-4" aria-hidden />
-                {isPublishing ? '发布中' : '发布到 Boss-like'}
+                {isPublishing ? '发布中' : '发布'}
               </Button>
             </>
           ) : null}
@@ -1121,39 +1078,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               >
                 <ListFilter className="h-4 w-4" aria-hidden />
                 {isScreening ? '启动中' : screeningActionLabel}
-              </Button>
-              {latestRunId ? (
-                <Button
-                  as={Link}
-                  className="gap-2"
-                  disableRipple
-                  href={`/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`}
-                  variant="bordered"
-                >
-                  <Eye className="h-4 w-4" aria-hidden />
-                  筛选记录
-                </Button>
-              ) : null}
-              <Button
-                as={Link}
-                className="gap-2"
-                disableRipple
-                href={`/jd-generator/${jobDescription.id}/candidates`}
-                variant="bordered"
-              >
-                <ListFilter className="h-4 w-4" aria-hidden />
-                已筛选候选人
-              </Button>
-              <Button
-                className="gap-2"
-                disableRipple
-                isDisabled={isSyncingCommunication}
-                type="button"
-                variant="bordered"
-                onClick={() => void handleSyncCommunication()}
-              >
-                <MessageCircle className="h-4 w-4" aria-hidden />
-                {isSyncingCommunication ? '启动中' : '批量沟通'}
               </Button>
             </>
           ) : null}
@@ -1277,7 +1201,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
             <div className="border-border space-y-3 border-t pt-3">
               <div className="flex items-center gap-2">
                 <Rocket className="text-muted-foreground h-4 w-4" aria-hidden />
-                <div className="text-foreground text-sm font-medium">Boss-like 发布</div>
+                <div className="text-foreground text-sm font-medium">发布设置</div>
               </div>
               <label className="block space-y-2">
                 <FieldLabel>公司名称</FieldLabel>
@@ -1419,14 +1343,24 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     </Link>
                   </div>
                 ) : null}
-                {latestRunId && !latestScreeningRun ? (
+                <div className="flex flex-wrap gap-x-4 gap-y-2">
+                  {latestRunId ? (
+                    <Link
+                      className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                      href={`/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`}
+                    >
+                      <Eye className="h-3.5 w-3.5" aria-hidden />
+                      筛选记录
+                    </Link>
+                  ) : null}
                   <Link
-                    className="text-primary inline-flex text-xs hover:underline"
-                    href={`/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`}
+                    className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                    href={`/jd-generator/${jobDescription.id}/candidates`}
                   >
-                    查看最近筛选记录
+                    <ListFilter className="h-3.5 w-3.5" aria-hidden />
+                    已筛选候选人
                   </Link>
-                ) : null}
+                </div>
               </div>
             ) : null}
           </section>
@@ -1444,6 +1378,17 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 value={extraInstruction}
                 onChange={(event) => setExtraInstruction(event.target.value)}
               />
+              <Button
+                className="w-full gap-2"
+                color="primary"
+                disableRipple
+                isDisabled={isRegenerating}
+                type="button"
+                onClick={() => void handleRegenerate()}
+              >
+                <Sparkles className="h-4 w-4" aria-hidden />
+                {isRegenerating ? '生成中' : '重新生成'}
+              </Button>
             </section>
           ) : null}
 
