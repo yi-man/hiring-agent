@@ -16,6 +16,7 @@ const footerLinks = [
   { name: '对话', href: '/chat' },
   { name: 'JD 工作台', href: '/jd-generator' },
   { name: 'Workflow 学习', href: '/workflow-learning' },
+  { name: 'Workflow 库', href: '/workflows' },
   { name: 'LLM 可观测', href: '/llm-observability' },
   { name: '登录', href: '/auth/signin' },
 ];
