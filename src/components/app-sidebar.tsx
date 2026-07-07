@@ -9,6 +9,7 @@ import {
   Eye,
   FileCode,
   FileText,
+  GitBranch,
   LayoutDashboard,
   MessageCircle,
   Users,
@@ -70,6 +71,12 @@ const appMenuItems: AppMenuItem[] = [
     description: '流程沉淀',
     href: '/workflow-learning',
     Icon: BrainCircuit,
+  },
+  {
+    label: 'Workflow 库',
+    description: '已发布流程',
+    href: '/workflows',
+    Icon: GitBranch,
   },
   {
     label: 'LLM 可观测',
