@@ -919,6 +919,51 @@ describe('candidate screening UI', () => {
     );
   });
 
+  it('candidate tracking dashboard separates active and ended candidates', async () => {
+    fetchCandidateTrackingOverviewMock.mockResolvedValueOnce({
+      jobs: sampleTrackingOverview.jobs,
+      candidates: [
+        sampleTrackingOverview.candidates[0],
+        {
+          ...sampleTrackingOverview.candidates[0],
+          id: 'result-ended',
+          candidateId: 'cand-ended',
+          candidate: {
+            ...sampleCandidate,
+            id: 'cand-ended',
+            displayName: 'Ended Candidate',
+          },
+          interviewStage: 'rejected',
+          decisionAction: 'skip',
+        },
+        {
+          ...sampleTrackingOverview.candidates[0],
+          id: 'result-offer',
+          candidateId: 'cand-offer',
+          candidate: {
+            ...sampleCandidate,
+            id: 'cand-offer',
+            displayName: 'Offer Candidate',
+          },
+          interviewStage: 'offer',
+        },
+      ],
+    });
+
+    render(<CandidateTrackingDashboard />);
+
+    expect(await screen.findByRole('link', { name: /Ada Lovelace/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Ended Candidate/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('跟踪范围'), { target: { value: 'ended' } });
+
+    expect(await screen.findByRole('link', { name: /Ended Candidate/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Offer Candidate/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Ada Lovelace/ })).not.toBeInTheDocument();
+    expect(screen.getByText('淘汰')).toBeInTheDocument();
+    expect(screen.getByText('录取/Offer')).toBeInTheDocument();
+  });
+
   it('starts a global batch communication run from the tracking dashboard', async () => {
     render(<CandidateTrackingDashboard />);
 

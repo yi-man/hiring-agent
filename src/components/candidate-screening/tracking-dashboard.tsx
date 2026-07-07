@@ -24,6 +24,8 @@ const actionOptions: Array<{ value: '' | CandidateDecisionAction; label: string 
   { value: 'skip', label: 'skip' },
 ];
 
+type CandidateScope = 'active' | 'ended' | 'all';
+
 function formatDateTime(value: string | null) {
   if (!value) {
     return '暂无时间';
@@ -44,12 +46,24 @@ function candidateSubtitle(item: CandidateTrackingCandidateDto) {
     .join(' · ');
 }
 
+function getCandidateProgressLabel(item: CandidateTrackingCandidateDto) {
+  if (item.interviewStage === 'offer') return '录取/Offer';
+  if (
+    item.interviewStage === 'rejected' ||
+    item.interviewStage === 'withdrawn' ||
+    item.decisionAction === 'skip'
+  ) {
+    return '淘汰';
+  }
+  return '正在推进';
+}
+
+function isEndedCandidate(item: CandidateTrackingCandidateDto) {
+  return getCandidateProgressLabel(item) !== '正在推进';
+}
+
 function isActiveCandidate(item: CandidateTrackingCandidateDto) {
-  return (
-    item.decisionAction !== 'skip' &&
-    item.interviewStage !== 'rejected' &&
-    item.interviewStage !== 'withdrawn'
-  );
+  return !isEndedCandidate(item);
 }
 
 export function CandidateTrackingDashboard() {
@@ -61,7 +75,7 @@ export function CandidateTrackingDashboard() {
   const [jobDescriptionId, setJobDescriptionId] = useState('');
   const [interviewStage, setInterviewStage] = useState<'' | CandidateInterviewStage>('');
   const [decisionAction, setDecisionAction] = useState<'' | CandidateDecisionAction>('');
-  const [scope, setScope] = useState<'active' | 'all'>('active');
+  const [scope, setScope] = useState<CandidateScope>('active');
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
   const [error, setError] = useState('');
@@ -105,6 +119,7 @@ export function CandidateTrackingDashboard() {
     () =>
       overview.candidates.filter((candidate) => {
         if (scope === 'active' && !isActiveCandidate(candidate)) return false;
+        if (scope === 'ended' && !isEndedCandidate(candidate)) return false;
         if (jobDescriptionId && candidate.jobDescription.id !== jobDescriptionId) return false;
         if (interviewStage && candidate.interviewStage !== interviewStage) return false;
         if (decisionAction && candidate.decisionAction !== decisionAction) return false;
@@ -187,9 +202,10 @@ export function CandidateTrackingDashboard() {
               aria-label="跟踪范围"
               className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
               value={scope}
-              onChange={(event) => setScope(event.target.value as 'active' | 'all')}
+              onChange={(event) => setScope(event.target.value as CandidateScope)}
             >
-              <option value="active">跟进中</option>
+              <option value="active">正在推进</option>
+              <option value="ended">已结束</option>
               <option value="all">全部候选人</option>
             </select>
           </label>
@@ -309,7 +325,7 @@ export function CandidateTrackingDashboard() {
             {filteredCandidates.map((item) => (
               <article
                 key={item.id}
-                className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_72px_96px_100px_140px] xl:items-center"
+                className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_72px_96px_minmax(0,120px)_140px] xl:items-center"
               >
                 <div className="min-w-0">
                   <Link
@@ -337,7 +353,14 @@ export function CandidateTrackingDashboard() {
                 <Chip size="sm" variant="flat">
                   {item.decisionAction}
                 </Chip>
-                <span className="text-muted-foreground text-xs">{item.interviewStage}</span>
+                <div className="min-w-0 space-y-1">
+                  <span className="text-muted-foreground block truncate text-xs">
+                    {item.interviewStage}
+                  </span>
+                  <span className="text-muted-foreground block truncate text-xs">
+                    {getCandidateProgressLabel(item)}
+                  </span>
+                </div>
                 <div className="flex flex-wrap gap-2 xl:justify-end">
                   <Button
                     as={Link}

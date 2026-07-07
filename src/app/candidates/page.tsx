@@ -2,7 +2,7 @@ import { SignInButton } from '@/components/auth/sign-in-button';
 import { CandidateTrackingDashboard } from '@/components/candidate-screening/tracking-dashboard';
 import { getServerAuthSession } from '@/lib/auth/session';
 
-export default async function CandidateTrackingPage() {
+export default async function CandidatesPage() {
   const session = await getServerAuthSession();
 
   return (
