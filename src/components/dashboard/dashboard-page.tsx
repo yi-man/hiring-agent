@@ -112,23 +112,11 @@ function DashboardPageContent() {
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
               {isRefreshing ? '刷新中' : '刷新'}
             </Button>
-            <Button
-              as={Link}
-              className="gap-2"
-              disableRipple
-              href="/jd-generator/candidates"
-              variant="bordered"
-            >
+            <Button as={Link} className="gap-2" disableRipple href="/candidates" variant="bordered">
               <Users className="h-4 w-4" aria-hidden="true" />
               候选人跟踪
             </Button>
-            <Button
-              as={Link}
-              className="gap-2"
-              disableRipple
-              href="/jd-generator/candidates"
-              variant="bordered"
-            >
+            <Button as={Link} className="gap-2" disableRipple href="/candidates" variant="bordered">
               <MessageCircle className="h-4 w-4" aria-hidden="true" />
               同步沟通
             </Button>

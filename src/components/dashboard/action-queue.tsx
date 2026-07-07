@@ -7,6 +7,7 @@ import type {
   DashboardOverviewDto,
   DashboardPublishTaskSummary,
 } from '@/lib/dashboard/types';
+import { withReturnTarget } from '@/lib/navigation/return-url';
 import type { PublishTaskStatus } from '@/lib/jd-publishing/types';
 import type { JDStatus } from '@/types';
 
@@ -60,6 +61,18 @@ function taskJobTitle(jobs: DashboardJobDto[], task: DashboardPublishTaskSummary
   return jobs.find((job) => job.id === task.jobDescriptionId)?.title ?? task.jobDescriptionId;
 }
 
+function dashboardHref(overview: DashboardOverviewDto) {
+  const query = new URLSearchParams();
+  if (overview.filters.status) {
+    query.set('status', overview.filters.status);
+  }
+  if (overview.filters.platform && overview.filters.platform !== 'all') {
+    query.set('platform', overview.filters.platform);
+  }
+  const queryString = query.toString();
+  return queryString ? `/?${queryString}` : '/';
+}
+
 function TaskStatusChip({ status }: { status: PublishTaskStatus }) {
   const meta = taskStatusMeta[status];
   return (
@@ -70,6 +83,7 @@ function TaskStatusChip({ status }: { status: PublishTaskStatus }) {
 }
 
 export function ActionQueue({ overview }: ActionQueueProps) {
+  const returnTarget = { href: dashboardHref(overview), label: '返回工作台' };
   const queueCards: QueueCard[] = [
     {
       label: '发布失败',
@@ -147,7 +161,7 @@ export function ActionQueue({ overview }: ActionQueueProps) {
               <Link
                 key={task.id}
                 className="hover:bg-muted/40 block px-4 py-3 transition-colors"
-                href={`/jd-generator/${task.jobDescriptionId}`}
+                href={withReturnTarget(`/jd-generator/${task.jobDescriptionId}`, returnTarget)}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">

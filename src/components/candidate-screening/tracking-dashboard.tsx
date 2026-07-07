@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, ExternalLink, Eye, ListFilter, MessageCircle, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
@@ -16,6 +16,11 @@ import type {
   CandidateDecisionAction,
   CandidateInterviewStage,
 } from '@/lib/candidate-screening/types';
+import {
+  currentPathWithSearch,
+  getOptionalReturnTarget,
+  withReturnTarget,
+} from '@/lib/navigation/return-url';
 
 const actionOptions: Array<{ value: '' | CandidateDecisionAction; label: string }> = [
   { value: '', label: '全部动作' },
@@ -23,6 +28,9 @@ const actionOptions: Array<{ value: '' | CandidateDecisionAction; label: string 
   { value: 'collect', label: 'collect' },
   { value: 'skip', label: 'skip' },
 ];
+
+type CandidateScope = 'active' | 'ended' | 'all';
+type CandidateProgressState = 'active' | 'rejected' | 'offer';
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -44,16 +52,41 @@ function candidateSubtitle(item: CandidateTrackingCandidateDto) {
     .join(' · ');
 }
 
+function getCandidateProgressState(item: CandidateTrackingCandidateDto): CandidateProgressState {
+  if (item.interviewStage === 'offer') return 'offer';
+  if (
+    item.interviewStage === 'rejected' ||
+    item.interviewStage === 'withdrawn' ||
+    item.decisionAction === 'skip'
+  ) {
+    return 'rejected';
+  }
+  return 'active';
+}
+
+function getCandidateProgressLabel(item: CandidateTrackingCandidateDto) {
+  const state = getCandidateProgressState(item);
+  if (state === 'offer') return '录取/Offer';
+  if (state === 'rejected') return '淘汰';
+  return '正在推进';
+}
+
+function isEndedCandidate(item: CandidateTrackingCandidateDto) {
+  return getCandidateProgressState(item) !== 'active';
+}
+
 function isActiveCandidate(item: CandidateTrackingCandidateDto) {
-  return (
-    item.decisionAction !== 'skip' &&
-    item.interviewStage !== 'rejected' &&
-    item.interviewStage !== 'withdrawn'
-  );
+  return !isEndedCandidate(item);
 }
 
 export function CandidateTrackingDashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTarget = getOptionalReturnTarget(searchParams);
+  const dashboardReturnTarget = {
+    href: currentPathWithSearch('/candidates', searchParams),
+    label: '返回候选人列表',
+  };
   const [overview, setOverview] = useState<CandidateTrackingOverviewDto>({
     jobs: [],
     candidates: [],
@@ -61,7 +94,7 @@ export function CandidateTrackingDashboard() {
   const [jobDescriptionId, setJobDescriptionId] = useState('');
   const [interviewStage, setInterviewStage] = useState<'' | CandidateInterviewStage>('');
   const [decisionAction, setDecisionAction] = useState<'' | CandidateDecisionAction>('');
-  const [scope, setScope] = useState<'active' | 'all'>('active');
+  const [scope, setScope] = useState<CandidateScope>('active');
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
   const [error, setError] = useState('');
@@ -93,7 +126,9 @@ export function CandidateTrackingDashboard() {
         platform: 'boss-like',
         maxPasses: 10,
       });
-      router.push(`/jd-generator/communication-runs/${run.id}`);
+      router.push(
+        withReturnTarget(`/jd-generator/communication-runs/${run.id}`, dashboardReturnTarget),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人沟通失败');
     } finally {
@@ -105,6 +140,7 @@ export function CandidateTrackingDashboard() {
     () =>
       overview.candidates.filter((candidate) => {
         if (scope === 'active' && !isActiveCandidate(candidate)) return false;
+        if (scope === 'ended' && !isEndedCandidate(candidate)) return false;
         if (jobDescriptionId && candidate.jobDescription.id !== jobDescriptionId) return false;
         if (interviewStage && candidate.interviewStage !== interviewStage) return false;
         if (decisionAction && candidate.decisionAction !== decisionAction) return false;
@@ -117,10 +153,12 @@ export function CandidateTrackingDashboard() {
     <div className="space-y-4">
       <div className="border-border flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <Button as={Link} className="mb-3 gap-2 px-0" href="/jd-generator" variant="light">
-            <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回 JD 工作台
-          </Button>
+          {returnTarget ? (
+            <Button as={Link} className="mb-3 gap-2 px-0" href={returnTarget.href} variant="light">
+              <ArrowLeft className="h-4 w-4" aria-hidden />
+              {returnTarget.label}
+            </Button>
+          ) : null}
           <div className="flex items-center gap-2">
             <ListFilter className="text-muted-foreground h-5 w-5" aria-hidden />
             <h1 className="text-foreground text-2xl font-semibold tracking-normal">候选人跟踪</h1>
@@ -187,9 +225,10 @@ export function CandidateTrackingDashboard() {
               aria-label="跟踪范围"
               className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
               value={scope}
-              onChange={(event) => setScope(event.target.value as 'active' | 'all')}
+              onChange={(event) => setScope(event.target.value as CandidateScope)}
             >
-              <option value="active">跟进中</option>
+              <option value="active">正在推进</option>
+              <option value="ended">已结束</option>
               <option value="all">全部候选人</option>
             </select>
           </label>
@@ -256,7 +295,10 @@ export function CandidateTrackingDashboard() {
                 <div className="min-w-0">
                   <Link
                     className="text-foreground block truncate text-sm font-medium hover:underline"
-                    href={`/jd-generator/${item.jobDescription.id}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}`,
+                      dashboardReturnTarget,
+                    )}
                   >
                     {item.jobDescription.position}
                   </Link>
@@ -276,7 +318,10 @@ export function CandidateTrackingDashboard() {
                 <Button
                   as={Link}
                   className="gap-2 justify-self-start lg:justify-self-end"
-                  href={`/jd-generator/${item.jobDescription.id}/candidates`}
+                  href={withReturnTarget(
+                    `/jd-generator/${item.jobDescription.id}/candidates`,
+                    dashboardReturnTarget,
+                  )}
                   size="sm"
                   variant="light"
                 >
@@ -309,12 +354,15 @@ export function CandidateTrackingDashboard() {
             {filteredCandidates.map((item) => (
               <article
                 key={item.id}
-                className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_72px_96px_100px_140px] xl:items-center"
+                className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_72px_96px_minmax(0,120px)_140px] xl:items-center"
               >
                 <div className="min-w-0">
                   <Link
                     className="text-foreground block truncate text-sm font-medium hover:underline"
-                    href={`/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`,
+                      dashboardReturnTarget,
+                    )}
                   >
                     {item.candidate.displayName}
                   </Link>
@@ -325,7 +373,10 @@ export function CandidateTrackingDashboard() {
                 <div className="min-w-0">
                   <Link
                     className="text-muted-foreground block truncate text-xs hover:underline"
-                    href={`/jd-generator/${item.jobDescription.id}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}`,
+                      dashboardReturnTarget,
+                    )}
                   >
                     {item.jobDescription.position}
                   </Link>
@@ -337,11 +388,21 @@ export function CandidateTrackingDashboard() {
                 <Chip size="sm" variant="flat">
                   {item.decisionAction}
                 </Chip>
-                <span className="text-muted-foreground text-xs">{item.interviewStage}</span>
+                <div className="min-w-0 space-y-1">
+                  <span className="text-muted-foreground block truncate text-xs">
+                    {item.interviewStage}
+                  </span>
+                  <span className="text-muted-foreground block truncate text-xs">
+                    {getCandidateProgressLabel(item)}
+                  </span>
+                </div>
                 <div className="flex flex-wrap gap-2 xl:justify-end">
                   <Button
                     as={Link}
-                    href={`/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${item.jobDescription.id}/candidates/${item.candidateId}`,
+                      dashboardReturnTarget,
+                    )}
                     size="sm"
                     variant="light"
                   >

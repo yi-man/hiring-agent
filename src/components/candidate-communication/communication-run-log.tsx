@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, FileText, MessageCircle, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { fetchCandidateCommunicationRun } from '@/lib/candidate-communication/client';
@@ -10,6 +11,7 @@ import type {
   CandidateCommunicationRunRecord,
   CandidateCommunicationRunStatus,
 } from '@/lib/candidate-communication/repo';
+import { getReturnTarget } from '@/lib/navigation/return-url';
 
 const statusLabel: Record<CandidateCommunicationRunStatus, string> = {
   running: '运行中',
@@ -45,10 +47,11 @@ function scopeHref(run: CandidateCommunicationRunDto) {
     return `/jd-generator/${run.jobDescriptionId}/candidates/${run.candidateId}`;
   }
   if (run.jobDescriptionId) return `/jd-generator/${run.jobDescriptionId}`;
-  return '/jd-generator/candidates';
+  return '/candidates';
 }
 
 export function CandidateCommunicationRunLog({ runId }: { runId: string }) {
+  const searchParams = useSearchParams();
   const [run, setRun] = useState<CandidateCommunicationRunDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -89,11 +92,15 @@ export function CandidateCommunicationRunLog({ runId }: { runId: string }) {
   }
 
   if (!run) {
+    const returnTarget = getReturnTarget(searchParams, {
+      href: '/jd-generator',
+      label: '返回 JD 工作台',
+    });
     return (
       <div className="space-y-4">
-        <Button as={Link} className="gap-2 px-0" href="/jd-generator" variant="light">
+        <Button as={Link} className="gap-2 px-0" href={returnTarget.href} variant="light">
           <ArrowLeft className="h-4 w-4" aria-hidden />
-          返回 JD 工作台
+          {returnTarget.label}
         </Button>
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
           {error || '沟通执行记录不存在'}
@@ -113,14 +120,18 @@ export function CandidateCommunicationRunLog({ runId }: { runId: string }) {
     run.candidate?.displayName ??
     run.jobDescription?.position ??
     (run.mode === 'batch' ? '全部候选人' : '候选人');
+  const returnTarget = getReturnTarget(searchParams, {
+    href: scopeHref(run),
+    label: '返回范围',
+  });
 
   return (
     <div className="space-y-4">
       <div className="border-border flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <Button as={Link} className="mb-3 gap-2 px-0" href={scopeHref(run)} variant="light">
+          <Button as={Link} className="mb-3 gap-2 px-0" href={returnTarget.href} variant="light">
             <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回范围
+            {returnTarget.label}
           </Button>
           <div className="flex flex-wrap items-center gap-2">
             <MessageCircle className="text-muted-foreground h-5 w-5" aria-hidden />

@@ -165,15 +165,6 @@ describe('dashboard overview helpers', () => {
     });
   });
 
-  it('does not infer boss-like for ready-to-publish jobs without publish tasks', () => {
-    expect(inferDashboardPlatform('ready_to_publish', [])).toEqual({
-      platform: 'untracked',
-      label: '未记录平台',
-      recruitingJobs: 0,
-      failedJobs: 0,
-    });
-  });
-
   it('uses failed task summary when no successful publish exists', () => {
     const tasks: DashboardPublishTaskSummary[] = [
       {

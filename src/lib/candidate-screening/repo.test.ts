@@ -6,6 +6,8 @@ import {
   createCandidateScreeningRun,
   createOrReuseCandidateResume,
   getCandidateTrackingOverview,
+  listCandidateInterviewRecords,
+  listCandidateResumeLibrary,
   listCandidateScreeningResults,
   replaceCandidateResumeChunks,
   searchCandidateResumeChunks,
@@ -22,7 +24,11 @@ type PrismaMock = {
   candidateResume: {
     create: jest.Mock;
     findFirst: jest.Mock;
+    findMany: jest.Mock;
     upsert: jest.Mock;
+  };
+  candidateInterviewFeedback: {
+    findMany: jest.Mock;
   };
   candidateResumeChunk: {
     deleteMany: jest.Mock;
@@ -59,7 +65,11 @@ jest.mock('@/lib/prisma', () => ({
     candidateResume: {
       create: jest.fn(),
       findFirst: jest.fn(),
+      findMany: jest.fn(),
       upsert: jest.fn(),
+    },
+    candidateInterviewFeedback: {
+      findMany: jest.fn(),
     },
     candidateResumeChunk: {
       deleteMany: jest.fn(),
@@ -92,6 +102,110 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as { prisma: Pri
 
 const createdAt = new Date('2026-01-02T03:04:05.000Z');
 const updatedAt = new Date('2026-01-03T03:04:05.000Z');
+const resumeLibraryOrderBy = [{ fetchedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }];
+
+function mockCandidate(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'candidate-1',
+    userId: 'u1',
+    displayName: 'Ada',
+    currentTitle: 'Frontend Lead',
+    currentCompany: 'Analytical Engines',
+    location: 'Remote',
+    experienceYears: 8,
+    sourcePlatform: 'boss-like',
+    platformCandidateId: 'p-1',
+    profileUrl: 'https://example.test/ada',
+    identityKey: 'Ada|Analytical Engines',
+    identityHash: 'hash-1',
+    lastActiveAt: null,
+    contacted: true,
+    replied: true,
+    lastContactAt: updatedAt,
+    createdAt,
+    updatedAt,
+    ...overrides,
+  };
+}
+
+function mockResume(overrides: Record<string, unknown> = {}) {
+  const candidateId =
+    typeof overrides.candidateId === 'string' ? overrides.candidateId : 'candidate-1';
+
+  return {
+    id: `resume-${candidateId}`,
+    userId: 'u1',
+    candidateId,
+    sourcePlatform: 'boss-like',
+    profileUrl: null,
+    rawText: 'Resume text',
+    structuredSummary: null,
+    resumeHash: `hash-${candidateId}`,
+    fetchedAt: updatedAt,
+    createdAt,
+    candidate: mockCandidate({
+      id: candidateId,
+      displayName: candidateId === 'candidate-1' ? 'Ada' : 'Grace',
+      identityKey: candidateId,
+      identityHash: `hash-${candidateId}`,
+    }),
+    ...overrides,
+  };
+}
+
+function mockJobDescription(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'jd-1',
+    userId: 'u1',
+    department: '技术部',
+    position: '高级前端工程师',
+    positionDescription: 'Build UI',
+    tone: 'tech',
+    status: 'published',
+    salaryRange: null,
+    workLocations: null,
+    content: { title: '高级前端工程师' },
+    evaluation: null,
+    generationMeta: null,
+    createdAt,
+    updatedAt,
+    ...overrides,
+  };
+}
+
+function mockScreeningResult(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'result-1',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: 'candidate-1',
+    resumeId: 'resume-candidate-1',
+    source: 'both',
+    tags: {
+      skills: [],
+      domainKnowledge: [],
+      generalAbility: [],
+      risk: [],
+      activity: [],
+      custom: [],
+    },
+    scoreDetail: { skill: 90, domain: 80, ability: 88, risk: 95, llmBonus: 0, total: 89 },
+    finalScore: 89,
+    rank: 1,
+    decisionAction: 'chat',
+    decisionPriority: 'high',
+    decisionReason: 'Strong fit',
+    actionPlan: null,
+    actionStatus: 'planned',
+    interviewStage: 'interviewing',
+    notes: null,
+    createdAt,
+    updatedAt,
+    jobDescription: mockJobDescription(),
+    ...overrides,
+  };
+}
 
 describe('candidate screening repository', () => {
   beforeEach(() => {
@@ -99,7 +213,9 @@ describe('candidate screening repository', () => {
     prismaMock.candidate.upsert.mockReset();
     prismaMock.candidateResume.create.mockReset();
     prismaMock.candidateResume.findFirst.mockReset();
+    prismaMock.candidateResume.findMany.mockReset();
     prismaMock.candidateResume.upsert.mockReset();
+    prismaMock.candidateInterviewFeedback.findMany.mockReset();
     prismaMock.candidateResumeChunk.deleteMany.mockReset();
     prismaMock.candidateScreeningRun.create.mockReset();
     prismaMock.candidateScreeningRun.findFirst.mockReset();
@@ -325,6 +441,398 @@ describe('candidate screening repository', () => {
         id: 'jd-1',
         position: '高级后端工程师',
       },
+    });
+  });
+
+  it('lists latest candidate resumes with mounted JD summaries', async () => {
+    prismaMock.candidateResume.findMany.mockResolvedValueOnce([
+      {
+        id: 'resume-1',
+        userId: 'u1',
+        candidateId: 'candidate-1',
+        sourcePlatform: 'boss-like',
+        profileUrl: 'https://example.test/ada',
+        rawText: 'TypeScript React product engineering leadership',
+        structuredSummary: { skills: ['TypeScript', 'React'] },
+        resumeHash: 'hash-new',
+        fetchedAt: updatedAt,
+        createdAt,
+        candidate: {
+          id: 'candidate-1',
+          userId: 'u1',
+          displayName: 'Ada',
+          currentTitle: 'Frontend Lead',
+          currentCompany: 'Analytical Engines',
+          location: 'Remote',
+          experienceYears: 8,
+          sourcePlatform: 'boss-like',
+          platformCandidateId: 'p-1',
+          profileUrl: 'https://example.test/ada',
+          identityKey: 'Ada|Analytical Engines',
+          identityHash: 'hash-1',
+          lastActiveAt: null,
+          contacted: true,
+          replied: true,
+          lastContactAt: updatedAt,
+          createdAt,
+          updatedAt,
+        },
+      },
+      {
+        id: 'resume-old',
+        userId: 'u1',
+        candidateId: 'candidate-1',
+        sourcePlatform: 'boss-like',
+        profileUrl: null,
+        rawText: 'Old resume',
+        structuredSummary: null,
+        resumeHash: 'hash-old',
+        fetchedAt: createdAt,
+        createdAt,
+        candidate: {
+          id: 'candidate-1',
+          userId: 'u1',
+          displayName: 'Ada',
+          currentTitle: 'Frontend Lead',
+          currentCompany: 'Analytical Engines',
+          location: 'Remote',
+          experienceYears: 8,
+          sourcePlatform: 'boss-like',
+          platformCandidateId: 'p-1',
+          profileUrl: 'https://example.test/ada',
+          identityKey: 'Ada|Analytical Engines',
+          identityHash: 'hash-1',
+          lastActiveAt: null,
+          contacted: true,
+          replied: true,
+          lastContactAt: updatedAt,
+          createdAt,
+          updatedAt,
+        },
+      },
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([
+      {
+        id: 'result-1',
+        userId: 'u1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        source: 'both',
+        tags: {
+          skills: [],
+          domainKnowledge: [],
+          generalAbility: [],
+          risk: [],
+          activity: [],
+          custom: [],
+        },
+        scoreDetail: { skill: 90, domain: 80, ability: 88, risk: 95, llmBonus: 0, total: 89 },
+        finalScore: 89,
+        rank: 1,
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        decisionReason: 'Strong fit',
+        actionPlan: null,
+        actionStatus: 'planned',
+        interviewStage: 'interviewing',
+        notes: '下周一面',
+        createdAt,
+        updatedAt,
+        jobDescription: {
+          id: 'jd-1',
+          userId: 'u1',
+          department: '技术部',
+          position: '高级前端工程师',
+          positionDescription: 'Build UI',
+          tone: 'tech',
+          status: 'published',
+          salaryRange: null,
+          workLocations: null,
+          content: { title: '高级前端工程师' },
+          evaluation: null,
+          generationMeta: null,
+          createdAt,
+          updatedAt,
+        },
+      },
+    ]);
+
+    const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 20 });
+
+    expect(prismaMock.candidateResume.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      include: { candidate: true },
+      orderBy: resumeLibraryOrderBy,
+      take: 60,
+    });
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', resumeId: { in: ['resume-1'] } },
+      include: { jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+    });
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]).toMatchObject({
+      resume: { id: 'resume-1', candidateId: 'candidate-1' },
+      candidate: { displayName: 'Ada' },
+      mountedJobs: [
+        {
+          screeningResultId: 'result-1',
+          candidateId: 'candidate-1',
+          resumeId: 'resume-1',
+          finalScore: 89,
+          interviewStage: 'interviewing',
+          decisionAction: 'chat',
+          jobDescription: {
+            id: 'jd-1',
+            position: '高级前端工程师',
+          },
+        },
+      ],
+    });
+  });
+
+  it('lists resumes without mounted JDs', async () => {
+    prismaMock.candidateResume.findMany.mockResolvedValueOnce([
+      {
+        id: 'resume-2',
+        userId: 'u1',
+        candidateId: 'candidate-2',
+        sourcePlatform: 'boss-like',
+        profileUrl: null,
+        rawText: 'Backend Go PostgreSQL',
+        structuredSummary: null,
+        resumeHash: 'hash-2',
+        fetchedAt: updatedAt,
+        createdAt,
+        candidate: {
+          id: 'candidate-2',
+          userId: 'u1',
+          displayName: 'Grace',
+          currentTitle: 'Backend Engineer',
+          currentCompany: null,
+          location: null,
+          experienceYears: null,
+          sourcePlatform: 'boss-like',
+          platformCandidateId: null,
+          profileUrl: null,
+          identityKey: 'Grace',
+          identityHash: 'hash-2',
+          lastActiveAt: null,
+          contacted: false,
+          replied: false,
+          lastContactAt: null,
+          createdAt,
+          updatedAt,
+        },
+      },
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 20 });
+
+    expect(resumes[0]?.mountedJobs).toEqual([]);
+  });
+
+  it('continues fetching resumes until enough unique candidates are found', async () => {
+    const duplicatePage = Array.from({ length: 6 }, (_, index) =>
+      mockResume({
+        id: `resume-candidate-1-${index}`,
+        candidateId: 'candidate-1',
+        resumeHash: `hash-candidate-1-${index}`,
+      }),
+    );
+    prismaMock.candidateResume.findMany.mockResolvedValueOnce(duplicatePage).mockResolvedValueOnce([
+      mockResume({
+        id: 'resume-candidate-2',
+        candidateId: 'candidate-2',
+        resumeHash: 'hash-candidate-2',
+      }),
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 2 });
+
+    expect(prismaMock.candidateResume.findMany).toHaveBeenNthCalledWith(1, {
+      where: { userId: 'u1' },
+      include: { candidate: true },
+      orderBy: resumeLibraryOrderBy,
+      take: 6,
+    });
+    expect(prismaMock.candidateResume.findMany).toHaveBeenNthCalledWith(2, {
+      where: { userId: 'u1' },
+      include: { candidate: true },
+      orderBy: resumeLibraryOrderBy,
+      take: 6,
+      skip: 6,
+    });
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        resumeId: { in: ['resume-candidate-1-0', 'resume-candidate-2'] },
+      },
+      include: { jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+    });
+    expect(resumes.map((item) => item.candidate.id)).toEqual(['candidate-1', 'candidate-2']);
+  });
+
+  it('clamps list limits for resource queries', async () => {
+    for (const [limit, take] of [
+      [Number.NaN, 600],
+      [0, 3],
+      [-10, 3],
+      [1.8, 3],
+      [9999, 1500],
+    ]) {
+      prismaMock.candidateResume.findMany.mockResolvedValueOnce([]);
+
+      await listCandidateResumeLibrary({ userId: 'u1', limit });
+
+      expect(prismaMock.candidateResume.findMany).toHaveBeenLastCalledWith({
+        where: { userId: 'u1' },
+        include: { candidate: true },
+        orderBy: resumeLibraryOrderBy,
+        take,
+      });
+    }
+
+    for (const [limit, take] of [
+      [Number.NaN, 200],
+      [0, 1],
+      [1.8, 1],
+      [9999, 500],
+    ]) {
+      prismaMock.candidateInterviewFeedback.findMany.mockResolvedValueOnce([]);
+
+      await listCandidateInterviewRecords({ userId: 'u1', limit });
+
+      expect(prismaMock.candidateInterviewFeedback.findMany).toHaveBeenLastCalledWith({
+        where: { userId: 'u1' },
+        include: { candidate: true, jobDescription: true },
+        orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+        take,
+      });
+    }
+
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await getCandidateTrackingOverview({ userId: 'u1', limit: Number.NaN });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenLastCalledWith({
+      where: { userId: 'u1' },
+      include: { candidate: true, resume: true, jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+      take: 200,
+    });
+  });
+
+  it('lists only mounted jobs for the displayed resume after fetching later resume pages', async () => {
+    const duplicatePage = Array.from({ length: 6 }, (_, index) =>
+      mockResume({
+        id: `resume-candidate-1-${index}`,
+        candidateId: 'candidate-1',
+        resumeHash: `hash-candidate-1-${index}`,
+      }),
+    );
+    prismaMock.candidateResume.findMany.mockResolvedValueOnce(duplicatePage).mockResolvedValueOnce([
+      mockResume({
+        id: 'resume-candidate-2',
+        candidateId: 'candidate-2',
+        resumeHash: 'hash-candidate-2',
+      }),
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([
+      mockScreeningResult({
+        id: 'result-newer-non-exact',
+        candidateId: 'candidate-2',
+        resumeId: 'resume-candidate-2-old',
+        updatedAt: new Date('2026-01-05T03:04:05.000Z'),
+      }),
+      mockScreeningResult({
+        id: 'result-exact',
+        candidateId: 'candidate-2',
+        resumeId: 'resume-candidate-2',
+        updatedAt,
+      }),
+    ]);
+
+    const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 2 });
+    const candidate = resumes.find((item) => item.candidate.id === 'candidate-2');
+
+    expect(candidate?.mountedJobs.map((job) => job.screeningResultId)).toEqual(['result-exact']);
+  });
+
+  it('lists interview records with candidate and JD context', async () => {
+    prismaMock.candidateInterviewFeedback.findMany.mockResolvedValueOnce([
+      {
+        id: 'feedback-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        stage: 'first_interview',
+        interviewer: 'Grace Hopper',
+        rating: 4,
+        pros: ['TypeScript 扎实'],
+        cons: ['系统设计需要追问'],
+        decision: 'pass',
+        notes: '建议二面',
+        createdAt,
+        updatedAt,
+        candidate: {
+          id: 'candidate-1',
+          userId: 'u1',
+          displayName: 'Ada',
+          currentTitle: 'Frontend Lead',
+          currentCompany: 'Analytical Engines',
+          location: 'Remote',
+          experienceYears: 8,
+          sourcePlatform: 'boss-like',
+          platformCandidateId: 'p-1',
+          profileUrl: 'https://example.test/ada',
+          identityKey: 'Ada|Analytical Engines',
+          identityHash: 'hash-1',
+          lastActiveAt: null,
+          contacted: true,
+          replied: true,
+          lastContactAt: updatedAt,
+          createdAt,
+          updatedAt,
+        },
+        jobDescription: {
+          id: 'jd-1',
+          userId: 'u1',
+          department: '技术部',
+          position: '高级前端工程师',
+          positionDescription: 'Build UI',
+          tone: 'tech',
+          status: 'published',
+          salaryRange: null,
+          workLocations: null,
+          content: { title: '高级前端工程师' },
+          evaluation: null,
+          generationMeta: null,
+          createdAt,
+          updatedAt,
+        },
+      },
+    ]);
+
+    const records = await listCandidateInterviewRecords({ userId: 'u1', limit: 20 });
+
+    expect(prismaMock.candidateInterviewFeedback.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      include: { candidate: true, jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+      take: 20,
+    });
+    expect(records[0]).toMatchObject({
+      id: 'feedback-1',
+      candidate: { id: 'candidate-1', displayName: 'Ada' },
+      jobDescription: { id: 'jd-1', position: '高级前端工程师' },
+      stage: 'first_interview',
+      decision: 'pass',
     });
   });
 

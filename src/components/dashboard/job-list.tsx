@@ -7,6 +7,7 @@ import {
   type DashboardOverviewDto,
   type DashboardPlatformFilter,
 } from '@/lib/dashboard/types';
+import { withReturnTarget, type ReturnTarget } from '@/lib/navigation/return-url';
 import type { JDStatus } from '@/types';
 
 type DashboardJobListProps = {
@@ -86,11 +87,17 @@ function StatusChip({ overview, status }: { overview: DashboardOverviewDto; stat
   );
 }
 
-function CandidateLink({ job }: { job: DashboardJobDto }) {
+function CandidateLink({
+  job,
+  returnTarget,
+}: {
+  job: DashboardJobDto;
+  returnTarget: ReturnTarget;
+}) {
   return (
     <Link
       className="text-foreground hover:text-primary inline-flex items-center gap-1 text-sm font-medium"
-      href={`/jd-generator/${job.id}/candidates`}
+      href={withReturnTarget(`/jd-generator/${job.id}/candidates`, returnTarget)}
     >
       <Users className="text-muted-foreground h-4 w-4" aria-hidden="true" />
       <span className="font-mono tabular-nums">{job.candidateStats.totalCandidates}</span>
@@ -101,6 +108,13 @@ function CandidateLink({ job }: { job: DashboardJobDto }) {
 
 function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOverviewDto }) {
   const location = job.workLocations.length > 0 ? job.workLocations.join(' / ') : '地点待定';
+  const returnTarget = {
+    href: dashboardHref({
+      status: overview.filters.status,
+      platform: overview.filters.platform,
+    }),
+    label: '返回工作台',
+  };
   const publishFailureMessage =
     job.status === 'publish_failed'
       ? `发布失败：${job.latestTask?.errorMessage?.trim() || '请查看发布记录'}`
@@ -111,7 +125,7 @@ function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOv
       <div className="min-w-0">
         <Link
           className="text-foreground block truncate text-sm font-medium hover:underline"
-          href={`/jd-generator/${job.id}`}
+          href={withReturnTarget(`/jd-generator/${job.id}`, returnTarget)}
         >
           {job.title}
         </Link>
@@ -154,7 +168,7 @@ function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOv
 
       <div className="min-w-0">
         <div className="text-muted-foreground text-xs">候选人</div>
-        <CandidateLink job={job} />
+        <CandidateLink job={job} returnTarget={returnTarget} />
         {job.candidateStats.followUpCandidates > 0 ? (
           <div className="text-muted-foreground mt-1 text-xs">
             {job.candidateStats.followUpCandidates} 个待跟进
@@ -168,7 +182,7 @@ function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOv
         as={Link}
         className="gap-2 justify-self-start xl:justify-self-end"
         disableRipple
-        href={`/jd-generator/${job.id}`}
+        href={withReturnTarget(`/jd-generator/${job.id}`, returnTarget)}
         size="sm"
         variant="light"
       >

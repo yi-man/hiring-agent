@@ -5,12 +5,14 @@ import { usePathname } from 'next/navigation';
 import {
   BrainCircuit,
   Building2,
+  ClipboardList,
   Eye,
   FileCode,
   FileText,
   GitBranch,
   LayoutDashboard,
   MessageCircle,
+  Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -45,6 +47,24 @@ const appMenuItems: AppMenuItem[] = [
     description: '生成与评估',
     href: '/jd-generator',
     Icon: FileText,
+  },
+  {
+    label: '候选人列表',
+    description: '推进与结果',
+    href: '/candidates',
+    Icon: Users,
+  },
+  {
+    label: '简历列表',
+    description: '简历与 JD 挂载',
+    href: '/resumes',
+    Icon: FileText,
+  },
+  {
+    label: '面试记录',
+    description: '反馈与结论',
+    href: '/interviews',
+    Icon: ClipboardList,
   },
   {
     label: 'Workflow 学习',
@@ -96,6 +116,7 @@ export function AppSidebar() {
             return (
               <Link
                 key={item.href}
+                aria-current={isActive ? 'page' : undefined}
                 href={item.href}
                 className={`group flex min-w-36 items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all lg:min-w-0 ${
                   isActive

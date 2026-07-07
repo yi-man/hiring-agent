@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, ListFilter, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { fetchJdCandidates, type CandidateListFilters } from '@/lib/candidate-screening/client';
@@ -15,6 +16,11 @@ import type {
   CandidateInterviewStage,
   CandidateScreeningSource,
 } from '@/lib/candidate-screening/types';
+import {
+  currentPathWithSearch,
+  getReturnTarget,
+  withReturnTarget,
+} from '@/lib/navigation/return-url';
 
 const decisionOptions: Array<{ value: '' | CandidateDecisionAction; label: string }> = [
   { value: '', label: '全部动作' },
@@ -44,6 +50,7 @@ function candidateSubtitle(item: CandidateScreeningResultListItem) {
 }
 
 export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }) {
+  const searchParams = useSearchParams();
   const [items, setItems] = useState<CandidateScreeningResultListItem[]>([]);
   const [decisionAction, setDecisionAction] = useState<'' | CandidateDecisionAction>('');
   const [interviewStage, setInterviewStage] = useState<'' | CandidateInterviewStage>('');
@@ -62,6 +69,14 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
     }),
     [decisionAction, interviewStage, scoreFilter, source],
   );
+  const returnTarget = getReturnTarget(searchParams, {
+    href: `/jd-generator/${jobDescriptionId}`,
+    label: '返回 JD',
+  });
+  const listReturnTarget = {
+    href: currentPathWithSearch(`/jd-generator/${jobDescriptionId}/candidates`, searchParams),
+    label: '返回候选人',
+  };
 
   async function loadCandidates(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -86,14 +101,9 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
     <div className="space-y-4">
       <div className="border-border flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <Button
-            as={Link}
-            className="mb-3 gap-2 px-0"
-            href={`/jd-generator/${jobDescriptionId}`}
-            variant="light"
-          >
+          <Button as={Link} className="mb-3 gap-2 px-0" href={returnTarget.href} variant="light">
             <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回 JD
+            {returnTarget.label}
           </Button>
           <div className="flex items-center gap-2">
             <ListFilter className="text-muted-foreground h-5 w-5" aria-hidden />
@@ -219,7 +229,10 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
                 <div className="min-w-0">
                   <Link
                     className="text-foreground block truncate text-sm font-medium hover:underline"
-                    href={`/jd-generator/${jobDescriptionId}/candidates/${item.candidateId}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${jobDescriptionId}/candidates/${item.candidateId}`,
+                      listReturnTarget,
+                    )}
                   >
                     {item.candidate.displayName}
                   </Link>

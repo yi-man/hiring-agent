@@ -1,25 +1,5 @@
-import { SignInButton } from '@/components/auth/sign-in-button';
-import { CandidateTrackingDashboard } from '@/components/candidate-screening/tracking-dashboard';
-import { getServerAuthSession } from '@/lib/auth/session';
+import { redirect } from 'next/navigation';
 
-export default async function CandidateTrackingPage() {
-  const session = await getServerAuthSession();
-
-  return (
-    <section className="container mx-auto px-4 py-8">
-      {!session?.user ? (
-        <div className="border-border bg-background/60 rounded-xl border p-8 text-center backdrop-blur">
-          <h1 className="text-foreground text-xl font-semibold">请先登录后继续</h1>
-          <p className="text-muted-foreground mt-2 text-sm">
-            登录本地账号后即可查看跨 JD 的候选人跟踪。
-          </p>
-          <div className="mt-6 flex justify-center">
-            <SignInButton />
-          </div>
-        </div>
-      ) : (
-        <CandidateTrackingDashboard />
-      )}
-    </section>
-  );
+export default function CandidateTrackingPage() {
+  redirect('/candidates');
 }

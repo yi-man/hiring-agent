@@ -53,7 +53,7 @@ export function SummaryCards({ overview }: SummaryCardsProps) {
     {
       label: '待跟进候选人',
       value: overview.summary.activeCandidates,
-      href: '/jd-generator/candidates',
+      href: '/candidates',
       detail: '跟进中候选人',
       Icon: Users,
       tone: 'text-violet-700 bg-violet-50 border-violet-200 dark:text-violet-200 dark:bg-violet-950/40 dark:border-violet-900',
