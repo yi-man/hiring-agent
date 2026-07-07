@@ -102,6 +102,7 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as { prisma: Pri
 
 const createdAt = new Date('2026-01-02T03:04:05.000Z');
 const updatedAt = new Date('2026-01-03T03:04:05.000Z');
+const resumeLibraryOrderBy = [{ fetchedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }];
 
 function mockCandidate(overrides: Record<string, unknown> = {}) {
   return {
@@ -563,7 +564,7 @@ describe('candidate screening repository', () => {
     expect(prismaMock.candidateResume.findMany).toHaveBeenCalledWith({
       where: { userId: 'u1' },
       include: { candidate: true },
-      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: resumeLibraryOrderBy,
       take: 60,
     });
     expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
@@ -656,13 +657,13 @@ describe('candidate screening repository', () => {
     expect(prismaMock.candidateResume.findMany).toHaveBeenNthCalledWith(1, {
       where: { userId: 'u1' },
       include: { candidate: true },
-      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: resumeLibraryOrderBy,
       take: 6,
     });
     expect(prismaMock.candidateResume.findMany).toHaveBeenNthCalledWith(2, {
       where: { userId: 'u1' },
       include: { candidate: true },
-      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: resumeLibraryOrderBy,
       take: 6,
       skip: 6,
     });
@@ -674,23 +675,52 @@ describe('candidate screening repository', () => {
     expect(resumes.map((item) => item.candidate.id)).toEqual(['candidate-1', 'candidate-2']);
   });
 
-  it('defaults invalid list limits for resume library and interview records', async () => {
-    prismaMock.candidateResume.findMany.mockResolvedValueOnce([]);
-    prismaMock.candidateInterviewFeedback.findMany.mockResolvedValueOnce([]);
+  it('clamps list limits for resource queries', async () => {
+    for (const [limit, take] of [
+      [Number.NaN, 600],
+      [0, 3],
+      [-10, 3],
+      [1.8, 3],
+      [9999, 1500],
+    ]) {
+      prismaMock.candidateResume.findMany.mockResolvedValueOnce([]);
 
-    await listCandidateResumeLibrary({ userId: 'u1', limit: Number.NaN });
-    await listCandidateInterviewRecords({ userId: 'u1', limit: Number.NaN });
+      await listCandidateResumeLibrary({ userId: 'u1', limit });
 
-    expect(prismaMock.candidateResume.findMany).toHaveBeenCalledWith({
+      expect(prismaMock.candidateResume.findMany).toHaveBeenLastCalledWith({
+        where: { userId: 'u1' },
+        include: { candidate: true },
+        orderBy: resumeLibraryOrderBy,
+        take,
+      });
+    }
+
+    for (const [limit, take] of [
+      [Number.NaN, 200],
+      [0, 1],
+      [1.8, 1],
+      [9999, 500],
+    ]) {
+      prismaMock.candidateInterviewFeedback.findMany.mockResolvedValueOnce([]);
+
+      await listCandidateInterviewRecords({ userId: 'u1', limit });
+
+      expect(prismaMock.candidateInterviewFeedback.findMany).toHaveBeenLastCalledWith({
+        where: { userId: 'u1' },
+        include: { candidate: true, jobDescription: true },
+        orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+        take,
+      });
+    }
+
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await getCandidateTrackingOverview({ userId: 'u1', limit: Number.NaN });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenLastCalledWith({
       where: { userId: 'u1' },
-      include: { candidate: true },
-      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
-      take: 600,
-    });
-    expect(prismaMock.candidateInterviewFeedback.findMany).toHaveBeenCalledWith({
-      where: { userId: 'u1' },
-      include: { candidate: true, jobDescription: true },
-      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+      include: { candidate: true, resume: true, jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
       take: 200,
     });
   });

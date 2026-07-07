@@ -1165,7 +1165,7 @@ export async function listCandidateResumeLibrary(params: {
     const rows = (await prisma.candidateResume.findMany({
       where: { userId: params.userId },
       include: { candidate: true },
-      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: batchSize,
       ...(offset > 0 ? { skip: offset } : {}),
     })) as CandidateResumeLibraryRecord[];
@@ -1221,7 +1221,7 @@ export async function getCandidateTrackingOverview(params: {
   userId: string;
   limit?: number;
 }): Promise<CandidateTrackingOverviewDto> {
-  const limit = Math.max(1, Math.min(500, Math.trunc(params.limit ?? 200)));
+  const limit = clampListLimit(params.limit);
   const rows = await prisma.candidateScreeningResult.findMany({
     where: { userId: params.userId },
     include: { candidate: true, resume: true, jobDescription: true },
