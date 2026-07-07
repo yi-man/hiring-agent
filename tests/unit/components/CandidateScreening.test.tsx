@@ -714,11 +714,114 @@ describe('candidate screening UI', () => {
     const jdLink = screen.getByRole('link', { name: 'Frontend Engineer' });
     expect(jdLink).toHaveAttribute('href', '/jd-generator/jd-1');
 
-    expect(screen.getByRole('button', { name: '查看原站' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '查看原站' })).toHaveAttribute(
       'href',
       '/api/jd/jd-1/candidates/cand-1/original-profile',
     );
     expect(screen.getByText(/Java 微服务，分布式系统，招聘 SaaS/)).toBeInTheDocument();
+  });
+
+  it('resume library exposes candidate detail links for each visible mounted JD', async () => {
+    fetchCandidateResumeLibraryMock.mockResolvedValueOnce([
+      {
+        ...sampleResumeLibraryItem,
+        mountedJobs: [
+          sampleResumeLibraryItem.mountedJobs[0],
+          {
+            ...sampleResumeLibraryItem.mountedJobs[0],
+            screeningResultId: 'result-2',
+            finalScore: 86,
+            jobDescription: {
+              id: 'jd-2',
+              department: 'Engineering',
+              position: 'Backend Engineer',
+              status: 'published',
+              title: 'Backend Engineer',
+              updatedAt: now,
+            },
+          },
+          {
+            ...sampleResumeLibraryItem.mountedJobs[0],
+            screeningResultId: 'result-3',
+            finalScore: 82,
+            jobDescription: {
+              id: 'jd-3',
+              department: 'Data',
+              position: 'Data Engineer',
+              status: 'published',
+              title: 'Data Engineer',
+              updatedAt: now,
+            },
+          },
+          {
+            ...sampleResumeLibraryItem.mountedJobs[0],
+            screeningResultId: 'result-4',
+            finalScore: 78,
+            jobDescription: {
+              id: 'jd-4',
+              department: 'Platform',
+              position: 'Platform Engineer',
+              status: 'published',
+              title: 'Platform Engineer',
+              updatedAt: now,
+            },
+          },
+        ],
+      },
+    ]);
+
+    render(<ResumeLibrary />);
+
+    expect(await screen.findByRole('link', { name: 'Frontend Engineer' })).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-1',
+    );
+    expect(screen.getByRole('link', { name: 'Backend Engineer' })).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-2',
+    );
+    expect(
+      screen.getByRole('link', { name: '查看 Backend Engineer 的候选人详情' }),
+    ).toHaveAttribute('href', '/jd-generator/jd-2/candidates/cand-1');
+    expect(screen.getByRole('link', { name: 'Data Engineer' })).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-3',
+    );
+    expect(screen.queryByRole('link', { name: 'Platform Engineer' })).not.toBeInTheDocument();
+    expect(screen.getByText('+1 个')).toBeInTheDocument();
+  });
+
+  it('resume library handles unmounted resumes with original profile fallback', async () => {
+    fetchCandidateResumeLibraryMock.mockResolvedValueOnce([
+      {
+        resume: {
+          ...sampleResume,
+          profileUrl: 'https://boss-like.test/resumes/resume-1',
+        },
+        candidate: {
+          ...sampleCandidate,
+          profileUrl: 'https://boss-like.test/candidates/cand-1',
+        },
+        mountedJobs: [],
+      },
+    ]);
+
+    render(<ResumeLibrary />);
+
+    expect(await screen.findByText('未挂载 JD')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Ada Lovelace' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看原站' })).toHaveAttribute(
+      'href',
+      'https://boss-like.test/candidates/cand-1',
+    );
+  });
+
+  it('resume library renders an empty state', async () => {
+    fetchCandidateResumeLibraryMock.mockResolvedValueOnce([]);
+
+    render(<ResumeLibrary />);
+
+    expect(await screen.findByText('暂无简历资源。')).toBeInTheDocument();
   });
 
   it('renders interview records with candidate and JD context', async () => {
@@ -735,6 +838,55 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
     expect(screen.getAllByText('pass').length).toBeGreaterThan(0);
     expect(screen.getByText('Java 基础扎实')).toBeInTheDocument();
+  });
+
+  it('interview records filters by decision', async () => {
+    fetchCandidateInterviewRecordsMock.mockResolvedValueOnce([
+      {
+        ...sampleFeedback,
+        candidate: sampleCandidate,
+        jobDescription: {
+          id: 'jd-1',
+          department: 'Engineering',
+          position: 'Frontend Engineer',
+          status: 'published',
+          title: 'Frontend Engineer',
+          updatedAt: now,
+        },
+      } satisfies CandidateInterviewRecordDto,
+      {
+        ...sampleFeedback,
+        id: 'feedback-2',
+        jobDescriptionId: 'jd-2',
+        candidateId: 'cand-2',
+        interviewer: 'Katherine Johnson',
+        pros: ['算法能力强'],
+        decision: 'reject',
+        candidate: {
+          ...sampleCandidate,
+          id: 'cand-2',
+          displayName: 'Alan Turing',
+        },
+        jobDescription: {
+          id: 'jd-2',
+          department: 'Engineering',
+          position: 'Backend Engineer',
+          status: 'published',
+          title: 'Backend Engineer',
+          updatedAt: now,
+        },
+      } satisfies CandidateInterviewRecordDto,
+    ]);
+
+    render(<InterviewRecordList />);
+
+    expect(await screen.findByText('Grace Hopper')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('面试结论筛选'), { target: { value: 'reject' } });
+
+    expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
+    expect(screen.getByText('Katherine Johnson')).toBeInTheDocument();
+    expect(screen.getByText('算法能力强')).toBeInTheDocument();
+    expect(screen.getAllByText('reject').length).toBeGreaterThan(0);
   });
 
   it('candidate list can switch from qualified scores to all scores', async () => {

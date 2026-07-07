@@ -122,6 +122,8 @@ export function ResumeLibrary() {
             {items.map((item) => {
               const primaryMountedJob = item.mountedJobs[0];
               const originHref = originalProfileHref(item);
+              const visibleMountedJobs = item.mountedJobs.slice(0, 3);
+              const hiddenMountedJobCount = item.mountedJobs.length - visibleMountedJobs.length;
               return (
                 <article
                   key={item.resume.id}
@@ -166,18 +168,34 @@ export function ResumeLibrary() {
                     <div className="text-muted-foreground mb-2 text-xs">挂载 JD</div>
                     {item.mountedJobs.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
-                        {item.mountedJobs.map((job) => (
-                          <Link
+                        {visibleMountedJobs.map((job) => (
+                          <div
                             key={job.screeningResultId}
-                            className="border-border bg-muted/40 text-foreground inline-flex max-w-full items-center gap-2 rounded-md border px-2.5 py-1 text-xs hover:underline"
-                            href={`/jd-generator/${job.jobDescription.id}`}
+                            className="border-border bg-muted/40 inline-flex max-w-full flex-col gap-1 rounded-md border px-2.5 py-2"
                           >
-                            <span className="truncate">{job.jobDescription.title}</span>
-                            <span className="text-muted-foreground font-mono" aria-hidden>
-                              {Math.round(job.finalScore)}
-                            </span>
-                          </Link>
+                            <Link
+                              className="text-foreground inline-flex max-w-full items-center gap-2 text-xs hover:underline"
+                              href={`/jd-generator/${job.jobDescription.id}`}
+                            >
+                              <span className="truncate">{job.jobDescription.title}</span>
+                              <span className="text-muted-foreground font-mono" aria-hidden>
+                                {Math.round(job.finalScore)}
+                              </span>
+                            </Link>
+                            <Link
+                              aria-label={`查看 ${job.jobDescription.title} 的候选人详情`}
+                              className="text-muted-foreground text-xs hover:underline"
+                              href={mountedCandidateHref(job)}
+                            >
+                              候选人详情
+                            </Link>
+                          </div>
                         ))}
+                        {hiddenMountedJobCount > 0 ? (
+                          <span className="border-border text-muted-foreground inline-flex items-center rounded-md border px-2.5 py-1 text-xs">
+                            +{hiddenMountedJobCount} 个
+                          </span>
+                        ) : null}
                       </div>
                     ) : (
                       <span className="text-muted-foreground text-sm">未挂载 JD</span>
@@ -186,17 +204,15 @@ export function ResumeLibrary() {
 
                   <div className="flex lg:justify-end">
                     {originHref ? (
-                      <Button
-                        as={Link}
-                        className="gap-2"
+                      <Link
+                        className="border-input bg-background text-foreground hover:bg-muted inline-flex h-10 items-center justify-center gap-2 rounded-md border px-4 text-sm font-medium"
                         href={originHref}
                         rel="noreferrer"
                         target="_blank"
-                        variant="bordered"
                       >
                         <ExternalLink className="h-4 w-4" aria-hidden />
                         查看原站
-                      </Button>
+                      </Link>
                     ) : (
                       <Button className="gap-2" isDisabled type="button" variant="bordered">
                         <ExternalLink className="h-4 w-4" aria-hidden />
