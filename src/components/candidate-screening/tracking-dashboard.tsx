@@ -25,6 +25,7 @@ const actionOptions: Array<{ value: '' | CandidateDecisionAction; label: string 
 ];
 
 type CandidateScope = 'active' | 'ended' | 'all';
+type CandidateProgressState = 'active' | 'rejected' | 'offer';
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -46,20 +47,27 @@ function candidateSubtitle(item: CandidateTrackingCandidateDto) {
     .join(' · ');
 }
 
-function getCandidateProgressLabel(item: CandidateTrackingCandidateDto) {
-  if (item.interviewStage === 'offer') return '录取/Offer';
+function getCandidateProgressState(item: CandidateTrackingCandidateDto): CandidateProgressState {
+  if (item.interviewStage === 'offer') return 'offer';
   if (
     item.interviewStage === 'rejected' ||
     item.interviewStage === 'withdrawn' ||
     item.decisionAction === 'skip'
   ) {
-    return '淘汰';
+    return 'rejected';
   }
+  return 'active';
+}
+
+function getCandidateProgressLabel(item: CandidateTrackingCandidateDto) {
+  const state = getCandidateProgressState(item);
+  if (state === 'offer') return '录取/Offer';
+  if (state === 'rejected') return '淘汰';
   return '正在推进';
 }
 
 function isEndedCandidate(item: CandidateTrackingCandidateDto) {
-  return getCandidateProgressLabel(item) !== '正在推进';
+  return getCandidateProgressState(item) !== 'active';
 }
 
 function isActiveCandidate(item: CandidateTrackingCandidateDto) {

@@ -952,7 +952,11 @@ describe('candidate screening UI', () => {
 
     render(<CandidateTrackingDashboard />);
 
-    expect(await screen.findByRole('link', { name: /Ada Lovelace/ })).toBeInTheDocument();
+    const activeCandidateLink = await screen.findByRole('link', { name: /Ada Lovelace/ });
+    expect(activeCandidateLink).toBeInTheDocument();
+    const activeCandidateRow = activeCandidateLink.closest('article');
+    expect(activeCandidateRow).not.toBeNull();
+    expect(within(activeCandidateRow as HTMLElement).getByText('正在推进')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Ended Candidate/ })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('跟踪范围'), { target: { value: 'ended' } });
