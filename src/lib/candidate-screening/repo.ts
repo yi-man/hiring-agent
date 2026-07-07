@@ -547,6 +547,14 @@ function iso(date: NullableDate): string | null {
   return date ? date.toISOString() : null;
 }
 
+const DEFAULT_LIST_LIMIT = 200;
+const MAX_LIST_LIMIT = 500;
+
+function clampListLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_LIST_LIMIT;
+  return Math.max(1, Math.min(MAX_LIST_LIMIT, Math.trunc(value)));
+}
+
 function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
   return {
     id: row.id,
@@ -1148,20 +1156,31 @@ export async function listCandidateResumeLibrary(params: {
   userId: string;
   limit?: number;
 }): Promise<CandidateResumeLibraryItemDto[]> {
-  const limit = Math.max(1, Math.min(500, Math.trunc(params.limit ?? 200)));
-  const rows = (await prisma.candidateResume.findMany({
-    where: { userId: params.userId },
-    include: { candidate: true },
-    orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
-    take: limit * 3,
-  })) as CandidateResumeLibraryRecord[];
-
+  const limit = clampListLimit(params.limit);
+  const batchSize = limit * 3;
   const latestByCandidate = new Map<string, CandidateResumeLibraryRecord>();
-  for (const row of rows) {
-    if (!latestByCandidate.has(row.candidateId)) {
-      latestByCandidate.set(row.candidateId, row);
+  let offset = 0;
+
+  while (latestByCandidate.size < limit) {
+    const rows = (await prisma.candidateResume.findMany({
+      where: { userId: params.userId },
+      include: { candidate: true },
+      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      take: batchSize,
+      ...(offset > 0 ? { skip: offset } : {}),
+    })) as CandidateResumeLibraryRecord[];
+
+    for (const row of rows) {
+      if (!latestByCandidate.has(row.candidateId)) {
+        latestByCandidate.set(row.candidateId, row);
+      }
+      if (latestByCandidate.size >= limit) {
+        break;
+      }
     }
-    if (latestByCandidate.size >= limit) {
+
+    offset += rows.length;
+    if (rows.length < batchSize) {
       break;
     }
   }
@@ -1318,7 +1337,7 @@ export async function listCandidateInterviewRecords(params: {
   userId: string;
   limit?: number;
 }): Promise<CandidateInterviewRecordDto[]> {
-  const limit = Math.max(1, Math.min(500, Math.trunc(params.limit ?? 200)));
+  const limit = clampListLimit(params.limit);
   const rows = await prisma.candidateInterviewFeedback.findMany({
     where: { userId: params.userId },
     include: { candidate: true, jobDescription: true },

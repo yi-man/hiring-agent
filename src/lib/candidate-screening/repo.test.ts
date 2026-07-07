@@ -103,6 +103,109 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as { prisma: Pri
 const createdAt = new Date('2026-01-02T03:04:05.000Z');
 const updatedAt = new Date('2026-01-03T03:04:05.000Z');
 
+function mockCandidate(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'candidate-1',
+    userId: 'u1',
+    displayName: 'Ada',
+    currentTitle: 'Frontend Lead',
+    currentCompany: 'Analytical Engines',
+    location: 'Remote',
+    experienceYears: 8,
+    sourcePlatform: 'boss-like',
+    platformCandidateId: 'p-1',
+    profileUrl: 'https://example.test/ada',
+    identityKey: 'Ada|Analytical Engines',
+    identityHash: 'hash-1',
+    lastActiveAt: null,
+    contacted: true,
+    replied: true,
+    lastContactAt: updatedAt,
+    createdAt,
+    updatedAt,
+    ...overrides,
+  };
+}
+
+function mockResume(overrides: Record<string, unknown> = {}) {
+  const candidateId =
+    typeof overrides.candidateId === 'string' ? overrides.candidateId : 'candidate-1';
+
+  return {
+    id: `resume-${candidateId}`,
+    userId: 'u1',
+    candidateId,
+    sourcePlatform: 'boss-like',
+    profileUrl: null,
+    rawText: 'Resume text',
+    structuredSummary: null,
+    resumeHash: `hash-${candidateId}`,
+    fetchedAt: updatedAt,
+    createdAt,
+    candidate: mockCandidate({
+      id: candidateId,
+      displayName: candidateId === 'candidate-1' ? 'Ada' : 'Grace',
+      identityKey: candidateId,
+      identityHash: `hash-${candidateId}`,
+    }),
+    ...overrides,
+  };
+}
+
+function mockJobDescription(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'jd-1',
+    userId: 'u1',
+    department: '技术部',
+    position: '高级前端工程师',
+    positionDescription: 'Build UI',
+    tone: 'tech',
+    status: 'published',
+    salaryRange: null,
+    workLocations: null,
+    content: { title: '高级前端工程师' },
+    evaluation: null,
+    generationMeta: null,
+    createdAt,
+    updatedAt,
+    ...overrides,
+  };
+}
+
+function mockScreeningResult(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'result-1',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: 'candidate-1',
+    resumeId: 'resume-candidate-1',
+    source: 'both',
+    tags: {
+      skills: [],
+      domainKnowledge: [],
+      generalAbility: [],
+      risk: [],
+      activity: [],
+      custom: [],
+    },
+    scoreDetail: { skill: 90, domain: 80, ability: 88, risk: 95, llmBonus: 0, total: 89 },
+    finalScore: 89,
+    rank: 1,
+    decisionAction: 'chat',
+    decisionPriority: 'high',
+    decisionReason: 'Strong fit',
+    actionPlan: null,
+    actionStatus: 'planned',
+    interviewStage: 'interviewing',
+    notes: null,
+    createdAt,
+    updatedAt,
+    jobDescription: mockJobDescription(),
+    ...overrides,
+  };
+}
+
 describe('candidate screening repository', () => {
   beforeEach(() => {
     prismaMock.candidate.findFirst.mockReset();
@@ -529,6 +632,106 @@ describe('candidate screening repository', () => {
     const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 20 });
 
     expect(resumes[0]?.mountedJobs).toEqual([]);
+  });
+
+  it('continues fetching resumes until enough unique candidates are found', async () => {
+    const duplicatePage = Array.from({ length: 6 }, (_, index) =>
+      mockResume({
+        id: `resume-candidate-1-${index}`,
+        candidateId: 'candidate-1',
+        resumeHash: `hash-candidate-1-${index}`,
+      }),
+    );
+    prismaMock.candidateResume.findMany.mockResolvedValueOnce(duplicatePage).mockResolvedValueOnce([
+      mockResume({
+        id: 'resume-candidate-2',
+        candidateId: 'candidate-2',
+        resumeHash: 'hash-candidate-2',
+      }),
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 2 });
+
+    expect(prismaMock.candidateResume.findMany).toHaveBeenNthCalledWith(1, {
+      where: { userId: 'u1' },
+      include: { candidate: true },
+      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      take: 6,
+    });
+    expect(prismaMock.candidateResume.findMany).toHaveBeenNthCalledWith(2, {
+      where: { userId: 'u1' },
+      include: { candidate: true },
+      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      take: 6,
+      skip: 6,
+    });
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', candidateId: { in: ['candidate-1', 'candidate-2'] } },
+      include: { jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+    });
+    expect(resumes.map((item) => item.candidate.id)).toEqual(['candidate-1', 'candidate-2']);
+  });
+
+  it('defaults invalid list limits for resume library and interview records', async () => {
+    prismaMock.candidateResume.findMany.mockResolvedValueOnce([]);
+    prismaMock.candidateInterviewFeedback.findMany.mockResolvedValueOnce([]);
+
+    await listCandidateResumeLibrary({ userId: 'u1', limit: Number.NaN });
+    await listCandidateInterviewRecords({ userId: 'u1', limit: Number.NaN });
+
+    expect(prismaMock.candidateResume.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      include: { candidate: true },
+      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }],
+      take: 600,
+    });
+    expect(prismaMock.candidateInterviewFeedback.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      include: { candidate: true, jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+      take: 200,
+    });
+  });
+
+  it('prioritizes exact resume mounted jobs after fetching later resume pages', async () => {
+    const duplicatePage = Array.from({ length: 6 }, (_, index) =>
+      mockResume({
+        id: `resume-candidate-1-${index}`,
+        candidateId: 'candidate-1',
+        resumeHash: `hash-candidate-1-${index}`,
+      }),
+    );
+    prismaMock.candidateResume.findMany.mockResolvedValueOnce(duplicatePage).mockResolvedValueOnce([
+      mockResume({
+        id: 'resume-candidate-2',
+        candidateId: 'candidate-2',
+        resumeHash: 'hash-candidate-2',
+      }),
+    ]);
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([
+      mockScreeningResult({
+        id: 'result-newer-non-exact',
+        candidateId: 'candidate-2',
+        resumeId: 'resume-candidate-2-old',
+        updatedAt: new Date('2026-01-05T03:04:05.000Z'),
+      }),
+      mockScreeningResult({
+        id: 'result-exact',
+        candidateId: 'candidate-2',
+        resumeId: 'resume-candidate-2',
+        updatedAt,
+      }),
+    ]);
+
+    const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 2 });
+    const candidate = resumes.find((item) => item.candidate.id === 'candidate-2');
+
+    expect(candidate?.mountedJobs.map((job) => job.screeningResultId)).toEqual([
+      'result-exact',
+      'result-newer-non-exact',
+    ]);
   });
 
   it('lists interview records with candidate and JD context', async () => {
