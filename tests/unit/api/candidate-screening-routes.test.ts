@@ -689,6 +689,32 @@ describe('candidate screening API routes', () => {
     expect(listCandidateResumeLibraryMock).toHaveBeenCalledWith({ userId: 'u1', limit: 500 });
   });
 
+  it('uses the default limit for an empty resume library limit', async () => {
+    listCandidateResumeLibraryMock.mockResolvedValueOnce([]);
+
+    const response = await listResumeLibraryRoute(
+      new Request('http://localhost/api/resumes?limit='),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.resumes).toEqual([]);
+    expect(listCandidateResumeLibraryMock).toHaveBeenCalledWith({ userId: 'u1', limit: 200 });
+  });
+
+  it('uses the default limit for a whitespace resume library limit', async () => {
+    listCandidateResumeLibraryMock.mockResolvedValueOnce([]);
+
+    const response = await listResumeLibraryRoute(
+      new Request('http://localhost/api/resumes?limit=%20%20'),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.resumes).toEqual([]);
+    expect(listCandidateResumeLibraryMock).toHaveBeenCalledWith({ userId: 'u1', limit: 200 });
+  });
+
   it('lists interview records for the current user', async () => {
     listCandidateInterviewRecordsMock.mockResolvedValueOnce([
       {
@@ -712,6 +738,32 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(200);
     expect(body.interviews).toHaveLength(1);
+    expect(listCandidateInterviewRecordsMock).toHaveBeenCalledWith({ userId: 'u1', limit: 200 });
+  });
+
+  it('uses the default limit for an empty interview records limit', async () => {
+    listCandidateInterviewRecordsMock.mockResolvedValueOnce([]);
+
+    const response = await listInterviewRecordsRoute(
+      new Request('http://localhost/api/interviews?limit='),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.interviews).toEqual([]);
+    expect(listCandidateInterviewRecordsMock).toHaveBeenCalledWith({ userId: 'u1', limit: 200 });
+  });
+
+  it('uses the default limit for a whitespace interview records limit', async () => {
+    listCandidateInterviewRecordsMock.mockResolvedValueOnce([]);
+
+    const response = await listInterviewRecordsRoute(
+      new Request('http://localhost/api/interviews?limit=%20%20'),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.interviews).toEqual([]);
     expect(listCandidateInterviewRecordsMock).toHaveBeenCalledWith({ userId: 'u1', limit: 200 });
   });
 

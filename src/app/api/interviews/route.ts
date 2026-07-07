@@ -6,7 +6,7 @@ const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 500;
 
 function parseLimit(value: string | null): number {
-  if (value === null) return DEFAULT_LIMIT;
+  if (value === null || value.trim() === '') return DEFAULT_LIMIT;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_LIMIT;
   return Math.max(1, Math.min(MAX_LIMIT, Math.trunc(parsed)));
