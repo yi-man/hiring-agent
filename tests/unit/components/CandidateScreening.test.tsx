@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { JDDetailView, JDListView } from '@/components/jd-generator/jd-pages';
 import { CandidateList } from '@/components/candidate-screening/candidate-list';
+import { InterviewRecordList } from '@/components/candidate-screening/interview-record-list';
+import { ResumeLibrary } from '@/components/candidate-screening/resume-library';
 import { CandidateCommunicationRunLog } from '@/components/candidate-communication/communication-run-log';
 import { CandidateDetail } from '@/components/candidate-screening/candidate-detail';
 import { CandidateScreeningRunLog } from '@/components/candidate-screening/screening-run-log';
@@ -8,7 +10,9 @@ import { CandidateTrackingDashboard } from '@/components/candidate-screening/tra
 import type {
   CandidateDto,
   CandidateInterviewFeedbackDto,
+  CandidateInterviewRecordDto,
   CandidateDecisionResultDto,
+  CandidateResumeLibraryItemDto,
   CandidateResumeDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultListItem,
@@ -205,6 +209,30 @@ const sampleResume: CandidateResumeDto = {
   resumeHash: 'resume-hash-1',
   fetchedAt: now,
   createdAt: now,
+};
+
+const sampleResumeLibraryItem: CandidateResumeLibraryItemDto = {
+  resume: sampleResume,
+  candidate: sampleCandidate,
+  mountedJobs: [
+    {
+      screeningResultId: 'result-1',
+      candidateId: 'cand-1',
+      resumeId: 'resume-1',
+      finalScore: 89,
+      interviewStage: 'to_contact',
+      decisionAction: 'chat',
+      updatedAt: now,
+      jobDescription: {
+        id: 'jd-1',
+        department: 'Engineering',
+        position: 'Frontend Engineer',
+        status: 'published',
+        title: 'Frontend Engineer',
+        updatedAt: now,
+      },
+    },
+  ],
 };
 
 const sampleCandidateListItem: CandidateScreeningResultListItem = {
@@ -461,6 +489,21 @@ describe('candidate screening UI', () => {
     saveCandidateInterviewFeedbackMock.mockResolvedValue(sampleFeedback);
     evaluateJdCandidateDecisionMock.mockResolvedValue(sampleDecisionResult);
     fetchCandidateTrackingOverviewMock.mockResolvedValue(sampleTrackingOverview);
+    fetchCandidateResumeLibraryMock.mockResolvedValue([sampleResumeLibraryItem]);
+    fetchCandidateInterviewRecordsMock.mockResolvedValue([
+      {
+        ...sampleFeedback,
+        candidate: sampleCandidate,
+        jobDescription: {
+          id: 'jd-1',
+          department: 'Engineering',
+          position: 'Frontend Engineer',
+          status: 'published',
+          title: 'Frontend Engineer',
+          updatedAt: now,
+        },
+      } satisfies CandidateInterviewRecordDto,
+    ]);
     updateJdCandidateProgressMock.mockResolvedValue({
       ...sampleCandidateListItem,
       interviewStage: 'phone_screen',
@@ -658,6 +701,40 @@ describe('candidate screening UI', () => {
     expect(screen.getAllByText('both').length).toBeGreaterThan(0);
     expect(screen.getByText('planned')).toBeInTheDocument();
     expect(screen.getAllByText('to_contact').length).toBeGreaterThan(0);
+  });
+
+  it('renders resume library with mounted JD links and resume summary', async () => {
+    render(<ResumeLibrary />);
+
+    expect(await screen.findByRole('heading', { name: '简历列表' })).toBeInTheDocument();
+
+    const candidateLink = screen.getByRole('link', { name: 'Ada Lovelace' });
+    expect(candidateLink).toHaveAttribute('href', '/jd-generator/jd-1/candidates/cand-1');
+
+    const jdLink = screen.getByRole('link', { name: 'Frontend Engineer' });
+    expect(jdLink).toHaveAttribute('href', '/jd-generator/jd-1');
+
+    expect(screen.getByRole('button', { name: '查看原站' })).toHaveAttribute(
+      'href',
+      '/api/jd/jd-1/candidates/cand-1/original-profile',
+    );
+    expect(screen.getByText(/Java 微服务，分布式系统，招聘 SaaS/)).toBeInTheDocument();
+  });
+
+  it('renders interview records with candidate and JD context', async () => {
+    render(<InterviewRecordList />);
+
+    expect(await screen.findByRole('heading', { name: '面试记录' })).toBeInTheDocument();
+
+    const candidateLink = screen.getByRole('link', { name: 'Ada Lovelace' });
+    expect(candidateLink).toHaveAttribute('href', '/jd-generator/jd-1/candidates/cand-1');
+
+    const jdLink = screen.getByRole('link', { name: 'Frontend Engineer' });
+    expect(jdLink).toHaveAttribute('href', '/jd-generator/jd-1');
+
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
+    expect(screen.getAllByText('pass').length).toBeGreaterThan(0);
+    expect(screen.getByText('Java 基础扎实')).toBeInTheDocument();
   });
 
   it('candidate list can switch from qualified scores to all scores', async () => {
