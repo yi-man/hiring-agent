@@ -1,7 +1,4 @@
-import {
-  getDefaultJdScreeningSummary,
-  listJdScreeningSummaries,
-} from '@/lib/jd/screening-summary';
+import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 
 jest.mock('@/lib/prisma', () => ({
   prisma: {

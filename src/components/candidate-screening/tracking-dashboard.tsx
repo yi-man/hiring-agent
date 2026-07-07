@@ -2,13 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, ExternalLink, Eye, ListFilter, MessageCircle, RefreshCw } from 'lucide-react';
-import { CandidateCommunicationSyncResultPanel } from '@/components/candidate-communication/sync-result-panel';
 import { Button, Chip } from '@/components/ui';
-import {
-  syncUnreadCandidateConversations,
-  type SyncUnreadCandidateConversationsResult,
-} from '@/lib/candidate-communication/client';
+import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
 import { fetchCandidateTrackingOverview } from '@/lib/candidate-screening/client';
 import { CANDIDATE_SCREENING_INTERVIEW_STAGES } from '@/lib/candidate-screening/constants';
 import type {
@@ -56,6 +53,7 @@ function isActiveCandidate(item: CandidateTrackingCandidateDto) {
 }
 
 export function CandidateTrackingDashboard() {
+  const router = useRouter();
   const [overview, setOverview] = useState<CandidateTrackingOverviewDto>({
     jobs: [],
     candidates: [],
@@ -66,8 +64,6 @@ export function CandidateTrackingDashboard() {
   const [scope, setScope] = useState<'active' | 'all'>('active');
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
-  const [communicationSyncResult, setCommunicationSyncResult] =
-    useState<SyncUnreadCandidateConversationsResult | null>(null);
   const [error, setError] = useState('');
 
   async function loadOverview(options?: { silent?: boolean }) {
@@ -90,15 +86,14 @@ export function CandidateTrackingDashboard() {
 
   async function handleSyncCommunication() {
     setIsSyncingCommunication(true);
-    setCommunicationSyncResult(null);
     setError('');
     try {
-      const result = await syncUnreadCandidateConversations({
+      const run = await startCandidateCommunicationRun({
+        mode: 'batch',
         platform: 'boss-like',
         maxPasses: 10,
       });
-      setCommunicationSyncResult(result);
-      await loadOverview({ silent: true });
+      router.push(`/jd-generator/communication-runs/${run.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人沟通失败');
     } finally {
@@ -143,7 +138,7 @@ export function CandidateTrackingDashboard() {
             onClick={() => void handleSyncCommunication()}
           >
             <MessageCircle className="h-4 w-4" aria-hidden />
-            {isSyncingCommunication ? '启动中' : '启动沟通'}
+            {isSyncingCommunication ? '启动中' : '批量沟通'}
           </Button>
           <Button
             className="gap-2"
@@ -162,10 +157,6 @@ export function CandidateTrackingDashboard() {
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
           {error}
         </div>
-      ) : null}
-
-      {communicationSyncResult ? (
-        <CandidateCommunicationSyncResultPanel result={communicationSyncResult} />
       ) : null}
 
       <section className="border-border rounded-lg border p-4">

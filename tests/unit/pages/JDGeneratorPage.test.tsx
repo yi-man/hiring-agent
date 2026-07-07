@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { JDCreateView, JDDetailView, JDListView } from '@/components/jd-generator/jd-pages';
 import type { JobDescriptionDto } from '@/types';
 
@@ -56,6 +56,19 @@ const sampleJobDescription: JobDescriptionDto = {
   updatedAt: '2026-06-25T02:00:00.000Z',
 };
 
+const screenedJobDescription: JobDescriptionDto = {
+  ...sampleJobDescription,
+  status: 'published',
+  screeningSummary: {
+    status: 'screened',
+    totalCandidateCount: 3,
+    qualifiedCandidateCount: 2,
+    latestRunId: 'run-1',
+    latestRunStatus: 'success',
+    latestRunUpdatedAt: '2026-07-06T03:00:00.000Z',
+  },
+};
+
 const sampleCompanyProfile = {
   id: 'profile-1',
   userId: 'u1',
@@ -88,27 +101,53 @@ describe('JD pages', () => {
     global.fetch = jest.fn();
   });
 
-  it('renders the JD list with status and detail link', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        jobDescriptions: [sampleJobDescription],
-        total: 1,
-      }),
-    });
+  it('renders the JD list with default published status filter and screening summary', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescriptions: [screenedJobDescription],
+          total: 1,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescriptions: [{ ...sampleJobDescription, status: 'created' }],
+          total: 1,
+        }),
+      });
 
     render(<JDListView />);
 
     expect(await screen.findAllByText('前端工程师')).toHaveLength(2);
-    expect(screen.getByText('created')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith('/api/jd?status=published');
+    expect(screen.getAllByText('published').length).toBeGreaterThan(0);
+    expect(screen.getByText('已筛选')).toBeInTheDocument();
+    expect(screen.getByText('合格 2 / 全部 3')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建 JD' })).toHaveAttribute(
       'href',
       '/jd-generator/new',
     );
-    expect(screen.getByRole('button', { name: '查看' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '详情' })).toHaveAttribute(
       'href',
       '/jd-generator/jd-1',
     );
+    expect(screen.getByRole('button', { name: '继续筛选' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '筛选记录' })).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-1/screening-runs/run-1',
+    );
+    expect(screen.getByRole('button', { name: '候选人' })).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-1/candidates',
+    );
+
+    fireEvent.change(screen.getByLabelText('JD 状态筛选'), { target: { value: 'created' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenLastCalledWith('/api/jd?status=created');
+    });
   });
 
   it('creates a JD from selected department and position', async () => {
@@ -156,7 +195,7 @@ describe('JD pages', () => {
         }),
       );
     });
-    expect(pushMock).toHaveBeenCalledWith('/jd-generator/jd-1');
+    expect(pushMock).toHaveBeenCalledWith('/jd-generator/jd-1/runs/create');
   });
 
   it('edits, saves and regenerates a JD detail', async () => {
@@ -284,5 +323,40 @@ describe('JD pages', () => {
         }),
       );
     });
+  });
+
+  it('renders published JD detail as read-only with primary actions at the top', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: screenedJobDescription }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    const summary = await screen.findByLabelText('岗位摘要');
+    expect(summary).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('JD 标题')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('发布状态')).toBeDisabled();
+
+    const topActions = screen.getByLabelText('JD 详情主操作');
+    expect(within(topActions).getByRole('button', { name: '继续筛选' })).toBeInTheDocument();
+    expect(within(topActions).getByRole('button', { name: /已筛选候选人/ })).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-1/candidates',
+    );
+    expect(within(topActions).getByRole('button', { name: '批量沟通' })).toBeInTheDocument();
+
+    expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布到 Boss-like' })).not.toBeInTheDocument();
   });
 });

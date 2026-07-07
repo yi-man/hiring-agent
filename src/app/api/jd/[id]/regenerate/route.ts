@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { JDAgentContextRetrievalError, runJDAgent } from '@/lib/jd-agent/service';
-import { getJobDescriptionById, updateJobDescription } from '@/lib/jd/job-description-repo';
+import { getJobDescriptionById, updateMutableJobDescription } from '@/lib/jd/job-description-repo';
 import { parseRegenerateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {
@@ -10,6 +10,14 @@ function badRequest(message: string) {
 
 function conflict(message: string) {
   return NextResponse.json({ error: message }, { status: 409 });
+}
+
+async function mutableUpdateMissResponse(userId: string, id: string) {
+  const latest = await getJobDescriptionById(userId, id);
+  if (latest?.status === 'published') {
+    return conflict('published job descriptions cannot be modified');
+  }
+  return NextResponse.json({ error: 'job description not found' }, { status: 404 });
 }
 
 function serverErrorResponse(error: unknown) {
@@ -71,7 +79,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       { userId: auth.user.id },
     );
 
-    const jobDescription = await updateJobDescription({
+    const jobDescription = await updateMutableJobDescription({
       userId: auth.user.id,
       id,
       tone: value.tone,
@@ -81,7 +89,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       generationMeta: agentResponse.meta,
     });
     if (!jobDescription) {
-      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+      return mutableUpdateMissResponse(auth.user.id, id);
     }
 
     return NextResponse.json({ jobDescription });

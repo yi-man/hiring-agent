@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { JDDetailView, JDListView } from '@/components/jd-generator/jd-pages';
 import { CandidateList } from '@/components/candidate-screening/candidate-list';
+import { CandidateCommunicationRunLog } from '@/components/candidate-communication/communication-run-log';
 import { CandidateDetail } from '@/components/candidate-screening/candidate-detail';
+import { CandidateScreeningRunLog } from '@/components/candidate-screening/screening-run-log';
 import { CandidateTrackingDashboard } from '@/components/candidate-screening/tracking-dashboard';
 import type {
   CandidateDto,
@@ -22,6 +24,7 @@ const updateJobDescriptionResourceMock = jest.fn();
 const regenerateJobDescriptionMock = jest.fn();
 const publishJobDescriptionResourceMock = jest.fn();
 const createCandidateScreeningRunMock = jest.fn();
+const fetchCandidateScreeningRunMock = jest.fn();
 const fetchJdCandidatesMock = jest.fn();
 const fetchJdCandidateDetailMock = jest.fn();
 const fetchCandidateTrackingOverviewMock = jest.fn();
@@ -29,9 +32,12 @@ const updateJdCandidateProgressMock = jest.fn();
 const fetchCandidateInterviewFeedbacksMock = jest.fn();
 const saveCandidateInterviewFeedbackMock = jest.fn();
 const evaluateJdCandidateDecisionMock = jest.fn();
+const startCandidateCommunicationRunMock = jest.fn();
+const fetchCandidateCommunicationRunMock = jest.fn();
+const routerPushMock = jest.fn();
 
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: jest.fn(), refresh: jest.fn() }),
+  useRouter: () => ({ push: routerPushMock, refresh: jest.fn() }),
 }));
 
 jest.mock('@/lib/jd/client', () => ({
@@ -47,6 +53,7 @@ jest.mock('@/lib/jd/client', () => ({
 
 jest.mock('@/lib/candidate-screening/client', () => ({
   createCandidateScreeningRun: (...args: unknown[]) => createCandidateScreeningRunMock(...args),
+  fetchCandidateScreeningRun: (...args: unknown[]) => fetchCandidateScreeningRunMock(...args),
   fetchCandidateTrackingOverview: (...args: unknown[]) =>
     fetchCandidateTrackingOverviewMock(...args),
   fetchJdCandidates: (...args: unknown[]) => fetchJdCandidatesMock(...args),
@@ -57,6 +64,13 @@ jest.mock('@/lib/candidate-screening/client', () => ({
     saveCandidateInterviewFeedbackMock(...args),
   evaluateJdCandidateDecision: (...args: unknown[]) => evaluateJdCandidateDecisionMock(...args),
   updateJdCandidateProgress: (...args: unknown[]) => updateJdCandidateProgressMock(...args),
+}));
+
+jest.mock('@/lib/candidate-communication/client', () => ({
+  startCandidateCommunicationRun: (...args: unknown[]) =>
+    startCandidateCommunicationRunMock(...args),
+  fetchCandidateCommunicationRun: (...args: unknown[]) =>
+    fetchCandidateCommunicationRunMock(...args),
 }));
 
 jest.mock('@/components/ui', () => ({
@@ -298,6 +312,43 @@ const sampleDecisionResult: CandidateDecisionResultDto = {
   suggestions: [{ type: 'action', content: '先确认薪资预期再发 offer' }],
 };
 
+const sampleCommunicationRun = {
+  id: 'comm-run-1',
+  userId: 'u1',
+  jobDescriptionId: 'jd-1',
+  candidateId: null,
+  platform: 'boss-like',
+  mode: 'batch',
+  status: 'success',
+  stats: {
+    total: 2,
+    selected: 2,
+    processed: 2,
+    failed: 0,
+    passes: 3,
+    records: [
+      {
+        candidateId: 'cand-1',
+        candidateName: 'Ada Lovelace',
+        status: 'success',
+        detail: '已处理未读消息',
+      },
+    ],
+  },
+  errorMessage: null,
+  startedAt: now,
+  finishedAt: now,
+  createdAt: now,
+  updatedAt: now,
+  jobDescription: {
+    id: 'jd-1',
+    department: '技术部',
+    position: '高级后端工程师',
+    status: 'published',
+  },
+  candidate: null,
+};
+
 const sampleTrackingOverview: CandidateTrackingOverviewDto = {
   jobs: [
     {
@@ -342,6 +393,7 @@ describe('candidate screening UI', () => {
     regenerateJobDescriptionMock.mockReset();
     publishJobDescriptionResourceMock.mockReset();
     createCandidateScreeningRunMock.mockReset();
+    fetchCandidateScreeningRunMock.mockReset();
     fetchJdCandidatesMock.mockReset();
     fetchJdCandidateDetailMock.mockReset();
     fetchCandidateTrackingOverviewMock.mockReset();
@@ -349,6 +401,11 @@ describe('candidate screening UI', () => {
     fetchCandidateInterviewFeedbacksMock.mockReset();
     saveCandidateInterviewFeedbackMock.mockReset();
     evaluateJdCandidateDecisionMock.mockReset();
+    startCandidateCommunicationRunMock.mockReset();
+    fetchCandidateCommunicationRunMock.mockReset();
+    routerPushMock.mockReset();
+    startCandidateCommunicationRunMock.mockResolvedValue(sampleCommunicationRun);
+    fetchCandidateCommunicationRunMock.mockResolvedValue(sampleCommunicationRun);
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -363,6 +420,34 @@ describe('candidate screening UI', () => {
     fetchJobDescriptionMock.mockResolvedValue(sampleJobDescription);
     fetchJobDescriptionPublishTasksMock.mockResolvedValue([]);
     createCandidateScreeningRunMock.mockResolvedValue(sampleRun);
+    fetchCandidateScreeningRunMock.mockResolvedValue({
+      ...sampleRun,
+      status: 'success',
+      currentStage: 'finalizing',
+      searchPlan: {
+        keywords: ['Java', '招聘 SaaS'],
+        filters: { experience: '5年以上', location: '上海' },
+        priorityTags: ['Java', '微服务'],
+        retrievalQuery: 'Java 微服务 招聘 SaaS',
+      },
+      evaluationSchema: {
+        skills: ['Java', '微服务'],
+        domainKnowledge: ['招聘 SaaS'],
+        generalAbility: ['owner'],
+        risk: ['跳槽频繁'],
+      },
+      stats: {
+        fetched: 12,
+        deduped: 3,
+        stored: 9,
+        vectorRecalled: 4,
+        evaluated: 9,
+        recommendedChat: 1,
+        recommendedCollect: 1,
+        skipped: 1,
+        failed: 0,
+      },
+    });
     fetchJdCandidatesMock.mockResolvedValue([sampleCandidateListItem]);
     fetchJdCandidateDetailMock.mockResolvedValue(sampleCandidateDetail);
     fetchCandidateInterviewFeedbacksMock.mockResolvedValue([sampleFeedback]);
@@ -394,7 +479,79 @@ describe('candidate screening UI', () => {
     expect(trackingLink).toHaveAttribute('href', '/jd-generator/candidates');
   });
 
-  it('starts an execution screening run and shows the run id', async () => {
+  it('JD list renders status-specific actions and starts a new screening run from published rows', async () => {
+    fetchJobDescriptionsMock.mockResolvedValueOnce([
+      { ...sampleJobDescription, id: 'jd-created', status: 'created' },
+      { ...sampleJobDescription, id: 'jd-ready', status: 'ready_to_publish' },
+      { ...sampleJobDescription, id: 'jd-publishing', status: 'publishing' },
+      {
+        ...sampleJobDescription,
+        id: 'jd-published',
+        status: 'published',
+        screeningSummary: {
+          status: 'screened',
+          totalCandidateCount: 3,
+          qualifiedCandidateCount: 2,
+          latestRunId: 'run-latest',
+          latestRunStatus: 'success',
+          latestRunUpdatedAt: now,
+        },
+      },
+      { ...sampleJobDescription, id: 'jd-failed', status: 'publish_failed' },
+      { ...sampleJobDescription, id: 'jd-offline', status: 'offline' },
+    ]);
+    createCandidateScreeningRunMock.mockResolvedValueOnce({ ...sampleRun, id: 'run-new' });
+
+    render(<JDListView />);
+
+    const actionCells = await screen.findAllByLabelText('JD 操作');
+    expect(actionCells).toHaveLength(6);
+    for (const cell of actionCells) {
+      expect(cell.className).toContain('md:w-[360px]');
+    }
+    const detailLinks = screen.getAllByText('详情').map((node) => node.closest('a'));
+    expect(detailLinks).toHaveLength(6);
+    expect(detailLinks[3]).toHaveAttribute('href', '/jd-generator/jd-published');
+    expect((await screen.findByText('编辑')).closest('a')).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-created',
+    );
+    expect(screen.getByText('发布').closest('a')).toHaveAttribute('href', '/jd-generator/jd-ready');
+    expect(screen.getByText('发布记录').closest('a')).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-publishing',
+    );
+    expect(screen.getByText('重试发布').closest('a')).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-failed',
+    );
+    expect(screen.getByText('查看').closest('a')).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-offline',
+    );
+    expect(screen.getByText('筛选记录').closest('a')).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-published/screening-runs/run-latest',
+    );
+    expect(screen.getByText('候选人').closest('a')).toHaveAttribute(
+      'href',
+      '/jd-generator/jd-published/candidates',
+    );
+
+    fireEvent.click(screen.getByText('继续筛选').closest('button') as HTMLButtonElement);
+
+    await waitFor(() =>
+      expect(createCandidateScreeningRunMock).toHaveBeenCalledWith('jd-published', {
+        platform: 'boss-like',
+        mode: 'execution',
+      }),
+    );
+    expect(routerPushMock).toHaveBeenCalledWith(
+      '/jd-generator/jd-published/screening-runs/run-new',
+    );
+  });
+
+  it('starts an execution screening run and opens the run log page', async () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
     fireEvent.click(await screen.findByRole('button', { name: '筛选并执行' }));
@@ -405,40 +562,109 @@ describe('candidate screening UI', () => {
         mode: 'execution',
       }),
     );
-    expect(await screen.findByText(/run-1/)).toBeInTheDocument();
+    expect(routerPushMock).toHaveBeenCalledWith('/jd-generator/jd-1/screening-runs/run-1');
   });
 
-  it('starts a recruiter-wide communication flow from JD detail and shows the result', async () => {
+  it('screening run log renders execution steps, summary counts, and per-candidate outcomes', async () => {
+    fetchJdCandidatesMock.mockResolvedValueOnce([
+      sampleCandidateListItem,
+      {
+        ...sampleCandidateListItem,
+        id: 'result-2',
+        candidateId: 'cand-2',
+        finalScore: 68,
+        rank: 2,
+        decisionAction: 'chat',
+        decisionReason: '分数不足，不能计入合格',
+        candidate: {
+          ...sampleCandidate,
+          id: 'cand-2',
+          displayName: '低分候选人',
+        },
+      },
+      {
+        ...sampleCandidateListItem,
+        id: 'result-3',
+        candidateId: 'cand-3',
+        finalScore: 82,
+        rank: 3,
+        decisionAction: 'skip',
+        actionStatus: 'skipped',
+        decisionReason: '地点不匹配',
+        candidate: {
+          ...sampleCandidate,
+          id: 'cand-3',
+          displayName: '跳过候选人',
+        },
+      },
+    ]);
+
+    render(<CandidateScreeningRunLog jobDescriptionId="jd-1" runId="run-1" />);
+
+    expect(await screen.findByText('筛选执行日志')).toBeInTheDocument();
+    expect(fetchCandidateScreeningRunMock).toHaveBeenCalledWith('run-1');
+    expect(fetchJdCandidatesMock).toHaveBeenCalledWith('jd-1', {
+      runId: 'run-1',
+      limit: 100,
+    });
+    expect(screen.getByText('3 条')).toBeInTheDocument();
+    expect(screen.getByText('2 条合格')).toBeInTheDocument();
+    expect(screen.getByText('1 条入选')).toBeInTheDocument();
+    expect(screen.getByText('制定搜索计划')).toBeInTheDocument();
+    expect(screen.getByText('执行动作')).toBeInTheDocument();
+    expect(screen.getByText('Java 微服务 招聘 SaaS')).toBeInTheDocument();
+    expect(screen.getByText('低分候选人')).toBeInTheDocument();
+    expect(screen.getByText('未达标')).toBeInTheDocument();
+    expect(screen.getByText('跳过候选人')).toBeInTheDocument();
+    expect(screen.getByText('已跳过')).toBeInTheDocument();
+  });
+
+  it('starts a JD-scoped batch communication run from JD detail', async () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '启动沟通' }));
+    fireEvent.click(await screen.findByRole('button', { name: '批量沟通' }));
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/candidate-conversations/sync-unread',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({
-            platform: 'boss-like',
-            maxPasses: 10,
-          }),
-        }),
-      ),
+      expect(startCandidateCommunicationRunMock).toHaveBeenCalledWith({
+        mode: 'batch',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        maxPasses: 10,
+      }),
     );
-    expect(await screen.findByText('沟通流程完成')).toBeInTheDocument();
-    expect(screen.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeInTheDocument();
+    expect(routerPushMock).toHaveBeenCalledWith('/jd-generator/communication-runs/comm-run-1');
   });
 
   it('candidate list renders score, decision, source, action status, and interview stage', async () => {
     render(<CandidateList jobDescriptionId="jd-1" />);
 
     const row = await screen.findByRole('link', { name: /Ada Lovelace/ });
+    await waitFor(() =>
+      expect(fetchJdCandidatesMock).toHaveBeenCalledWith(
+        'jd-1',
+        expect.objectContaining({ minScore: 70 }),
+      ),
+    );
     expect(row).toHaveAttribute('href', '/jd-generator/jd-1/candidates/cand-1');
     expect(screen.getByText('90')).toBeInTheDocument();
     expect(screen.getAllByText('chat').length).toBeGreaterThan(0);
     expect(screen.getAllByText('both').length).toBeGreaterThan(0);
     expect(screen.getByText('planned')).toBeInTheDocument();
     expect(screen.getAllByText('to_contact').length).toBeGreaterThan(0);
+  });
+
+  it('candidate list can switch from qualified scores to all scores', async () => {
+    render(<CandidateList jobDescriptionId="jd-1" />);
+
+    await screen.findByRole('link', { name: /Ada Lovelace/ });
+    fireEvent.change(screen.getByLabelText('分数范围'), { target: { value: 'all' } });
+
+    await waitFor(() =>
+      expect(fetchJdCandidatesMock).toHaveBeenLastCalledWith(
+        'jd-1',
+        expect.objectContaining({ minScore: undefined }),
+      ),
+    );
   });
 
   it('candidate tracking dashboard shows JD summaries and linked candidates', async () => {
@@ -457,25 +683,59 @@ describe('candidate screening UI', () => {
     );
   });
 
-  it('starts a global communication sync from the tracking dashboard', async () => {
+  it('starts a global batch communication run from the tracking dashboard', async () => {
     render(<CandidateTrackingDashboard />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '启动沟通' }));
+    fireEvent.click(await screen.findByRole('button', { name: '批量沟通' }));
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/candidate-conversations/sync-unread',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({
-            platform: 'boss-like',
-            maxPasses: 10,
-          }),
-        }),
-      ),
+      expect(startCandidateCommunicationRunMock).toHaveBeenCalledWith({
+        mode: 'batch',
+        platform: 'boss-like',
+        maxPasses: 10,
+      }),
     );
-    expect(await screen.findByText('沟通流程完成')).toBeInTheDocument();
-    expect(screen.getByText('已处理 2 条，失败 0 条，扫描 3 轮')).toBeInTheDocument();
+    expect(routerPushMock).toHaveBeenCalledWith('/jd-generator/communication-runs/comm-run-1');
+  });
+
+  it('starts a single-candidate communication run from candidate detail', async () => {
+    startCandidateCommunicationRunMock.mockResolvedValueOnce({
+      ...sampleCommunicationRun,
+      id: 'comm-run-single',
+      mode: 'single',
+      candidateId: 'cand-1',
+      candidate: { id: 'cand-1', displayName: 'Ada Lovelace' },
+    });
+
+    render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '单点沟通' }));
+
+    await waitFor(() =>
+      expect(startCandidateCommunicationRunMock).toHaveBeenCalledWith({
+        mode: 'single',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'cand-1',
+        sourceScreeningRunId: 'run-1',
+        platform: 'boss-like',
+      }),
+    );
+    expect(routerPushMock).toHaveBeenCalledWith('/jd-generator/communication-runs/comm-run-single');
+  });
+
+  it('renders a communication run log with scope, steps, stats, and records', async () => {
+    render(<CandidateCommunicationRunLog runId="comm-run-1" />);
+
+    expect(await screen.findByText('沟通执行日志')).toBeInTheDocument();
+    expect(fetchCandidateCommunicationRunMock).toHaveBeenCalledWith('comm-run-1');
+    expect(screen.getAllByText('批量沟通').length).toBeGreaterThan(0);
+    expect(screen.getByText('高级后端工程师')).toBeInTheDocument();
+    expect(screen.getByText('2 条')).toBeInTheDocument();
+    expect(screen.getByText('2 条选中')).toBeInTheDocument();
+    expect(screen.getByText('2 条已处理')).toBeInTheDocument();
+    expect(screen.getByText('读取沟通范围')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('已处理未读消息')).toBeInTheDocument();
   });
 
   it('candidate detail renders resume text and score reason', async () => {

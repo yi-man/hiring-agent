@@ -13,6 +13,7 @@ const countJobDescriptionsMock = jest.fn();
 const createJobDescriptionMock = jest.fn();
 const getJobDescriptionByIdMock = jest.fn();
 const updateJobDescriptionMock = jest.fn();
+const updateMutableJobDescriptionMock = jest.fn();
 const listJdScreeningSummariesMock = jest.fn();
 
 jest.mock('next/server', () => ({
@@ -45,6 +46,7 @@ jest.mock('@/lib/jd/job-description-repo', () => ({
   createJobDescription: (...args: unknown[]) => createJobDescriptionMock(...args),
   getJobDescriptionById: (...args: unknown[]) => getJobDescriptionByIdMock(...args),
   updateJobDescription: (...args: unknown[]) => updateJobDescriptionMock(...args),
+  updateMutableJobDescription: (...args: unknown[]) => updateMutableJobDescriptionMock(...args),
 }));
 
 jest.mock('@/lib/jd/screening-summary', () => ({
@@ -102,6 +104,7 @@ describe('JD resource routes', () => {
     createJobDescriptionMock.mockReset();
     getJobDescriptionByIdMock.mockReset();
     updateJobDescriptionMock.mockReset();
+    updateMutableJobDescriptionMock.mockReset();
     listJdScreeningSummariesMock.mockReset();
     runJDAgentMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
@@ -254,7 +257,10 @@ describe('JD resource routes', () => {
       status: 'created',
       content: sampleJd,
     });
-    updateJobDescriptionMock.mockResolvedValueOnce({ id: 'jd-1', status: 'ready_to_publish' });
+    updateMutableJobDescriptionMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'ready_to_publish',
+    });
     const request = new Request('http://localhost/api/jd/jd-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -269,7 +275,7 @@ describe('JD resource routes', () => {
 
     expect(response.status).toBe(200);
     expect(body.jobDescription.status).toBe('ready_to_publish');
-    expect(updateJobDescriptionMock).toHaveBeenCalledWith(
+    expect(updateMutableJobDescriptionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'u1',
         id: 'jd-1',
@@ -299,6 +305,42 @@ describe('JD resource routes', () => {
     expect(response.status).toBe(409);
     expect(body.error).toBe('published job descriptions cannot be modified');
     expect(updateJobDescriptionMock).not.toHaveBeenCalled();
+    expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects PATCH updates when a JD is published before the atomic write', async () => {
+    getJobDescriptionByIdMock
+      .mockResolvedValueOnce({
+        id: 'jd-1',
+        status: 'created',
+        content: sampleJd,
+      })
+      .mockResolvedValueOnce({
+        id: 'jd-1',
+        status: 'published',
+        content: sampleJd,
+      });
+    updateMutableJobDescriptionMock.mockResolvedValueOnce(null);
+    const request = new Request('http://localhost/api/jd/jd-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { ...sampleJd, summary: '并发发布后不应允许修改' },
+      }),
+    });
+
+    const response = await patchJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('published job descriptions cannot be modified');
+    expect(updateMutableJobDescriptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        id: 'jd-1',
+        content: { ...sampleJd, summary: '并发发布后不应允许修改' },
+      }),
+    );
   });
 
   it('regenerates an existing JD using company context and saves the result', async () => {
@@ -308,7 +350,7 @@ describe('JD resource routes', () => {
       content: sampleJd,
       tone: 'tech',
     });
-    updateJobDescriptionMock.mockResolvedValueOnce({ id: 'jd-1', content: sampleJd });
+    updateMutableJobDescriptionMock.mockResolvedValueOnce({ id: 'jd-1', content: sampleJd });
     const request = new Request('http://localhost/api/jd/jd-1/regenerate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -327,7 +369,7 @@ describe('JD resource routes', () => {
       },
       { userId: 'u1' },
     );
-    expect(updateJobDescriptionMock).toHaveBeenCalledWith(
+    expect(updateMutableJobDescriptionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'u1',
         id: 'jd-1',
@@ -358,5 +400,43 @@ describe('JD resource routes', () => {
     expect(body.error).toBe('published job descriptions cannot be modified');
     expect(runJDAgentMock).not.toHaveBeenCalled();
     expect(updateJobDescriptionMock).not.toHaveBeenCalled();
+    expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects regeneration when a JD is published before the atomic write', async () => {
+    getJobDescriptionByIdMock
+      .mockResolvedValueOnce({
+        id: 'jd-1',
+        status: 'created',
+        content: sampleJd,
+        tone: 'tech',
+      })
+      .mockResolvedValueOnce({
+        id: 'jd-1',
+        status: 'published',
+        content: sampleJd,
+        tone: 'tech',
+      });
+    updateMutableJobDescriptionMock.mockResolvedValueOnce(null);
+    const request = new Request('http://localhost/api/jd/jd-1/regenerate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extraInstruction: '并发发布后不应覆盖内容' }),
+    });
+
+    const response = await regenerateJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('published job descriptions cannot be modified');
+    expect(runJDAgentMock).toHaveBeenCalled();
+    expect(updateMutableJobDescriptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        id: 'jd-1',
+        status: 'created',
+        content: sampleJd,
+      }),
+    );
   });
 });

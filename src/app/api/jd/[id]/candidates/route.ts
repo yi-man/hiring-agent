@@ -50,6 +50,19 @@ function parseOffset(value: string | null): number {
   return Math.max(0, Math.trunc(parsed));
 }
 
+function parseMinScore(
+  value: string | null,
+): { ok: true; value?: number } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') {
+    return { ok: true };
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+    return { ok: false, error: 'minScore is invalid' };
+  }
+  return { ok: true, value: parsed };
+}
+
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireAuth();
@@ -67,6 +80,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       }
       interviewStage = interviewStageParam;
     }
+    const minScore = parseMinScore(searchParams.get('minScore'));
+    if (!minScore.ok) {
+      return badRequest(minScore.error);
+    }
+    const runId = searchParams.get('runId')?.trim() || undefined;
 
     const jobDescription = await getJobDescriptionById(auth.user.id, id);
     if (!jobDescription) {
@@ -79,6 +97,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       limit: parseLimit(searchParams.get('limit')),
       offset: parseOffset(searchParams.get('offset')),
       interviewStage,
+      minScore: minScore.value,
+      runId,
     });
 
     return NextResponse.json({ candidates });

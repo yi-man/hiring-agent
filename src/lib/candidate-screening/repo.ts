@@ -429,6 +429,7 @@ export type ListCandidateResultsParams = {
   limit: number;
   offset?: number;
   interviewStage?: CandidateInterviewStage;
+  minScore?: number;
 };
 
 export type UpdateCandidateProgressRepoParams = {
@@ -1063,17 +1064,17 @@ export async function listCandidateScreeningResults(
     where: {
       userId: params.userId,
       jobDescriptionId: params.jobDescriptionId,
+      ...(params.runId ? { runId: params.runId } : {}),
       ...(params.interviewStage ? { interviewStage: params.interviewStage } : {}),
-      ...(params.runId
+      ...(params.minScore !== undefined ? { finalScore: { gte: params.minScore } } : {}),
+      ...(params.runId && params.plannedActions && params.plannedActions.length > 0
         ? {
             actionLogs: {
               some: {
                 userId: params.userId,
                 runId: params.runId,
                 status: 'planned',
-                ...(params.plannedActions && params.plannedActions.length > 0
-                  ? { action: { in: params.plannedActions } }
-                  : {}),
+                action: { in: params.plannedActions },
               },
             },
           }

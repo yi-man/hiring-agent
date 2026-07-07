@@ -1,10 +1,6 @@
 import { QUALIFIED_CANDIDATE_SCORE } from '@/lib/candidate-screening/constants';
 import { prisma } from '@/lib/prisma';
-import type {
-  JDScreeningRunStatus,
-  JDScreeningStatus,
-  JDScreeningSummary,
-} from '@/types/jd-agent';
+import type { JDScreeningRunStatus, JDScreeningStatus, JDScreeningSummary } from '@/types/jd-agent';
 
 type RunRow = {
   id: string;

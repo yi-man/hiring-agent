@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, ListFilter, RefreshCw } from 'lucide-react';
-import { Button, Chip, Input } from '@/components/ui';
+import { Button, Chip } from '@/components/ui';
 import { fetchJdCandidates, type CandidateListFilters } from '@/lib/candidate-screening/client';
-import { CANDIDATE_SCREENING_INTERVIEW_STAGES } from '@/lib/candidate-screening/constants';
+import {
+  CANDIDATE_SCREENING_INTERVIEW_STAGES,
+  QUALIFIED_CANDIDATE_SCORE,
+} from '@/lib/candidate-screening/constants';
 import type { CandidateScreeningResultListItem } from '@/lib/candidate-screening/repo';
 import type {
   CandidateDecisionAction,
@@ -27,12 +30,12 @@ const sourceOptions: Array<{ value: '' | CandidateScreeningSource; label: string
   { value: 'both', label: 'both' },
 ];
 
-function toMinScore(value: string): number | undefined {
-  if (!value.trim()) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return undefined;
-  return Math.max(0, Math.min(100, Math.trunc(parsed)));
-}
+type ScoreFilter = 'qualified' | 'all';
+
+const scoreOptions: Array<{ value: ScoreFilter; label: string }> = [
+  { value: 'qualified', label: `合格简历（${QUALIFIED_CANDIDATE_SCORE}+）` },
+  { value: 'all', label: '全部分数' },
+];
 
 function candidateSubtitle(item: CandidateScreeningResultListItem) {
   return [item.candidate.currentTitle, item.candidate.currentCompany, item.candidate.location]
@@ -45,7 +48,7 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
   const [decisionAction, setDecisionAction] = useState<'' | CandidateDecisionAction>('');
   const [interviewStage, setInterviewStage] = useState<'' | CandidateInterviewStage>('');
   const [source, setSource] = useState<'' | CandidateScreeningSource>('');
-  const [minScore, setMinScore] = useState('');
+  const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('qualified');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -54,10 +57,10 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
       decisionAction: decisionAction || undefined,
       interviewStage: interviewStage || undefined,
       source: source || undefined,
-      minScore: toMinScore(minScore),
+      minScore: scoreFilter === 'qualified' ? QUALIFIED_CANDIDATE_SCORE : undefined,
       limit: 100,
     }),
-    [decisionAction, interviewStage, minScore, source],
+    [decisionAction, interviewStage, scoreFilter, source],
   );
 
   async function loadCandidates(options?: { silent?: boolean }) {
@@ -165,13 +168,21 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
               ))}
             </select>
           </label>
-          <Input
-            aria-label="最低分"
-            label="最低分"
-            placeholder="0-100"
-            value={minScore}
-            onValueChange={setMinScore}
-          />
+          <label className="space-y-2">
+            <span className="text-muted-foreground text-xs">分数范围</span>
+            <select
+              aria-label="分数范围"
+              className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+              value={scoreFilter}
+              onChange={(event) => setScoreFilter(event.target.value as ScoreFilter)}
+            >
+              {scoreOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </section>
 

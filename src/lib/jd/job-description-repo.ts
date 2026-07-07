@@ -145,9 +145,9 @@ export async function getJobDescriptionById(
   return row ? mapRow(row) : null;
 }
 
-export async function updateJobDescription(
+function buildUpdateData(
   params: UpdateJobDescriptionParams,
-): Promise<JobDescriptionDto | null> {
+): Prisma.JobDescriptionUpdateManyMutationInput {
   const data: Prisma.JobDescriptionUpdateManyMutationInput = {};
   if (params.department !== undefined) data.department = params.department;
   if (params.position !== undefined) data.position = params.position;
@@ -163,10 +163,28 @@ export async function updateJobDescription(
   if (params.generationMeta !== undefined) {
     data.generationMeta = toNullableJson(params.generationMeta);
   }
+  return data;
+}
 
+export async function updateJobDescription(
+  params: UpdateJobDescriptionParams,
+): Promise<JobDescriptionDto | null> {
   const result = await prisma.jobDescription.updateMany({
     where: { id: params.id, userId: params.userId },
-    data,
+    data: buildUpdateData(params),
+  });
+  if (result.count === 0) {
+    return null;
+  }
+  return getJobDescriptionById(params.userId, params.id);
+}
+
+export async function updateMutableJobDescription(
+  params: UpdateJobDescriptionParams,
+): Promise<JobDescriptionDto | null> {
+  const result = await prisma.jobDescription.updateMany({
+    where: { id: params.id, userId: params.userId, status: { not: 'published' } },
+    data: buildUpdateData(params),
   });
   if (result.count === 0) {
     return null;

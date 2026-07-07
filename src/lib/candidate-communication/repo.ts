@@ -106,6 +106,74 @@ export type CandidateConversationMemoryDto = {
   outcomeResult: string;
 };
 
+export type CandidateCommunicationRunMode = 'batch' | 'single';
+
+export type CandidateCommunicationRunStatus = 'running' | 'success' | 'failed';
+
+export type CandidateCommunicationRunRecord = {
+  candidateId: string | null;
+  candidateName: string | null;
+  status: CandidateCommunicationRunStatus;
+  detail: string;
+};
+
+export type CandidateCommunicationRunStats = {
+  total: number;
+  selected: number;
+  processed: number;
+  failed: number;
+  passes?: number;
+  records: CandidateCommunicationRunRecord[];
+};
+
+export type CandidateCommunicationRunDto = {
+  id: string;
+  userId: string;
+  jobDescriptionId: string | null;
+  candidateId: string | null;
+  platform: string;
+  mode: CandidateCommunicationRunMode;
+  status: CandidateCommunicationRunStatus;
+  stats: CandidateCommunicationRunStats | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  jobDescription?: {
+    id: string;
+    department: string;
+    position: string;
+    status: string;
+  } | null;
+  candidate?: {
+    id: string;
+    displayName: string;
+  } | null;
+};
+
+export type CreateCandidateCommunicationRunParams = {
+  userId: string;
+  jobDescriptionId?: string | null;
+  candidateId?: string | null;
+  platform: string;
+  mode: CandidateCommunicationRunMode;
+  status: CandidateCommunicationRunStatus;
+  stats?: CandidateCommunicationRunStats | null;
+  errorMessage?: string | null;
+  startedAt?: Date | null;
+  finishedAt?: Date | null;
+};
+
+export type UpdateCandidateCommunicationRunParams = {
+  userId: string;
+  runId: string;
+  status?: CandidateCommunicationRunStatus;
+  stats?: CandidateCommunicationRunStats | null;
+  errorMessage?: string | null;
+  finishedAt?: Date | null;
+};
+
 export type FindOrCreateConversationParams = {
   userId: string;
   jobDescriptionId: string;
@@ -243,6 +311,37 @@ function toRecordOrNull(value: unknown | null): JsonRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
+function toCommunicationRunStats(value: unknown | null): CandidateCommunicationRunStats | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const stats = value as Partial<CandidateCommunicationRunStats>;
+  const records = Array.isArray(stats.records)
+    ? stats.records
+        .map((record): CandidateCommunicationRunRecord | null => {
+          if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+          const item = record as Partial<CandidateCommunicationRunRecord>;
+          if (item.status !== 'running' && item.status !== 'success' && item.status !== 'failed') {
+            return null;
+          }
+          return {
+            candidateId: typeof item.candidateId === 'string' ? item.candidateId : null,
+            candidateName: typeof item.candidateName === 'string' ? item.candidateName : null,
+            status: item.status,
+            detail: typeof item.detail === 'string' ? item.detail : '',
+          };
+        })
+        .filter((record): record is CandidateCommunicationRunRecord => Boolean(record))
+    : [];
+
+  return {
+    total: typeof stats.total === 'number' ? stats.total : 0,
+    selected: typeof stats.selected === 'number' ? stats.selected : 0,
+    processed: typeof stats.processed === 'number' ? stats.processed : 0,
+    failed: typeof stats.failed === 'number' ? stats.failed : 0,
+    ...(typeof stats.passes === 'number' ? { passes: stats.passes } : {}),
+    records,
+  };
+}
+
 function normalizeMatchText(value?: string | null): string {
   return value?.trim().replace(/\s+/g, '').toLowerCase() ?? '';
 }
@@ -363,6 +462,113 @@ function mapDecision(row: {
     llmMeta: toRecordOrNull(row.llmMeta),
     createdAt: iso(row.createdAt),
   };
+}
+
+function mapCommunicationRun(row: {
+  id: string;
+  userId: string;
+  jobDescriptionId: string | null;
+  candidateId: string | null;
+  platform: string;
+  mode: string;
+  status: string;
+  stats: unknown | null;
+  errorMessage: string | null;
+  startedAt: NullableDate;
+  finishedAt: NullableDate;
+  createdAt: Date;
+  updatedAt: Date;
+  jobDescription?: {
+    id: string;
+    department: string;
+    position: string;
+    status: string;
+  } | null;
+  candidate?: {
+    id: string;
+    displayName: string;
+  } | null;
+}): CandidateCommunicationRunDto {
+  return {
+    id: row.id,
+    userId: row.userId,
+    jobDescriptionId: row.jobDescriptionId,
+    candidateId: row.candidateId,
+    platform: row.platform,
+    mode: row.mode === 'single' ? 'single' : 'batch',
+    status: row.status === 'failed' ? 'failed' : row.status === 'success' ? 'success' : 'running',
+    stats: toCommunicationRunStats(row.stats),
+    errorMessage: row.errorMessage,
+    startedAt: iso(row.startedAt),
+    finishedAt: iso(row.finishedAt),
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+    jobDescription: row.jobDescription ?? null,
+    candidate: row.candidate ?? null,
+  };
+}
+
+export async function createCandidateCommunicationRun(
+  params: CreateCandidateCommunicationRunParams,
+): Promise<CandidateCommunicationRunDto> {
+  const row = await prisma.candidateCommunicationRun.create({
+    data: {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId ?? null,
+      candidateId: params.candidateId ?? null,
+      platform: params.platform,
+      mode: params.mode,
+      status: params.status,
+      stats: params.stats === undefined ? Prisma.JsonNull : toNullableJson(params.stats),
+      errorMessage: params.errorMessage ?? null,
+      startedAt: params.startedAt ?? null,
+      finishedAt: params.finishedAt ?? null,
+    },
+  });
+  return mapCommunicationRun(row);
+}
+
+export async function updateCandidateCommunicationRun(
+  params: UpdateCandidateCommunicationRunParams,
+): Promise<CandidateCommunicationRunDto | null> {
+  const data: Prisma.CandidateCommunicationRunUpdateManyMutationInput = {};
+  if (params.status !== undefined) data.status = params.status;
+  if (params.stats !== undefined) data.stats = toNullableJson(params.stats);
+  if (params.errorMessage !== undefined) data.errorMessage = params.errorMessage;
+  if (params.finishedAt !== undefined) data.finishedAt = params.finishedAt;
+
+  const result = await prisma.candidateCommunicationRun.updateMany({
+    where: { id: params.runId, userId: params.userId },
+    data,
+  });
+  if (result.count === 0) return null;
+  return getCandidateCommunicationRun({ userId: params.userId, runId: params.runId });
+}
+
+export async function getCandidateCommunicationRun(params: {
+  userId: string;
+  runId: string;
+}): Promise<CandidateCommunicationRunDto | null> {
+  const row = await prisma.candidateCommunicationRun.findFirst({
+    where: { id: params.runId, userId: params.userId },
+    include: {
+      jobDescription: {
+        select: {
+          id: true,
+          department: true,
+          position: true,
+          status: true,
+        },
+      },
+      candidate: {
+        select: {
+          id: true,
+          displayName: true,
+        },
+      },
+    },
+  });
+  return row ? mapCommunicationRun(row) : null;
 }
 
 export const prismaCandidateConversationRepository: CandidateConversationRepository = {

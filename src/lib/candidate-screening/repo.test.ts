@@ -1060,7 +1060,7 @@ describe('candidate screening repository', () => {
     expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
   });
 
-  it('lists JD-scoped results that have current-run planned action logs', async () => {
+  it('lists JD-scoped results for a specific screening run', async () => {
     prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
 
     await listCandidateScreeningResults({
@@ -1075,13 +1075,31 @@ describe('candidate screening repository', () => {
       where: {
         userId: 'u1',
         jobDescriptionId: 'jd-1',
-        actionLogs: {
-          some: {
-            userId: 'u1',
-            runId: 'run-2',
-            status: 'planned',
-          },
-        },
+        runId: 'run-2',
+      },
+      include: { candidate: true, resume: true },
+      orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
+      skip: 0,
+      take: 10,
+    });
+  });
+
+  it('filters JD-scoped results by minimum final score', async () => {
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await listCandidateScreeningResults({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      minScore: 70,
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        finalScore: { gte: 70 },
       },
       include: { candidate: true, resume: true },
       orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
@@ -1106,6 +1124,7 @@ describe('candidate screening repository', () => {
       where: {
         userId: 'u1',
         jobDescriptionId: 'jd-1',
+        runId: 'run-2',
         actionLogs: {
           some: {
             userId: 'u1',

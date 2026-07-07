@@ -6,10 +6,7 @@ import {
   createJobDescription,
   listJobDescriptionsPaginated,
 } from '@/lib/jd/job-description-repo';
-import {
-  getDefaultJdScreeningSummary,
-  listJdScreeningSummaries,
-} from '@/lib/jd/screening-summary';
+import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { composeJDJobInput, isJDStatus, parseCreateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {

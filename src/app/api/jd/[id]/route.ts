@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getJobDescriptionById, updateJobDescription } from '@/lib/jd/job-description-repo';
-import {
-  getDefaultJdScreeningSummary,
-  listJdScreeningSummaries,
-} from '@/lib/jd/screening-summary';
+import { getJobDescriptionById, updateMutableJobDescription } from '@/lib/jd/job-description-repo';
+import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { parseUpdateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {
@@ -17,6 +14,14 @@ function conflict(message: string) {
 
 function isPublished(status: string): boolean {
   return status === 'published';
+}
+
+async function mutableUpdateMissResponse(userId: string, id: string) {
+  const latest = await getJobDescriptionById(userId, id);
+  if (latest && isPublished(latest.status)) {
+    return conflict('published job descriptions cannot be modified');
+  }
+  return NextResponse.json({ error: 'job description not found' }, { status: 404 });
 }
 
 function serverErrorResponse(error: unknown) {
@@ -81,13 +86,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     }
     const value = parsed.value;
 
-    const jobDescription = await updateJobDescription({
+    const jobDescription = await updateMutableJobDescription({
       userId: auth.user.id,
       id,
       ...value,
     });
     if (!jobDescription) {
-      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+      return mutableUpdateMissResponse(auth.user.id, id);
     }
 
     return NextResponse.json({ jobDescription });

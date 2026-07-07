@@ -22,6 +22,7 @@ export type CandidateListFilters = {
   interviewStage?: CandidateInterviewStage;
   source?: CandidateScreeningSource;
   minScore?: number;
+  runId?: string;
   limit?: number;
   offset?: number;
 };
@@ -114,6 +115,8 @@ export async function fetchJdCandidates(
 ): Promise<CandidateScreeningResultListItem[]> {
   const params = new URLSearchParams();
   appendSearchParam(params, 'interviewStage', filters.interviewStage);
+  appendSearchParam(params, 'minScore', filters.minScore);
+  appendSearchParam(params, 'runId', filters.runId);
   appendSearchParam(params, 'limit', filters.limit);
   appendSearchParam(params, 'offset', filters.offset);
   const query = params.toString();
@@ -126,7 +129,6 @@ export async function fetchJdCandidates(
   return data.candidates.filter((candidate) => {
     if (filters.decisionAction && candidate.decisionAction !== filters.decisionAction) return false;
     if (filters.source && candidate.source !== filters.source) return false;
-    if (filters.minScore !== undefined && candidate.finalScore < filters.minScore) return false;
     return true;
   });
 }
