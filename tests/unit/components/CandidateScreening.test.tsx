@@ -526,7 +526,7 @@ describe('candidate screening UI', () => {
 
     const trackingLink = await screen.findByRole('button', { name: '候选人跟踪' });
 
-    expect(trackingLink).toHaveAttribute('href', '/jd-generator/candidates');
+    expect(trackingLink).toHaveAttribute('href', '/candidates');
   });
 
   it('JD list renders status-specific actions and starts a new screening run from published rows', async () => {
@@ -1021,6 +1021,23 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('读取沟通范围')).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText('已处理未读消息')).toBeInTheDocument();
+  });
+
+  it('communication run log falls back to the canonical cross-JD dashboard', async () => {
+    fetchCandidateCommunicationRunMock.mockResolvedValueOnce({
+      ...sampleCommunicationRun,
+      jobDescriptionId: null,
+      jobDescription: null,
+      candidateId: null,
+      candidate: null,
+    });
+
+    render(<CandidateCommunicationRunLog runId="comm-run-1" />);
+
+    expect(await screen.findByRole('button', { name: '返回范围' })).toHaveAttribute(
+      'href',
+      '/candidates',
+    );
   });
 
   it('candidate detail renders resume text and score reason', async () => {

@@ -568,7 +568,7 @@ describe('candidate screening repository', () => {
       take: 60,
     });
     expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', candidateId: { in: ['candidate-1'] } },
+      where: { userId: 'u1', resumeId: { in: ['resume-1'] } },
       include: { jobDescription: true },
       orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
     });
@@ -668,7 +668,10 @@ describe('candidate screening repository', () => {
       skip: 6,
     });
     expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', candidateId: { in: ['candidate-1', 'candidate-2'] } },
+      where: {
+        userId: 'u1',
+        resumeId: { in: ['resume-candidate-1-0', 'resume-candidate-2'] },
+      },
       include: { jobDescription: true },
       orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
     });
@@ -725,7 +728,7 @@ describe('candidate screening repository', () => {
     });
   });
 
-  it('prioritizes exact resume mounted jobs after fetching later resume pages', async () => {
+  it('lists only mounted jobs for the displayed resume after fetching later resume pages', async () => {
     const duplicatePage = Array.from({ length: 6 }, (_, index) =>
       mockResume({
         id: `resume-candidate-1-${index}`,
@@ -758,10 +761,7 @@ describe('candidate screening repository', () => {
     const resumes = await listCandidateResumeLibrary({ userId: 'u1', limit: 2 });
     const candidate = resumes.find((item) => item.candidate.id === 'candidate-2');
 
-    expect(candidate?.mountedJobs.map((job) => job.screeningResultId)).toEqual([
-      'result-exact',
-      'result-newer-non-exact',
-    ]);
+    expect(candidate?.mountedJobs.map((job) => job.screeningResultId)).toEqual(['result-exact']);
   });
 
   it('lists interview records with candidate and JD context', async () => {

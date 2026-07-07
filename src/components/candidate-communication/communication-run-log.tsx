@@ -45,7 +45,7 @@ function scopeHref(run: CandidateCommunicationRunDto) {
     return `/jd-generator/${run.jobDescriptionId}/candidates/${run.candidateId}`;
   }
   if (run.jobDescriptionId) return `/jd-generator/${run.jobDescriptionId}`;
-  return '/jd-generator/candidates';
+  return '/candidates';
 }
 
 export function CandidateCommunicationRunLog({ runId }: { runId: string }) {

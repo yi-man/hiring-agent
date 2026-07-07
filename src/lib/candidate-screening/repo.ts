@@ -1186,34 +1186,28 @@ export async function listCandidateResumeLibrary(params: {
   }
 
   const latestRows = [...latestByCandidate.values()];
-  const candidateIds = latestRows.map((row) => row.candidateId);
+  const resumeIds = latestRows.map((row) => row.id);
   const mountedRows =
-    candidateIds.length === 0
+    resumeIds.length === 0
       ? []
       : ((await prisma.candidateScreeningResult.findMany({
-          where: { userId: params.userId, candidateId: { in: candidateIds } },
+          where: { userId: params.userId, resumeId: { in: resumeIds } },
           include: { jobDescription: true },
           orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
         })) as ResumeMountedScreeningRecord[]);
 
-  const mountedByCandidate = new Map<string, ResumeMountedScreeningRecord[]>();
+  const mountedByResume = new Map<string, ResumeMountedScreeningRecord[]>();
   for (const mounted of mountedRows) {
-    const current = mountedByCandidate.get(mounted.candidateId) ?? [];
+    if (!mounted.resumeId) continue;
+    const current = mountedByResume.get(mounted.resumeId) ?? [];
     current.push(mounted);
-    mountedByCandidate.set(mounted.candidateId, current);
+    mountedByResume.set(mounted.resumeId, current);
   }
 
   return latestRows.map((row) => ({
     resume: mapResume(row),
     candidate: mapCandidate(row.candidate),
-    mountedJobs: (mountedByCandidate.get(row.candidateId) ?? [])
-      .sort((left, right) => {
-        const leftExact = left.resumeId === row.id ? 0 : 1;
-        const rightExact = right.resumeId === row.id ? 0 : 1;
-        if (leftExact !== rightExact) return leftExact - rightExact;
-        return right.updatedAt.getTime() - left.updatedAt.getTime();
-      })
-      .map(mapResumeMountedJob),
+    mountedJobs: (mountedByResume.get(row.id) ?? []).map(mapResumeMountedJob),
   }));
 }
 
