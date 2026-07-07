@@ -109,6 +109,7 @@ export function AppSidebar() {
             return (
               <Link
                 key={item.href}
+                aria-current={isActive ? 'page' : undefined}
                 href={item.href}
                 className={`group flex min-w-36 items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all lg:min-w-0 ${
                   isActive

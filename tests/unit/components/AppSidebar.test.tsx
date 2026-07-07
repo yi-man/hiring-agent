@@ -31,12 +31,23 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('link', { name: /面试记录/ })).toHaveAttribute('href', '/interviews');
   });
 
-  it('highlights resumes without highlighting the JD workspace', () => {
+  it('marks resumes as current without marking the JD workspace', () => {
     (usePathname as jest.Mock).mockReturnValue('/resumes');
 
     render(<AppSidebar />);
 
-    expect(screen.getByRole('link', { name: /简历列表/ })).toHaveClass('text-primary');
-    expect(screen.getByRole('link', { name: /JD 工作台/ })).not.toHaveClass('text-primary');
+    expect(screen.getByRole('link', { name: /简历列表/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /JD 工作台/ })).not.toHaveAttribute('aria-current');
+  });
+
+  it('marks the JD workspace branch as current without marking recruiting resources', () => {
+    (usePathname as jest.Mock).mockReturnValue('/jd-generator/new');
+
+    render(<AppSidebar />);
+
+    expect(screen.getByRole('link', { name: /JD 工作台/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /简历列表/ })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('link', { name: /候选人列表/ })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('link', { name: /面试记录/ })).not.toHaveAttribute('aria-current');
   });
 });

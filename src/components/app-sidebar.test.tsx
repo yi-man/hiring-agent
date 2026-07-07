@@ -43,8 +43,14 @@ describe('AppSidebar', () => {
   it('highlights the active route branch', () => {
     render(<AppSidebar />);
 
-    expect(screen.getByRole('link', { name: /JD 工作台/i })).toHaveClass('bg-primary/10');
-    expect(screen.getByRole('link', { name: /智能对话/i })).not.toHaveClass('bg-primary/10');
+    expect(screen.getByRole('link', { name: /JD 工作台/i })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(screen.getByRole('link', { name: /智能对话/i })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('link', { name: /简历列表/i })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('link', { name: /候选人列表/i })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('link', { name: /面试记录/i })).not.toHaveAttribute('aria-current');
   });
 
   it('highlights the dashboard route', () => {
@@ -52,6 +58,9 @@ describe('AppSidebar', () => {
 
     render(<AppSidebar />);
 
-    expect(screen.getByRole('link', { name: /^工作台(?:\s|$)/i })).toHaveClass('bg-primary/10');
+    expect(screen.getByRole('link', { name: /^工作台(?:\s|$)/i })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
   });
 });
