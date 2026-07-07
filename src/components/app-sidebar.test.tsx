@@ -30,6 +30,10 @@ describe('AppSidebar', () => {
       'href',
       '/workflow-learning',
     );
+    expect(screen.getByRole('link', { name: /Workflow 库/i })).toHaveAttribute(
+      'href',
+      '/workflows',
+    );
     expect(screen.getByRole('link', { name: /LLM 可观测/i })).toHaveAttribute(
       'href',
       '/llm-observability',
