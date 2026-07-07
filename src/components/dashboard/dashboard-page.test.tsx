@@ -153,6 +153,12 @@ describe('DashboardPage', () => {
       '/jd-generator/jd-1/candidates',
     );
     expect(fetchDashboardOverview).toHaveBeenCalledWith('status=published&platform=boss-like');
+    expect(screen.getByRole('link', { name: /候选人跟踪/ })).toHaveAttribute('href', '/candidates');
+    expect(screen.getByRole('link', { name: /同步沟通/ })).toHaveAttribute('href', '/candidates');
+    expect(screen.getByRole('link', { name: /待跟进候选人 9/ })).toHaveAttribute(
+      'href',
+      '/candidates',
+    );
 
     expect(
       screen
