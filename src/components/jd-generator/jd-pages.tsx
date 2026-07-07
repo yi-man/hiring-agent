@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   BadgeCheck,
@@ -33,6 +33,11 @@ import {
 } from '@/lib/jd/client';
 import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
 import { JD_STATUSES } from '@/types';
+import {
+  currentPathWithSearch,
+  getReturnTarget,
+  withReturnTarget,
+} from '@/lib/navigation/return-url';
 import type {
   JD,
   JDScreeningStatus,
@@ -265,6 +270,8 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 
 export function JDListView() {
   const router = useRouter();
+  const listReturnTarget = { href: '/jd-generator', label: '返回列表' };
+  const workbenchReturnTarget = { href: '/jd-generator', label: '返回 JD 工作台' };
   const [items, setItems] = useState<JobDescriptionDto[]>([]);
   const [statusFilter, setStatusFilter] = useState<JDStatusFilter>('published');
   const [isLoading, setIsLoading] = useState(true);
@@ -303,7 +310,9 @@ export function JDListView() {
         platform: 'boss-like',
         mode: 'execution',
       });
-      router.push(`/jd-generator/${item.id}/screening-runs/${run.id}`);
+      router.push(
+        withReturnTarget(`/jd-generator/${item.id}/screening-runs/${run.id}`, listReturnTarget),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人筛选失败');
     } finally {
@@ -320,7 +329,9 @@ export function JDListView() {
         platform: 'boss-like',
         maxPasses: 10,
       });
-      router.push(`/jd-generator/communication-runs/${run.id}`);
+      router.push(
+        withReturnTarget(`/jd-generator/communication-runs/${run.id}`, workbenchReturnTarget),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人沟通失败');
     } finally {
@@ -331,7 +342,10 @@ export function JDListView() {
   function renderPublishedActions(item: JobDescriptionDto) {
     const summary = getScreeningSummary(item);
     const runHref = summary.latestRunId
-      ? `/jd-generator/${item.id}/screening-runs/${summary.latestRunId}`
+      ? withReturnTarget(
+          `/jd-generator/${item.id}/screening-runs/${summary.latestRunId}`,
+          listReturnTarget,
+        )
       : null;
 
     return (
@@ -375,7 +389,7 @@ export function JDListView() {
         ) : null}
         <Link
           className="text-primary hover:text-primary/80 inline-flex h-8 items-center gap-1 text-sm font-medium hover:underline"
-          href={`/jd-generator/${item.id}/candidates`}
+          href={withReturnTarget(`/jd-generator/${item.id}/candidates`, listReturnTarget)}
         >
           <ListFilter className="h-4 w-4" aria-hidden />
           候选人
@@ -390,7 +404,7 @@ export function JDListView() {
         as={Link}
         className="gap-2"
         disableRipple
-        href={`/jd-generator/${item.id}`}
+        href={withReturnTarget(`/jd-generator/${item.id}`, listReturnTarget)}
         size="sm"
         variant="light"
       >
@@ -425,7 +439,7 @@ export function JDListView() {
           as={Link}
           className="gap-2"
           disableRipple
-          href={`/jd-generator/${item.id}`}
+          href={withReturnTarget(`/jd-generator/${item.id}`, listReturnTarget)}
           size="sm"
           variant={meta.variant ?? 'light'}
         >
@@ -461,7 +475,7 @@ export function JDListView() {
             as={Link}
             className="gap-2"
             disableRipple
-            href="/jd-generator/candidates"
+            href={withReturnTarget('/candidates', workbenchReturnTarget)}
             variant="bordered"
           >
             <ListFilter className="h-4 w-4" aria-hidden />
@@ -827,6 +841,15 @@ export function JDCreateView() {
 
 export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTarget = getReturnTarget(searchParams, {
+    href: '/jd-generator',
+    label: '返回列表',
+  });
+  const detailReturnTarget = {
+    href: currentPathWithSearch(`/jd-generator/${jobDescriptionId}`, searchParams),
+    label: '返回 JD',
+  };
   const [jobDescription, setJobDescription] = useState<JobDescriptionDto | null>(null);
   const [form, setForm] = useState<JDForm | null>(null);
   const [status, setStatus] = useState<JDStatus>('created');
@@ -982,7 +1005,12 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         mode: 'execution',
       });
       setLatestScreeningRun(run);
-      router.push(`/jd-generator/${jobDescription.id}/screening-runs/${run.id}`);
+      router.push(
+        withReturnTarget(
+          `/jd-generator/${jobDescription.id}/screening-runs/${run.id}`,
+          detailReturnTarget,
+        ),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人筛选失败');
     } finally {
@@ -1016,9 +1044,9 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   if (!jobDescription || !form) {
     return (
       <div className="space-y-4">
-        <Button as={Link} className="gap-2" disableRipple href="/jd-generator" variant="light">
+        <Button as={Link} className="gap-2" disableRipple href={returnTarget.href} variant="light">
           <ArrowLeft className="h-4 w-4" aria-hidden />
-          返回列表
+          {returnTarget.label}
         </Button>
         {error ? <ErrorBanner message={error} /> : <ErrorBanner message="JD 不存在" />}
       </div>
@@ -1033,11 +1061,11 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
             as={Link}
             className="mb-3 gap-2 px-0"
             disableRipple
-            href="/jd-generator"
+            href={returnTarget.href}
             variant="light"
           >
             <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回列表
+            {returnTarget.label}
           </Button>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-foreground text-2xl font-semibold tracking-normal">
@@ -1337,7 +1365,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     </div>
                     <Link
                       className="text-primary mt-1 inline-flex text-xs hover:underline"
-                      href={`/jd-generator/${jobDescription.id}/screening-runs/${latestScreeningRun.id}`}
+                      href={withReturnTarget(
+                        `/jd-generator/${jobDescription.id}/screening-runs/${latestScreeningRun.id}`,
+                        detailReturnTarget,
+                      )}
                     >
                       查看执行日志
                     </Link>
@@ -1347,7 +1378,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                   {latestRunId ? (
                     <Link
                       className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
-                      href={`/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`}
+                      href={withReturnTarget(
+                        `/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`,
+                        detailReturnTarget,
+                      )}
                     >
                       <Eye className="h-3.5 w-3.5" aria-hidden />
                       筛选记录
@@ -1355,7 +1389,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                   ) : null}
                   <Link
                     className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
-                    href={`/jd-generator/${jobDescription.id}/candidates`}
+                    href={withReturnTarget(
+                      `/jd-generator/${jobDescription.id}/candidates`,
+                      detailReturnTarget,
+                    )}
                   >
                     <ListFilter className="h-3.5 w-3.5" aria-hidden />
                     已筛选候选人

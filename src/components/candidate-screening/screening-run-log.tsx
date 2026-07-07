@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, FileText, ListFilter, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { fetchCandidateScreeningRun, fetchJdCandidates } from '@/lib/candidate-screening/client';
@@ -11,6 +12,11 @@ import type {
   CandidateScreeningRunDto,
 } from '@/lib/candidate-screening/repo';
 import type { CandidateScreeningRunStage } from '@/lib/candidate-screening/types';
+import {
+  currentPathWithSearch,
+  getReturnTarget,
+  withReturnTarget,
+} from '@/lib/navigation/return-url';
 
 const runStageSteps: Array<{ stage: CandidateScreeningRunStage; label: string }> = [
   { stage: 'planning', label: '制定搜索计划' },
@@ -111,6 +117,18 @@ export function CandidateScreeningRunLog({
   jobDescriptionId: string;
   runId: string;
 }) {
+  const searchParams = useSearchParams();
+  const returnTarget = getReturnTarget(searchParams, {
+    href: `/jd-generator/${jobDescriptionId}`,
+    label: '返回 JD',
+  });
+  const runLogReturnTarget = {
+    href: currentPathWithSearch(
+      `/jd-generator/${jobDescriptionId}/screening-runs/${runId}`,
+      searchParams,
+    ),
+    label: '返回筛选记录',
+  };
   const [run, setRun] = useState<CandidateScreeningRunDto | null>(null);
   const [items, setItems] = useState<CandidateScreeningResultListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -172,14 +190,9 @@ export function CandidateScreeningRunLog({
   if (!run) {
     return (
       <div className="space-y-4">
-        <Button
-          as={Link}
-          className="gap-2 px-0"
-          href={`/jd-generator/${jobDescriptionId}`}
-          variant="light"
-        >
+        <Button as={Link} className="gap-2 px-0" href={returnTarget.href} variant="light">
           <ArrowLeft className="h-4 w-4" aria-hidden />
-          返回 JD
+          {returnTarget.label}
         </Button>
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
           {error || '筛选执行记录不存在'}
@@ -192,14 +205,9 @@ export function CandidateScreeningRunLog({
     <div className="space-y-4">
       <div className="border-border flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <Button
-            as={Link}
-            className="mb-3 gap-2 px-0"
-            href={`/jd-generator/${jobDescriptionId}`}
-            variant="light"
-          >
+          <Button as={Link} className="mb-3 gap-2 px-0" href={returnTarget.href} variant="light">
             <ArrowLeft className="h-4 w-4" aria-hidden />
-            返回 JD
+            {returnTarget.label}
           </Button>
           <div className="flex flex-wrap items-center gap-2">
             <FileText className="text-muted-foreground h-5 w-5" aria-hidden />
@@ -216,7 +224,10 @@ export function CandidateScreeningRunLog({
           <Button
             as={Link}
             className="gap-2"
-            href={`/jd-generator/${jobDescriptionId}/candidates`}
+            href={withReturnTarget(
+              `/jd-generator/${jobDescriptionId}/candidates`,
+              runLogReturnTarget,
+            )}
             variant="bordered"
           >
             <ListFilter className="h-4 w-4" aria-hidden />
@@ -381,7 +392,10 @@ export function CandidateScreeningRunLog({
                 <div className="min-w-0">
                   <Link
                     className="text-foreground block truncate text-sm font-medium hover:underline"
-                    href={`/jd-generator/${jobDescriptionId}/candidates/${item.candidateId}`}
+                    href={withReturnTarget(
+                      `/jd-generator/${jobDescriptionId}/candidates/${item.candidateId}`,
+                      runLogReturnTarget,
+                    )}
                   >
                     {item.candidate.displayName}
                   </Link>

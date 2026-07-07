@@ -158,6 +158,19 @@ type CandidateTrackingRecord = CandidateWithRelationsRecord & {
   jobDescription: TrackingJobDescriptionRecord;
 };
 
+type CandidateResumeLibraryRecord = CandidateResumeRecord & {
+  candidate: CandidateRecord;
+};
+
+type ResumeMountedScreeningRecord = CandidateScreeningResultRecord & {
+  jobDescription: TrackingJobDescriptionRecord;
+};
+
+type CandidateInterviewRecordRow = CandidateInterviewFeedbackRecord & {
+  candidate: CandidateRecord;
+  jobDescription: TrackingJobDescriptionRecord;
+};
+
 export type CandidateScreeningRunDto = {
   id: string;
   userId: string;
@@ -268,6 +281,11 @@ export type CandidateInterviewFeedbackDto = {
   updatedAt: string;
 };
 
+export type CandidateInterviewRecordDto = CandidateInterviewFeedbackDto & {
+  candidate: CandidateDto;
+  jobDescription: CandidateTrackingJobDescriptionDto;
+};
+
 export type CandidateVectorChunkInsert = {
   id?: string;
   chunkIndex: number;
@@ -324,6 +342,23 @@ export type CandidateTrackingCandidateDto = CandidateScreeningResultListItem & {
 export type CandidateTrackingOverviewDto = {
   jobs: CandidateTrackingJobSummaryDto[];
   candidates: CandidateTrackingCandidateDto[];
+};
+
+export type CandidateResumeMountedJobDto = {
+  screeningResultId: string;
+  candidateId: string;
+  resumeId: string | null;
+  finalScore: number;
+  interviewStage: CandidateInterviewStage;
+  decisionAction: CandidateDecisionAction;
+  updatedAt: string;
+  jobDescription: CandidateTrackingJobDescriptionDto;
+};
+
+export type CandidateResumeLibraryItemDto = {
+  resume: CandidateResumeDto;
+  candidate: CandidateDto;
+  mountedJobs: CandidateResumeMountedJobDto[];
 };
 
 export type CreateRunParams = {
@@ -512,6 +547,14 @@ function iso(date: NullableDate): string | null {
   return date ? date.toISOString() : null;
 }
 
+const DEFAULT_LIST_LIMIT = 200;
+const MAX_LIST_LIMIT = 500;
+
+function clampListLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_LIST_LIMIT;
+  return Math.max(1, Math.min(MAX_LIST_LIMIT, Math.trunc(value)));
+}
+
 function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
   return {
     id: row.id,
@@ -636,6 +679,14 @@ function mapInterviewFeedback(
   };
 }
 
+function mapInterviewRecord(row: CandidateInterviewRecordRow): CandidateInterviewRecordDto {
+  return {
+    ...mapInterviewFeedback(row),
+    candidate: mapCandidate(row.candidate),
+    jobDescription: mapTrackingJobDescription(row.jobDescription),
+  };
+}
+
 function mapListItem(row: CandidateWithRelationsRecord): CandidateScreeningResultListItem {
   return {
     ...mapScreeningResult(row),
@@ -677,6 +728,19 @@ function mapTrackingJobDescription(
 function mapTrackingCandidate(row: CandidateTrackingRecord): CandidateTrackingCandidateDto {
   return {
     ...mapListItem(row),
+    jobDescription: mapTrackingJobDescription(row.jobDescription),
+  };
+}
+
+function mapResumeMountedJob(row: ResumeMountedScreeningRecord): CandidateResumeMountedJobDto {
+  return {
+    screeningResultId: row.id,
+    candidateId: row.candidateId,
+    resumeId: row.resumeId,
+    finalScore: row.finalScore,
+    interviewStage: row.interviewStage as CandidateInterviewStage,
+    decisionAction: row.decisionAction as CandidateDecisionAction,
+    updatedAt: iso(row.updatedAt),
     jobDescription: mapTrackingJobDescription(row.jobDescription),
   };
 }
@@ -1088,11 +1152,70 @@ export async function listCandidateScreeningResults(
   return rows.map(mapListItem);
 }
 
+export async function listCandidateResumeLibrary(params: {
+  userId: string;
+  limit?: number;
+}): Promise<CandidateResumeLibraryItemDto[]> {
+  const limit = clampListLimit(params.limit);
+  const batchSize = limit * 3;
+  const latestByCandidate = new Map<string, CandidateResumeLibraryRecord>();
+  let offset = 0;
+
+  while (latestByCandidate.size < limit) {
+    const rows = (await prisma.candidateResume.findMany({
+      where: { userId: params.userId },
+      include: { candidate: true },
+      orderBy: [{ fetchedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: batchSize,
+      ...(offset > 0 ? { skip: offset } : {}),
+    })) as CandidateResumeLibraryRecord[];
+
+    for (const row of rows) {
+      if (!latestByCandidate.has(row.candidateId)) {
+        latestByCandidate.set(row.candidateId, row);
+      }
+      if (latestByCandidate.size >= limit) {
+        break;
+      }
+    }
+
+    offset += rows.length;
+    if (rows.length < batchSize) {
+      break;
+    }
+  }
+
+  const latestRows = [...latestByCandidate.values()];
+  const resumeIds = latestRows.map((row) => row.id);
+  const mountedRows =
+    resumeIds.length === 0
+      ? []
+      : ((await prisma.candidateScreeningResult.findMany({
+          where: { userId: params.userId, resumeId: { in: resumeIds } },
+          include: { jobDescription: true },
+          orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+        })) as ResumeMountedScreeningRecord[]);
+
+  const mountedByResume = new Map<string, ResumeMountedScreeningRecord[]>();
+  for (const mounted of mountedRows) {
+    if (!mounted.resumeId) continue;
+    const current = mountedByResume.get(mounted.resumeId) ?? [];
+    current.push(mounted);
+    mountedByResume.set(mounted.resumeId, current);
+  }
+
+  return latestRows.map((row) => ({
+    resume: mapResume(row),
+    candidate: mapCandidate(row.candidate),
+    mountedJobs: (mountedByResume.get(row.id) ?? []).map(mapResumeMountedJob),
+  }));
+}
+
 export async function getCandidateTrackingOverview(params: {
   userId: string;
   limit?: number;
 }): Promise<CandidateTrackingOverviewDto> {
-  const limit = Math.max(1, Math.min(500, Math.trunc(params.limit ?? 200)));
+  const limit = clampListLimit(params.limit);
   const rows = await prisma.candidateScreeningResult.findMany({
     where: { userId: params.userId },
     include: { candidate: true, resume: true, jobDescription: true },
@@ -1202,6 +1325,20 @@ export async function listCandidateInterviewFeedbacks(params: {
     orderBy: { updatedAt: 'asc' },
   });
   return rows.map(mapInterviewFeedback).sort(sortInterviewFeedbacks);
+}
+
+export async function listCandidateInterviewRecords(params: {
+  userId: string;
+  limit?: number;
+}): Promise<CandidateInterviewRecordDto[]> {
+  const limit = clampListLimit(params.limit);
+  const rows = await prisma.candidateInterviewFeedback.findMany({
+    where: { userId: params.userId },
+    include: { candidate: true, jobDescription: true },
+    orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+    take: limit,
+  });
+  return (rows as CandidateInterviewRecordRow[]).map(mapInterviewRecord);
 }
 
 export async function upsertCandidateInterviewFeedback(

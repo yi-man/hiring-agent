@@ -4,12 +4,14 @@ import { JDCreateView, JDDetailView, JDListView } from '@/components/jd-generato
 import type { JobDescriptionDto } from '@/types';
 
 const pushMock = jest.fn();
+let mockSearchParams = new URLSearchParams();
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({
     push: pushMock,
     refresh: jest.fn(),
   }),
+  useSearchParams: () => mockSearchParams,
 }));
 
 jest.mock('@/components/ui', () => ({
@@ -119,8 +121,19 @@ const sampleCompanyProfile = {
   updatedAt: '2026-07-06T02:00:00.000Z',
 };
 
+function parsedHref(href: string) {
+  return new URL(href, 'http://localhost');
+}
+
+function expectReturnContext(href: string, returnTo: string, returnLabel: string) {
+  const url = parsedHref(href);
+  expect(url.searchParams.get('returnTo')).toBe(returnTo);
+  expect(url.searchParams.get('returnLabel')).toBe(returnLabel);
+}
+
 describe('JD pages', () => {
   beforeEach(() => {
+    mockSearchParams = new URLSearchParams();
     pushMock.mockReset();
     global.fetch = jest.fn();
   });
@@ -153,19 +166,17 @@ describe('JD pages', () => {
       'href',
       '/jd-generator/new',
     );
-    expect(screen.getByRole('link', { name: '详情' })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1',
-    );
+    const detailHref = screen.getByRole('link', { name: '详情' }).getAttribute('href') ?? '';
+    expect(parsedHref(detailHref).pathname).toBe('/jd-generator/jd-1');
+    expectReturnContext(detailHref, '/jd-generator', '返回列表');
     expect(screen.getByRole('button', { name: '继续筛选' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '筛选记录' })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1/screening-runs/run-1',
-    );
-    expect(screen.getByRole('link', { name: '候选人' })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1/candidates',
-    );
+    const screeningRunHref =
+      screen.getByRole('link', { name: '筛选记录' }).getAttribute('href') ?? '';
+    expect(parsedHref(screeningRunHref).pathname).toBe('/jd-generator/jd-1/screening-runs/run-1');
+    expectReturnContext(screeningRunHref, '/jd-generator', '返回列表');
+    const candidatesHref = screen.getByRole('link', { name: '候选人' }).getAttribute('href') ?? '';
+    expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-1/candidates');
+    expectReturnContext(candidatesHref, '/jd-generator', '返回列表');
 
     fireEvent.change(screen.getByLabelText('JD 状态筛选'), { target: { value: 'created' } });
 
@@ -274,6 +285,27 @@ describe('JD pages', () => {
     });
     expect(screen.getByText('company.md')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
+  });
+
+  it('JD detail returns to the supplied source context', async () => {
+    mockSearchParams = new URLSearchParams('returnTo=/&returnLabel=返回工作台');
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: sampleJobDescription }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    expect(await screen.findByRole('link', { name: '返回工作台' })).toHaveAttribute('href', '/');
   });
 
   it('uses the logged-in user company profile when publishing a JD', async () => {
@@ -395,15 +427,15 @@ describe('JD pages', () => {
       within(topActions).queryByRole('link', { name: /已筛选候选人/ }),
     ).not.toBeInTheDocument();
     expect(within(topActions).queryByRole('link', { name: '筛选记录' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /已筛选候选人/ })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1/candidates',
-    );
-    expect(screen.getByRole('link', { name: '筛选记录' })).toHaveAttribute(
-      'href',
-      '/jd-generator/jd-1/screening-runs/run-1',
-    );
     expect(within(topActions).queryByRole('button', { name: '批量沟通' })).not.toBeInTheDocument();
+    const candidatesHref =
+      screen.getByRole('link', { name: /已筛选候选人/ }).getAttribute('href') ?? '';
+    expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-1/candidates');
+    expectReturnContext(candidatesHref, '/jd-generator/jd-1', '返回 JD');
+    const screeningRunHref =
+      screen.getByRole('link', { name: '筛选记录' }).getAttribute('href') ?? '';
+    expect(parsedHref(screeningRunHref).pathname).toBe('/jd-generator/jd-1/screening-runs/run-1');
+    expectReturnContext(screeningRunHref, '/jd-generator/jd-1', '返回 JD');
 
     expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发布到 Boss-like' })).not.toBeInTheDocument();
