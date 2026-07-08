@@ -17,6 +17,7 @@ export type CandidateScreeningRunStage =
   | 'planning_actions'
   | 'executing_actions'
   | 'finalizing';
+export type CandidateScreeningRunEventLevel = 'info' | 'success' | 'warning' | 'error';
 export type CandidateScreeningSource = 'live_search' | 'vector_recall' | 'both';
 export type CandidateDecisionAction = 'chat' | 'collect' | 'skip';
 export type CandidateDecisionPriority = 'high' | 'medium' | 'low';
@@ -41,12 +42,54 @@ export type CandidateInterviewFeedbackDecision = 'pass' | 'reject' | 'hold';
 export type CandidateHireDecision = 'strong_yes' | 'yes' | 'no';
 export type CandidateDecisionIntentLevel = 'high' | 'medium' | 'low';
 export type CandidateDecisionRiskLevel = 'low' | 'medium' | 'high';
+export type CandidateCalibrationCategory =
+  | 'technical'
+  | 'data_ai'
+  | 'product'
+  | 'sales'
+  | 'operations'
+  | 'design'
+  | 'management'
+  | 'general';
+
+export type CandidateCalibrationAnchor = {
+  label: string;
+  expectedAction: CandidateDecisionAction;
+  scoreRange: [number, number];
+  positiveSignals: string[];
+  riskSignals: string[];
+  guidance: string;
+};
+
+export type CandidateCalibrationProfile = {
+  version: string;
+  category: CandidateCalibrationCategory;
+  categoryLabel: string;
+  anchors: CandidateCalibrationAnchor[];
+  reviewSampling: string[];
+};
+
+export type CandidateScoringQualityPolicy = {
+  version: string;
+  promptVersion: string;
+  scoringVersion: string;
+  calibrationVersion: string;
+  regressionTiers: Array<{
+    name: string;
+    trigger: string;
+    llmCalls: 'none' | 'small-sample' | 'full-sample';
+    description: string;
+  }>;
+  iterationSteps: string[];
+};
 
 export type EvaluationSchema = {
   skills: string[];
   domainKnowledge: string[];
   generalAbility: string[];
   risk: string[];
+  calibrationProfile?: CandidateCalibrationProfile;
+  qualityPolicy?: CandidateScoringQualityPolicy;
 };
 
 export type SearchPlan = {
@@ -75,6 +118,10 @@ export type ScoreDetail = {
   risk: number;
   llmBonus: number;
   total: number;
+  promptVersion?: string;
+  scoringVersion?: string;
+  calibrationVersion?: string;
+  qualityPolicyVersion?: string;
 };
 
 export type CandidateActionPlan = {

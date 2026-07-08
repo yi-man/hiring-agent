@@ -4,6 +4,8 @@ import { splitMarkdownToChunks } from '@/lib/rag/markdown';
 import { createCandidateIdentity } from './dedupe';
 import {
   createOrReuseCandidateResume,
+  findCandidateByIdentity,
+  findCandidateResumeByHash,
   replaceCandidateResumeChunks,
   upsertCandidateWithIdentity,
 } from './repo';
@@ -19,6 +21,19 @@ export type RawCandidate = {
   resumeText: string;
   profileUrl?: string | null;
   lastActiveAt?: string | null;
+};
+
+export type IngestRawCandidateResult = {
+  candidateId: string;
+  resumeId: string;
+  identityHash: string;
+  chunkCount: number;
+  candidateContacted: boolean;
+  candidateWasExisting: boolean;
+  resumeWasExisting: boolean;
+  existingCandidateId: string | null;
+  existingCandidateName: string | null;
+  existingResumeId: string | null;
 };
 
 function sha256(value: string): string {
@@ -39,7 +54,7 @@ export async function ingestRawCandidate(params: {
   userId: string;
   sourcePlatform: CandidateScreeningPlatform;
   rawCandidate: RawCandidate;
-}): Promise<{ candidateId: string; resumeId: string; identityHash: string; chunkCount: number }> {
+}): Promise<IngestRawCandidateResult> {
   const rawCandidate = params.rawCandidate;
   const resumeText = rawCandidate.resumeText.trim();
   if (!resumeText) {
@@ -53,6 +68,12 @@ export async function ingestRawCandidate(params: {
     name: rawCandidate.name,
     company: rawCandidate.company,
     title: rawCandidate.title,
+  });
+  const resumeHash = sha256(resumeText);
+  const existingCandidate = await findCandidateByIdentity({
+    userId: params.userId,
+    sourcePlatform: params.sourcePlatform,
+    identityHash: identity.identityHash,
   });
 
   const candidate = await upsertCandidateWithIdentity({
@@ -75,6 +96,11 @@ export async function ingestRawCandidate(params: {
       ? { lastActiveAt: parseOptionalDate(rawCandidate.lastActiveAt) }
       : {}),
   });
+  const existingResume = await findCandidateResumeByHash({
+    userId: params.userId,
+    candidateId: candidate.id,
+    resumeHash,
+  });
 
   const resume = await createOrReuseCandidateResume({
     userId: params.userId,
@@ -83,7 +109,7 @@ export async function ingestRawCandidate(params: {
     profileUrl: rawCandidate.profileUrl ?? null,
     rawText: resumeText,
     structuredSummary: null,
-    resumeHash: sha256(resumeText),
+    resumeHash,
     fetchedAt: new Date(),
   });
 
@@ -124,5 +150,11 @@ export async function ingestRawCandidate(params: {
     resumeId: resume.id,
     identityHash: identity.identityHash,
     chunkCount: chunks.length,
+    candidateContacted: candidate.contacted,
+    candidateWasExisting: existingCandidate !== null,
+    resumeWasExisting: existingResume !== null,
+    existingCandidateId: existingCandidate?.id ?? null,
+    existingCandidateName: existingCandidate?.displayName ?? null,
+    existingResumeId: existingResume?.id ?? null,
   };
 }

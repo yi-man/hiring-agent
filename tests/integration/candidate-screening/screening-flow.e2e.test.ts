@@ -44,6 +44,9 @@ const sampleJd: JD = {
   highlights: ['AI 招聘产品'],
 };
 
+const adaResumeId = '301';
+const graceResumeId = '302';
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -73,7 +76,7 @@ function renderCandidateArticle(params: {
 function candidateFixtures(): string[] {
   return [
     renderCandidateArticle({
-      id: 'boss-cand-1',
+      id: adaResumeId,
       name: 'Ada Lovelace',
       title: 'Senior Backend Engineer',
       company: 'Analytical Engines',
@@ -81,7 +84,7 @@ function candidateFixtures(): string[] {
       resume: 'Java 微服务 PostgreSQL 招聘 SaaS 候选人筛选 负责核心系统稳定性和平台工程。',
     }),
     renderCandidateArticle({
-      id: 'boss-cand-2',
+      id: graceResumeId,
       name: 'Grace Hopper',
       title: 'Staff Platform Engineer',
       company: 'Compiler Labs',
@@ -174,7 +177,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     }
     const detailMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)$/);
     if (detailMatch) {
-      response.end(renderResumeDetailPage(detailMatch[1] ?? 'boss-cand-1'));
+      response.end(renderResumeDetailPage(detailMatch[1] ?? adaResumeId));
       return;
     }
 
@@ -412,8 +415,8 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(result.actionStatus).toBe('success');
       expect(result.interviewStage).toBe('contacted');
       expect(bossLike.requests).toContain('GET /employer/resumes');
-      expect(bossLike.requests).toContain('GET /employer/resumes/boss-cand-1');
-      expect(bossLike.requests).toContain('POST /employer/resumes/boss-cand-1/messages');
+      expect(bossLike.requests).toContain(`GET /employer/resumes/${adaResumeId}`);
+      expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();

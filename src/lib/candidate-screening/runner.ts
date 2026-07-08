@@ -1,8 +1,17 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
+import { resolveBossLikeProfileUrl } from './adapters/boss-like';
 import { createCandidateSourceAdapter } from './adapters/factory';
 import type { CandidateSourceAdapter, StoredCandidateRef } from './adapters/types';
-import { createInMemoryDedupeState } from './dedupe';
+import {
+  CANDIDATE_EVALUATION_PROMPT_VERSION,
+  CANDIDATE_SCREENING_CALIBRATION_VERSION,
+  CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+  CANDIDATE_SCREENING_SCORING_VERSION,
+  MAX_SCREENING_EVALUATION_CANDIDATES,
+  MAX_VECTOR_RECALL_CANDIDATES,
+} from './constants';
+import { createCandidateIdentity, createInMemoryDedupeState } from './dedupe';
 import { evaluateCandidateForJd } from './evaluation';
 import { ingestRawCandidate, type RawCandidate } from './ingest';
 import { buildScreeningPlanFromJd } from './planner';
@@ -18,6 +27,7 @@ import {
   updateCandidateScreeningRun,
   upsertCandidateWithIdentity,
   upsertCandidateScreeningResult,
+  createCandidateScreeningRunEvent,
   type CandidateActionLogDto,
   type CandidateScreeningDetailDto,
   type CandidateScreeningResultListItem,
@@ -25,9 +35,11 @@ import {
 import type {
   CandidateActionPlan,
   CandidateDecisionAction,
+  CandidateScreeningPlatform,
   CreateScreeningRunRequest,
   EvaluationSchema,
   ExecuteActionsRequest,
+  CandidateScreeningRunStage,
   ScreeningRunStats,
   SearchPlan,
 } from './types';
@@ -39,10 +51,26 @@ type CandidateContext = {
   resumeText: string;
   displayName: string;
   profileUrl: string | null;
+  contacted: boolean;
 };
 
 type CandidateEvaluation = Awaited<ReturnType<typeof evaluateCandidateForJd>>;
 type CandidateScreeningGraphRoute = 'execute_actions' | 'finalize';
+type ScoreQualityVersions = {
+  promptVersion: string | null;
+  scoringVersion: string | null;
+  calibrationVersion: string | null;
+  qualityPolicyVersion: string | null;
+};
+type SeenIdentityRef = {
+  candidateName: string;
+  candidateId: string | null;
+  resumeId: string | null;
+  title: string | null;
+  company: string | null;
+  profileUrl: string | null;
+  platformCandidateId: string | null;
+};
 
 export type ScreeningRunnerDependencies = {
   buildPlan: typeof buildScreeningPlanFromJd;
@@ -57,6 +85,7 @@ export type ScreeningRunnerDependencies = {
     upsertResult: typeof upsertCandidateScreeningResult;
     createActionLog: typeof createCandidateActionLog;
     updateActionLog: typeof updateCandidateActionLog;
+    createRunEvent: typeof createCandidateScreeningRunEvent;
     listResults: typeof listCandidateScreeningResults;
     getDetail: typeof getCandidateScreeningDetail;
     upsertCandidate: typeof upsertCandidateWithIdentity;
@@ -89,11 +118,19 @@ const defaultDependencies: ScreeningRunnerDependencies = {
     upsertResult: upsertCandidateScreeningResult,
     createActionLog: createCandidateActionLog,
     updateActionLog: updateCandidateActionLog,
+    createRunEvent: createCandidateScreeningRunEvent,
     listResults: listCandidateScreeningResults,
     getDetail: getCandidateScreeningDetail,
     upsertCandidate: upsertCandidateWithIdentity,
     claimActionLog: claimCandidateActionLog,
   },
+};
+
+const CURRENT_SCORE_QUALITY_VERSIONS: ScoreQualityVersions = {
+  promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
+  scoringVersion: CANDIDATE_SCREENING_SCORING_VERSION,
+  calibrationVersion: CANDIDATE_SCREENING_CALIBRATION_VERSION,
+  qualityPolicyVersion: CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
 };
 
 const CandidateScreeningState = Annotation.Root({
@@ -109,6 +146,7 @@ const CandidateScreeningState = Annotation.Root({
   contexts: Annotation<Map<string, CandidateContext>>(),
   liveInputs: Annotation<RankInput[]>(),
   vectorInputs: Annotation<RankInput[]>(),
+  candidatePool: Annotation<RankedCandidate[]>(),
   evaluations: Annotation<Map<string, CandidateEvaluation>>(),
   rankedCandidates: Annotation<RankedCandidate[]>(),
   route: Annotation<CandidateScreeningGraphRoute>(),
@@ -153,6 +191,29 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'candidate screening failed';
 }
 
+async function recordRunEvent(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  candidateId?: string | null;
+  stage: CandidateScreeningRunStage;
+  level?: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  detail?: Record<string, unknown> | null;
+}): Promise<void> {
+  await params.dependencies.repo.createRunEvent({
+    userId: params.userId,
+    runId: params.runId,
+    jobDescriptionId: params.jobDescriptionId,
+    candidateId: params.candidateId ?? null,
+    stage: params.stage,
+    level: params.level ?? 'info',
+    message: params.message,
+    detail: params.detail ?? null,
+  });
+}
+
 async function closeAdapterSafely(adapter: CandidateSourceAdapter | null): Promise<void> {
   if (!adapter) return;
 
@@ -177,6 +238,14 @@ function incrementDecisionStats(stats: ScreeningRunStats, action: CandidateDecis
 
 function copyStats(stats: ScreeningRunStats): ScreeningRunStats {
   return { ...stats };
+}
+
+function resolveVectorRecallTopK(maxCandidates: number): number {
+  return Math.min(maxCandidates, MAX_VECTOR_RECALL_CANDIDATES);
+}
+
+function resolveEvaluationLimit(maxCandidates: number): number {
+  return Math.min(maxCandidates, MAX_SCREENING_EVALUATION_CANDIDATES);
 }
 
 function rememberStats(
@@ -223,6 +292,7 @@ async function updateStage(params: {
     | 'planning'
     | 'searching_live'
     | 'ingesting_live'
+    | 'indexing_resumes'
     | 'recalling_vectors'
     | 'evaluating'
     | 'ranking'
@@ -238,26 +308,61 @@ async function updateStage(params: {
   });
 }
 
-function buildVectorInputs(
-  recalledCandidates: Awaited<ReturnType<typeof recallCandidatesForJd>>,
-  contexts: Map<string, CandidateContext>,
-): RankInput[] {
-  return recalledCandidates.map((candidate) => {
-    if (!contexts.has(candidate.candidateId)) {
-      contexts.set(candidate.candidateId, {
+type RecalledCandidate = Awaited<ReturnType<typeof recallCandidatesForJd>>[number];
+
+type SkippedVectorCandidate = {
+  candidate: RecalledCandidate;
+  reason: string;
+};
+
+function getUnusableProfileUrlReason(params: {
+  platform: CandidateScreeningPlatform;
+  profileUrl: string | null | undefined;
+}): string | null {
+  if (params.platform !== 'boss-like') return null;
+  const resolution = resolveBossLikeProfileUrl(
+    params.profileUrl,
+    process.env.BOSS_LIKE_BASE_URL ?? 'http://localhost:6183',
+  );
+  return resolution.profileUrl ? null : (resolution.error ?? 'candidate profileUrl is unusable');
+}
+
+function buildVectorInputs(params: {
+  recalledCandidates: Awaited<ReturnType<typeof recallCandidatesForJd>>;
+  contexts: Map<string, CandidateContext>;
+  platform: CandidateScreeningPlatform;
+}): { inputs: RankInput[]; skipped: SkippedVectorCandidate[] } {
+  const inputs: RankInput[] = [];
+  const skipped: SkippedVectorCandidate[] = [];
+
+  for (const candidate of params.recalledCandidates) {
+    if (!params.contexts.has(candidate.candidateId)) {
+      const unusableReason = getUnusableProfileUrlReason({
+        platform: params.platform,
+        profileUrl: candidate.profileUrl,
+      });
+      if (unusableReason) {
+        skipped.push({ candidate, reason: unusableReason });
+        continue;
+      }
+
+      params.contexts.set(candidate.candidateId, {
         candidateId: candidate.candidateId,
         resumeId: candidate.resumeId,
         resumeText: candidate.content,
         displayName: candidate.displayName,
         profileUrl: candidate.profileUrl,
+        contacted: candidate.contacted === true,
       });
     }
 
-    return {
+    inputs.push({
       candidateId: candidate.candidateId,
       matchScore: candidate.score,
-    };
-  });
+    });
+  }
+
+  return { inputs, skipped };
 }
 
 async function collectRawCandidates(params: {
@@ -284,8 +389,253 @@ async function collectRawCandidates(params: {
   return rawCandidates;
 }
 
+function createRawSeenIdentityRef(rawCandidate: RawCandidate): SeenIdentityRef {
+  return {
+    candidateName: rawCandidate.name,
+    candidateId: null,
+    resumeId: null,
+    title: rawCandidate.title ?? null,
+    company: rawCandidate.company ?? null,
+    profileUrl: rawCandidate.profileUrl ?? null,
+    platformCandidateId: rawCandidate.platformCandidateId ?? null,
+  };
+}
+
+function createStoredSeenIdentityRef(
+  rawCandidate: RawCandidate,
+  stored: Awaited<ReturnType<typeof ingestRawCandidate>>,
+): SeenIdentityRef {
+  return {
+    candidateName: rawCandidate.name,
+    candidateId: stored.candidateId,
+    resumeId: stored.resumeId,
+    title: rawCandidate.title ?? null,
+    company: rawCandidate.company ?? null,
+    profileUrl: rawCandidate.profileUrl ?? null,
+    platformCandidateId: rawCandidate.platformCandidateId ?? null,
+  };
+}
+
+function evaluationFromScreeningResult(
+  result: CandidateScreeningResultListItem,
+): CandidateEvaluation {
+  return {
+    tags: result.tags,
+    score: result.scoreDetail,
+    decision: {
+      action: result.decisionAction,
+      priority: result.decisionPriority,
+      message: result.actionPlan?.message ?? null,
+      reason: result.decisionReason,
+    },
+  };
+}
+
+function isResultCurrentForJobDescription(params: {
+  resultUpdatedAt: string;
+  jobDescriptionUpdatedAt: string;
+}): boolean {
+  const resultTime = Date.parse(params.resultUpdatedAt);
+  const jobDescriptionTime = Date.parse(params.jobDescriptionUpdatedAt);
+  if (!Number.isFinite(resultTime) || !Number.isFinite(jobDescriptionTime)) {
+    return false;
+  }
+  return resultTime >= jobDescriptionTime;
+}
+
+function getScoreQualityVersions(result: CandidateScreeningResultListItem): ScoreQualityVersions {
+  return {
+    promptVersion: result.scoreDetail.promptVersion ?? null,
+    scoringVersion: result.scoreDetail.scoringVersion ?? null,
+    calibrationVersion: result.scoreDetail.calibrationVersion ?? null,
+    qualityPolicyVersion: result.scoreDetail.qualityPolicyVersion ?? null,
+  };
+}
+
+function isCurrentScoreQualityVersion(result: CandidateScreeningResultListItem): boolean {
+  const versions = getScoreQualityVersions(result);
+  return (
+    versions.promptVersion === CURRENT_SCORE_QUALITY_VERSIONS.promptVersion &&
+    versions.scoringVersion === CURRENT_SCORE_QUALITY_VERSIONS.scoringVersion &&
+    versions.calibrationVersion === CURRENT_SCORE_QUALITY_VERSIONS.calibrationVersion &&
+    versions.qualityPolicyVersion === CURRENT_SCORE_QUALITY_VERSIONS.qualityPolicyVersion
+  );
+}
+
+function appendEvaluationCandidates(params: {
+  target: RankedCandidate[];
+  source: RankedCandidate[];
+  limit: number;
+  cursor: number;
+}): number {
+  let cursor = params.cursor;
+  while (params.target.length < params.limit && cursor < params.source.length) {
+    params.target.push(params.source[cursor]);
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function appendAlternatingEvaluationCandidates(params: {
+  target: RankedCandidate[];
+  preferred: RankedCandidate[];
+  fallback: RankedCandidate[];
+  limit: number;
+}): void {
+  let preferredCursor = 0;
+  let fallbackCursor = 0;
+  let preferPreferred = true;
+
+  while (
+    params.target.length < params.limit &&
+    (preferredCursor < params.preferred.length || fallbackCursor < params.fallback.length)
+  ) {
+    if (preferPreferred && preferredCursor < params.preferred.length) {
+      params.target.push(params.preferred[preferredCursor]);
+      preferredCursor += 1;
+      preferPreferred = false;
+      continue;
+    }
+    if (!preferPreferred && fallbackCursor < params.fallback.length) {
+      params.target.push(params.fallback[fallbackCursor]);
+      fallbackCursor += 1;
+      preferPreferred = true;
+      continue;
+    }
+    if (preferredCursor < params.preferred.length) {
+      preferredCursor = appendEvaluationCandidates({
+        target: params.target,
+        source: params.preferred,
+        limit: params.limit,
+        cursor: preferredCursor,
+      });
+      continue;
+    }
+    fallbackCursor = appendEvaluationCandidates({
+      target: params.target,
+      source: params.fallback,
+      limit: params.limit,
+      cursor: fallbackCursor,
+    });
+  }
+}
+
+function selectEvaluationCandidates(params: {
+  liveInputs: RankInput[];
+  vectorInputs: RankInput[];
+  contexts: Map<string, CandidateContext>;
+  maxCandidates: number;
+  mergeAndRank: typeof mergeAndRankCandidates;
+}): RankedCandidate[] {
+  const rankedCandidates = params
+    .mergeAndRank({
+      live: params.liveInputs,
+      vector: params.vectorInputs,
+    })
+    .filter((candidate) => params.contexts.has(candidate.candidateId));
+  const limit = resolveEvaluationLimit(params.maxCandidates);
+  const both = rankedCandidates.filter((candidate) => candidate.source === 'both');
+  const vectorOnly = rankedCandidates.filter((candidate) => candidate.source === 'vector_recall');
+  const liveOnly = rankedCandidates.filter((candidate) => candidate.source === 'live_search');
+  const selected: RankedCandidate[] = [];
+
+  appendEvaluationCandidates({ target: selected, source: both, limit, cursor: 0 });
+  appendAlternatingEvaluationCandidates({
+    target: selected,
+    preferred: vectorOnly,
+    fallback: liveOnly,
+    limit,
+  });
+
+  return selected;
+}
+
+function selectEvaluationContexts(
+  contexts: Map<string, CandidateContext>,
+  rankedCandidates: RankedCandidate[],
+): Map<string, CandidateContext> {
+  const selected = new Map<string, CandidateContext>();
+  for (const candidate of rankedCandidates) {
+    const context = contexts.get(candidate.candidateId);
+    if (context) {
+      selected.set(candidate.candidateId, context);
+    }
+  }
+  return selected;
+}
+
+function rankEvaluatedCandidates(params: {
+  rankedCandidates: RankedCandidate[];
+  evaluations: Map<string, CandidateEvaluation>;
+}): RankedCandidate[] {
+  return params.rankedCandidates
+    .filter((candidate) => params.evaluations.has(candidate.candidateId))
+    .sort((left, right) => {
+      const leftEvaluation = params.evaluations.get(left.candidateId);
+      const rightEvaluation = params.evaluations.get(right.candidateId);
+      const scoreDiff = (rightEvaluation?.score.total ?? 0) - (leftEvaluation?.score.total ?? 0);
+      return (
+        scoreDiff ||
+        right.matchScore - left.matchScore ||
+        left.candidateId.localeCompare(right.candidateId)
+      );
+    })
+    .map((candidate, index) => ({
+      ...candidate,
+      rank: index + 1,
+    }));
+}
+
+async function listHistoricalEvaluations(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  jobDescriptionId: string;
+  candidateIds: string[];
+}): Promise<Map<string, CandidateScreeningResultListItem>> {
+  if (params.candidateIds.length === 0) {
+    return new Map();
+  }
+
+  const results = await params.dependencies.repo.listResults({
+    userId: params.userId,
+    jobDescriptionId: params.jobDescriptionId,
+    candidateIds: params.candidateIds,
+    limit: params.candidateIds.length,
+  });
+  return new Map(results.map((result) => [result.candidateId, result]));
+}
+
+async function listExistingResultsForActionPlanning(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  jobDescriptionId: string;
+  rankedCandidates: RankedCandidate[];
+  contexts: Map<string, CandidateContext>;
+  allowAlreadyContacted: boolean;
+}): Promise<Map<string, CandidateScreeningResultListItem>> {
+  if (params.allowAlreadyContacted) {
+    return new Map();
+  }
+
+  const contactedCandidateIds = params.rankedCandidates
+    .filter((candidate) => params.contexts.get(candidate.candidateId)?.contacted === true)
+    .map((candidate) => candidate.candidateId);
+  if (contactedCandidateIds.length === 0) {
+    return new Map();
+  }
+
+  return listHistoricalEvaluations({
+    dependencies: params.dependencies,
+    userId: params.userId,
+    jobDescriptionId: params.jobDescriptionId,
+    candidateIds: contactedCandidateIds,
+  });
+}
+
 async function evaluateCandidates(params: {
   dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
   contexts: Map<string, CandidateContext>;
   jobDescription: JobDescriptionDto;
   evaluationSchema: EvaluationSchema;
@@ -293,17 +643,155 @@ async function evaluateCandidates(params: {
   strictEvaluation: boolean;
 }): Promise<Map<string, CandidateEvaluation>> {
   const evaluations = new Map<string, CandidateEvaluation>();
+  const historicalResults = await listHistoricalEvaluations({
+    dependencies: params.dependencies,
+    userId: params.userId,
+    jobDescriptionId: params.jobDescription.id,
+    candidateIds: [...params.contexts.keys()],
+  });
 
   for (const context of params.contexts.values()) {
-    const evaluation = await params.dependencies.evaluateCandidate({
-      jobTitle: params.jobDescription.position,
-      evaluationSchema: params.evaluationSchema,
-      resumeText: context.resumeText,
-      candidateName: context.displayName,
-      strict: params.strictEvaluation,
+    const historicalResult = historicalResults.get(context.candidateId);
+    if (historicalResult) {
+      const sameResume =
+        historicalResult.resumeId !== null &&
+        context.resumeId !== null &&
+        historicalResult.resumeId === context.resumeId;
+      const sameJobDescriptionVersion = isResultCurrentForJobDescription({
+        resultUpdatedAt: historicalResult.updatedAt,
+        jobDescriptionUpdatedAt: params.jobDescription.updatedAt,
+      });
+      const sameScoreQualityVersion = isCurrentScoreQualityVersion(historicalResult);
+      const staleReasons = [
+        sameResume ? null : '简历已更新，重新评估当前版本',
+        sameJobDescriptionVersion ? null : 'JD 已更新，重新评估当前版本',
+        sameScoreQualityVersion ? null : '评分质量机制已更新，重新评估当前版本',
+      ].filter((reason): reason is string => reason !== null);
+
+      if (staleReasons.length === 0) {
+        const evaluation = evaluationFromScreeningResult(historicalResult);
+        evaluations.set(context.candidateId, evaluation);
+        params.stats.evaluated += 1;
+        await recordRunEvent({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          jobDescriptionId: params.jobDescription.id,
+          candidateId: context.candidateId,
+          stage: 'evaluating',
+          message: `复用历史评估：${context.displayName}`,
+          detail: {
+            reusedEvaluation: true,
+            candidateName: context.displayName,
+            candidateId: context.candidateId,
+            resumeId: historicalResult.resumeId,
+            profileUrl: context.profileUrl,
+            resultId: historicalResult.id,
+            previousRunId: historicalResult.runId,
+            previousUpdatedAt: historicalResult.updatedAt,
+            scoreDetail: evaluation.score,
+            tags: evaluation.tags,
+            decision: evaluation.decision,
+          },
+        });
+        continue;
+      }
+
+      await recordRunEvent({
+        dependencies: params.dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescription.id,
+        candidateId: context.candidateId,
+        stage: 'evaluating',
+        level: 'warning',
+        message: `历史评估已过期：${context.displayName}`,
+        detail: {
+          reusedEvaluation: false,
+          staleEvaluation: true,
+          staleReasons,
+          reason: staleReasons.join('；'),
+          candidateName: context.displayName,
+          candidateId: context.candidateId,
+          resumeId: context.resumeId,
+          profileUrl: context.profileUrl,
+          resultId: historicalResult.id,
+          previousRunId: historicalResult.runId,
+          previousUpdatedAt: historicalResult.updatedAt,
+          jobDescriptionUpdatedAt: params.jobDescription.updatedAt,
+          previousResumeId: historicalResult.resumeId,
+          currentResumeId: context.resumeId,
+          previousQualityVersions: getScoreQualityVersions(historicalResult),
+          currentQualityVersions: CURRENT_SCORE_QUALITY_VERSIONS,
+        },
+      });
+    }
+
+    await recordRunEvent({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescription.id,
+      candidateId: context.candidateId,
+      stage: 'evaluating',
+      message: `开始评估：${context.displayName}`,
+      detail: {
+        candidateName: context.displayName,
+        resumeId: context.resumeId,
+        profileUrl: context.profileUrl,
+        criteria: params.evaluationSchema,
+      },
     });
+    let evaluation: CandidateEvaluation;
+    try {
+      evaluation = await params.dependencies.evaluateCandidate({
+        jobTitle: params.jobDescription.position,
+        evaluationSchema: params.evaluationSchema,
+        resumeText: context.resumeText,
+        candidateName: context.displayName,
+        strict: params.strictEvaluation,
+      });
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      params.stats.failed += 1;
+      await recordRunEvent({
+        dependencies: params.dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescription.id,
+        candidateId: context.candidateId,
+        stage: 'evaluating',
+        level: 'error',
+        message: `评估失败：${context.displayName}`,
+        detail: {
+          candidateName: context.displayName,
+          resumeId: context.resumeId,
+          profileUrl: context.profileUrl,
+          errorMessage,
+        },
+      });
+      continue;
+    }
     evaluations.set(context.candidateId, evaluation);
     params.stats.evaluated += 1;
+    await recordRunEvent({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescription.id,
+      candidateId: context.candidateId,
+      stage: 'evaluating',
+      level: 'success',
+      message: `完成评估：${context.displayName}`,
+      detail: {
+        candidateName: context.displayName,
+        resumeId: context.resumeId,
+        profileUrl: context.profileUrl,
+        scoreDetail: evaluation.score,
+        tags: evaluation.tags,
+        decision: evaluation.decision,
+      },
+    });
   }
 
   return evaluations;
@@ -320,6 +808,15 @@ async function createPlannedActions(params: {
   evaluations: Map<string, CandidateEvaluation>;
   stats: ScreeningRunStats;
 }): Promise<void> {
+  const existingResults = await listExistingResultsForActionPlanning({
+    dependencies: params.dependencies,
+    userId: params.userId,
+    jobDescriptionId: params.jobDescription.id,
+    rankedCandidates: params.rankedCandidates,
+    contexts: params.contexts,
+    allowAlreadyContacted: params.request.allowAlreadyContacted,
+  });
+
   for (const rankedCandidate of params.rankedCandidates) {
     const context = params.contexts.get(rankedCandidate.candidateId);
     const evaluation = params.evaluations.get(rankedCandidate.candidateId);
@@ -327,13 +824,26 @@ async function createPlannedActions(params: {
       continue;
     }
 
-    const actionPlan = createActionPlan({
+    const evaluatedActionPlan = createActionPlan({
       action: evaluation.decision,
       candidateName: context.displayName,
       jobTitle: params.jobDescription.position,
     });
+    const skipAlreadyContacted = !params.request.allowAlreadyContacted && context.contacted;
+    const actionPlan: CandidateActionPlan =
+      skipAlreadyContacted && evaluatedActionPlan.action !== 'skip'
+        ? {
+            action: 'skip',
+            priority: 'low',
+            message: null,
+            reason: '候选人已联系过，跳过本次自动动作',
+          }
+        : evaluatedActionPlan;
     const actionStatus =
-      params.request.mode === 'execution' && actionPlan.action === 'skip' ? 'skipped' : 'planned';
+      actionPlan.action === 'skip' && (params.request.mode === 'execution' || skipAlreadyContacted)
+        ? 'skipped'
+        : 'planned';
+    const existingResult = existingResults.get(rankedCandidate.candidateId);
     incrementDecisionStats(params.stats, actionPlan.action);
 
     const result = await params.dependencies.repo.upsertResult({
@@ -351,9 +861,13 @@ async function createPlannedActions(params: {
       decisionPriority: actionPlan.priority,
       decisionReason: actionPlan.reason,
       actionPlan,
-      actionStatus,
-      interviewStage: actionPlan.action === 'skip' ? 'screened' : 'to_contact',
-      notes: null,
+      ...(skipAlreadyContacted && existingResult
+        ? {}
+        : {
+            actionStatus,
+            interviewStage: actionPlan.action === 'skip' ? 'screened' : 'to_contact',
+            notes: null,
+          }),
     });
 
     await params.dependencies.repo.createActionLog({
@@ -376,6 +890,29 @@ async function createPlannedActions(params: {
         action: actionPlan.action,
       }),
     });
+    await recordRunEvent({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescription.id,
+      candidateId: rankedCandidate.candidateId,
+      stage: 'planning_actions',
+      message: `计划动作：${context.displayName}`,
+      detail: {
+        candidateName: context.displayName,
+        candidateId: rankedCandidate.candidateId,
+        rank: rankedCandidate.rank,
+        scoreDetail: evaluation.score,
+        finalScore: evaluation.score.total,
+        evaluatedAction: evaluatedActionPlan.action,
+        action: actionPlan.action,
+        priority: actionPlan.priority,
+        reason: actionPlan.reason,
+        status: actionStatus,
+        skippedBecauseAlreadyContacted: skipAlreadyContacted,
+        contacted: context.contacted,
+      },
+    });
   }
 }
 
@@ -393,6 +930,21 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       errorMessage: null,
       stats: copyStats(stats),
     });
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'planning',
+      message: '开始候选人筛选任务',
+      detail: {
+        platform: state.request.platform,
+        mode: state.request.mode,
+        maxCandidates: state.request.maxCandidates,
+        batchSize: state.request.batchSize,
+        allowAlreadyContacted: state.request.allowAlreadyContacted,
+      },
+    });
 
     return {
       stats: rememberStats(resources, stats),
@@ -400,6 +952,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       contexts: new Map(),
       liveInputs: [],
       vectorInputs: [],
+      candidatePool: [],
       evaluations: new Map(),
       rankedCandidates: [],
       route: 'finalize',
@@ -417,6 +970,52 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       evaluationSchema,
       stats: copyStats(state.stats),
     });
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'planning',
+      level: 'success',
+      message: '生成搜索计划',
+      detail: {
+        searchPlan,
+        evaluationSchema,
+      },
+    });
+    if (evaluationSchema.calibrationProfile && evaluationSchema.qualityPolicy) {
+      await recordRunEvent({
+        dependencies: state.dependencies,
+        userId: state.userId,
+        runId: state.runId,
+        jobDescriptionId: state.jobDescription.id,
+        stage: 'planning',
+        level: 'success',
+        message: `加载评分质量机制：${evaluationSchema.calibrationProfile.categoryLabel}`,
+        detail: {
+          category: evaluationSchema.calibrationProfile.category,
+          categoryLabel: evaluationSchema.calibrationProfile.categoryLabel,
+          versions: {
+            promptVersion: evaluationSchema.qualityPolicy.promptVersion,
+            scoringVersion: evaluationSchema.qualityPolicy.scoringVersion,
+            calibrationVersion: evaluationSchema.qualityPolicy.calibrationVersion,
+            qualityPolicyVersion: evaluationSchema.qualityPolicy.version,
+          },
+          anchors: evaluationSchema.calibrationProfile.anchors.map((anchor) => ({
+            label: anchor.label,
+            expectedAction: anchor.expectedAction,
+            scoreRange: anchor.scoreRange,
+            guidance: anchor.guidance,
+          })),
+          reviewSampling: evaluationSchema.calibrationProfile.reviewSampling,
+          regressionTiers: evaluationSchema.qualityPolicy.regressionTiers.map((tier) => ({
+            name: tier.name,
+            trigger: tier.trigger,
+            llmCalls: tier.llmCalls,
+          })),
+        },
+      });
+    }
 
     return { searchPlan, evaluationSchema };
   }
@@ -432,15 +1031,45 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       currentStage: 'searching_live',
       stats,
     });
+    const searchPlan = requireSearchPlan(state);
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'searching_live',
+      message: '开始实时搜索候选人',
+      detail: {
+        keywords: searchPlan.keywords,
+        filters: searchPlan.filters,
+        priorityTags: searchPlan.priorityTags,
+        maxCandidates: state.request.maxCandidates,
+        batchSize: state.request.batchSize,
+      },
+    });
 
     const adapter = state.dependencies.createAdapter(state.request.platform);
     resources.adapter = adapter;
     await adapter.loginIfNeeded();
     const rawCandidates = await collectRawCandidates({
       adapter,
-      searchPlan: requireSearchPlan(state),
+      searchPlan,
       request: state.request,
       stats,
+    });
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'searching_live',
+      level: 'success',
+      message: `实时搜索完成：抓取 ${rawCandidates.length} 人`,
+      detail: {
+        fetched: rawCandidates.length,
+        maxCandidates: state.request.maxCandidates,
+        batchSize: state.request.batchSize,
+      },
     });
 
     return { rawCandidates, stats: rememberStats(resources, stats) };
@@ -453,6 +1082,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
     const contexts = new Map(state.contexts);
     const liveInputs: RankInput[] = [];
     const dedupe = createInMemoryDedupeState();
+    const seenIdentityRefs = new Map<string, SeenIdentityRef>();
 
     await updateStage({
       dependencies: state.dependencies,
@@ -461,26 +1091,157 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       currentStage: 'ingesting_live',
       stats,
     });
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'ingesting_live',
+      message: `抓取简历完成：${state.rawCandidates.length} 人`,
+      detail: {
+        rawCandidateCount: state.rawCandidates.length,
+      },
+    });
+    await updateStage({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      currentStage: 'indexing_resumes',
+      stats,
+    });
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'indexing_resumes',
+      message: `开始入库去重：待处理 ${state.rawCandidates.length} 人`,
+      detail: {
+        rawCandidateCount: state.rawCandidates.length,
+      },
+    });
 
     for (const rawCandidate of state.rawCandidates) {
+      const rawIdentity = createCandidateIdentity({
+        sourcePlatform: state.request.platform,
+        platformCandidateId: rawCandidate.platformCandidateId,
+        profileUrl: rawCandidate.profileUrl,
+        name: rawCandidate.name,
+        company: rawCandidate.company,
+        title: rawCandidate.title,
+      });
+
+      if (!dedupe.markSeen(rawIdentity.identityHash)) {
+        const duplicateOf = seenIdentityRefs.get(rawIdentity.identityHash) ?? null;
+        stats.deduped += 1;
+        await recordRunEvent({
+          dependencies: state.dependencies,
+          userId: state.userId,
+          runId: state.runId,
+          jobDescriptionId: state.jobDescription.id,
+          stage: 'indexing_resumes',
+          level: 'warning',
+          message: `跳过重复候选人：${rawCandidate.name}`,
+          detail: {
+            candidateName: rawCandidate.name,
+            title: rawCandidate.title ?? null,
+            company: rawCandidate.company ?? null,
+            profileUrl: rawCandidate.profileUrl ?? null,
+            platformCandidateId: rawCandidate.platformCandidateId ?? null,
+            dedupeBy: 'raw_identity',
+            duplicateOf,
+          },
+        });
+        continue;
+      }
+      seenIdentityRefs.set(rawIdentity.identityHash, createRawSeenIdentityRef(rawCandidate));
+
       const stored = await state.dependencies.ingestCandidate({
         userId: state.userId,
         sourcePlatform: state.request.platform,
         rawCandidate,
       });
+      const storedIdentityRef = createStoredSeenIdentityRef(rawCandidate, stored);
+      const candidateWasExisting = stored.candidateWasExisting === true;
+      const resumeWasExisting = stored.resumeWasExisting === true;
 
-      if (!dedupe.markSeen(stored.identityHash)) {
+      if (
+        stored.identityHash !== rawIdentity.identityHash &&
+        !dedupe.markSeen(stored.identityHash)
+      ) {
+        const duplicateOf = seenIdentityRefs.get(stored.identityHash) ?? null;
         stats.deduped += 1;
+        await recordRunEvent({
+          dependencies: state.dependencies,
+          userId: state.userId,
+          runId: state.runId,
+          jobDescriptionId: state.jobDescription.id,
+          candidateId: stored.candidateId,
+          stage: 'indexing_resumes',
+          level: 'warning',
+          message: `跳过重复候选人：${rawCandidate.name}`,
+          detail: {
+            candidateName: rawCandidate.name,
+            candidateId: stored.candidateId,
+            resumeId: stored.resumeId,
+            dedupeBy: 'stored_identity',
+            duplicateOf,
+          },
+        });
         continue;
       }
+      seenIdentityRefs.set(rawIdentity.identityHash, storedIdentityRef);
+      seenIdentityRefs.set(stored.identityHash, storedIdentityRef);
 
-      stats.stored += 1;
+      if (candidateWasExisting) {
+        stats.deduped += 1;
+      } else {
+        stats.stored += 1;
+      }
+      await recordRunEvent({
+        dependencies: state.dependencies,
+        userId: state.userId,
+        runId: state.runId,
+        jobDescriptionId: state.jobDescription.id,
+        candidateId: stored.candidateId,
+        stage: 'indexing_resumes',
+        level: candidateWasExisting ? 'warning' : 'success',
+        message: candidateWasExisting
+          ? `复用已有候选人：${rawCandidate.name}`
+          : `候选人入库：${rawCandidate.name}`,
+        detail: {
+          candidateName: rawCandidate.name,
+          candidateId: stored.candidateId,
+          resumeId: stored.resumeId,
+          chunkCount: stored.chunkCount,
+          candidateWasExisting,
+          resumeWasExisting,
+          existingCandidateId: stored.existingCandidateId ?? null,
+          existingCandidateName: stored.existingCandidateName ?? null,
+          existingResumeId: stored.existingResumeId ?? null,
+          dedupeBy: candidateWasExisting ? 'existing_candidate_identity' : null,
+          duplicateOf: candidateWasExisting
+            ? {
+                candidateName: stored.existingCandidateName ?? rawCandidate.name,
+                candidateId: stored.existingCandidateId ?? stored.candidateId,
+                resumeId: stored.existingResumeId ?? stored.resumeId,
+                profileUrl: rawCandidate.profileUrl ?? null,
+                platformCandidateId: rawCandidate.platformCandidateId ?? null,
+              }
+            : null,
+          title: rawCandidate.title ?? null,
+          company: rawCandidate.company ?? null,
+          location: rawCandidate.location ?? null,
+          profileUrl: rawCandidate.profileUrl ?? null,
+        },
+      });
       contexts.set(stored.candidateId, {
         candidateId: stored.candidateId,
         resumeId: stored.resumeId,
         resumeText: rawCandidate.resumeText,
         displayName: rawCandidate.name,
         profileUrl: rawCandidate.profileUrl ?? null,
+        contacted: stored.candidateContacted === true,
       });
       liveInputs.push({ candidateId: stored.candidateId, matchScore: 1 });
     }
@@ -503,17 +1264,77 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       stats,
     });
 
+    const topK = resolveVectorRecallTopK(state.request.maxCandidates);
     const recalledCandidates = await state.dependencies.recallCandidates({
       userId: state.userId,
       retrievalQuery: searchPlan.retrievalQuery,
-      topK: state.request.maxCandidates,
+      topK,
       allowAlreadyContacted: state.request.allowAlreadyContacted,
     });
     stats.vectorRecalled = recalledCandidates.length;
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'recalling_vectors',
+      level: 'success',
+      message: `向量召回完成：${recalledCandidates.length} 人`,
+      detail: {
+        retrievalQuery: searchPlan.retrievalQuery,
+        topK,
+        recalled: recalledCandidates.length,
+      },
+    });
+    for (const candidate of recalledCandidates) {
+      await recordRunEvent({
+        dependencies: state.dependencies,
+        userId: state.userId,
+        runId: state.runId,
+        jobDescriptionId: state.jobDescription.id,
+        candidateId: candidate.candidateId,
+        stage: 'recalling_vectors',
+        message: `召回候选人：${candidate.displayName}`,
+        detail: {
+          candidateName: candidate.displayName,
+          candidateId: candidate.candidateId,
+          resumeId: candidate.resumeId,
+          chunkIndex: candidate.chunkIndex,
+          matchScore: candidate.score,
+          contentPreview: candidate.content.slice(0, 140),
+        },
+      });
+    }
+
+    const vectorInputResult = buildVectorInputs({
+      recalledCandidates,
+      contexts,
+      platform: state.request.platform,
+    });
+    stats.skipped += vectorInputResult.skipped.length;
+    for (const skipped of vectorInputResult.skipped) {
+      await recordRunEvent({
+        dependencies: state.dependencies,
+        userId: state.userId,
+        runId: state.runId,
+        jobDescriptionId: state.jobDescription.id,
+        candidateId: skipped.candidate.candidateId,
+        stage: 'recalling_vectors',
+        level: 'warning',
+        message: `跳过无效召回候选人：${skipped.candidate.displayName}`,
+        detail: {
+          candidateName: skipped.candidate.displayName,
+          candidateId: skipped.candidate.candidateId,
+          resumeId: skipped.candidate.resumeId,
+          profileUrl: skipped.candidate.profileUrl ?? null,
+          reason: skipped.reason,
+        },
+      });
+    }
 
     return {
       contexts,
-      vectorInputs: buildVectorInputs(recalledCandidates, contexts),
+      vectorInputs: vectorInputResult.inputs,
       stats: rememberStats(resources, stats),
     };
   }
@@ -530,16 +1351,68 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       stats,
     });
 
+    const evaluationCandidates = selectEvaluationCandidates({
+      liveInputs: state.liveInputs,
+      vectorInputs: state.vectorInputs,
+      contexts: state.contexts,
+      maxCandidates: state.request.maxCandidates,
+      mergeAndRank: state.dependencies.mergeAndRank,
+    });
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'evaluating',
+      message: `合并候选池：准备评估 ${evaluationCandidates.length} 人`,
+      detail: {
+        limit: resolveEvaluationLimit(state.request.maxCandidates),
+        liveCandidates: state.liveInputs.length,
+        vectorCandidates: state.vectorInputs.length,
+        selectedCandidates: evaluationCandidates.map((candidate) => ({
+          candidateId: candidate.candidateId,
+          candidateName: state.contexts.get(candidate.candidateId)?.displayName ?? null,
+          rank: candidate.rank,
+          source: candidate.source,
+          matchScore: candidate.matchScore,
+        })),
+      },
+    });
+
     const evaluations = await evaluateCandidates({
       dependencies: state.dependencies,
-      contexts: state.contexts,
+      userId: state.userId,
+      runId: state.runId,
+      contexts: selectEvaluationContexts(state.contexts, evaluationCandidates),
       jobDescription: state.jobDescription,
       evaluationSchema: requireEvaluationSchema(state),
       stats,
       strictEvaluation: state.request.mode === 'execution',
     });
+    if (evaluationCandidates.length > 0 && evaluations.size === 0) {
+      rememberStats(resources, stats);
+      await recordRunEvent({
+        dependencies: state.dependencies,
+        userId: state.userId,
+        runId: state.runId,
+        jobDescriptionId: state.jobDescription.id,
+        stage: 'evaluating',
+        level: 'error',
+        message: '评估阶段无可用结果',
+        detail: {
+          selectedCandidateCount: evaluationCandidates.length,
+          evaluated: stats.evaluated,
+          failed: stats.failed,
+        },
+      });
+      throw new Error('No candidate evaluations succeeded');
+    }
 
-    return { evaluations, stats: rememberStats(resources, stats) };
+    return {
+      candidatePool: evaluationCandidates,
+      evaluations,
+      stats: rememberStats(resources, stats),
+    };
   }
 
   async function rankNode(
@@ -554,11 +1427,36 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       stats,
     });
 
+    const preliminaryRankedCandidates = state.candidatePool;
+    const rankedCandidates = rankEvaluatedCandidates({
+      rankedCandidates: preliminaryRankedCandidates,
+      evaluations: state.evaluations,
+    });
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'ranking',
+      level: 'success',
+      message: `排序完成：${rankedCandidates.length} 人`,
+      detail: {
+        sourceCandidateCount: preliminaryRankedCandidates.length,
+        rankedCount: rankedCandidates.length,
+        candidates: rankedCandidates.map((candidate) => ({
+          candidateId: candidate.candidateId,
+          candidateName: state.contexts.get(candidate.candidateId)?.displayName ?? null,
+          rank: candidate.rank,
+          source: candidate.source,
+          matchScore: candidate.matchScore,
+          finalScore: state.evaluations.get(candidate.candidateId)?.score.total ?? null,
+          action: state.evaluations.get(candidate.candidateId)?.decision.action ?? null,
+        })),
+      },
+    });
+
     return {
-      rankedCandidates: state.dependencies.mergeAndRank({
-        live: state.liveInputs,
-        vector: state.vectorInputs,
-      }),
+      rankedCandidates,
       stats: rememberStats(resources, stats),
     };
   }
@@ -628,6 +1526,18 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
   async function finalizeNode(
     state: CandidateScreeningGraphState,
   ): Promise<CandidateScreeningGraphUpdate> {
+    await recordRunEvent({
+      dependencies: state.dependencies,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      stage: 'finalizing',
+      level: 'success',
+      message: '筛选任务完成',
+      detail: {
+        stats: state.stats,
+      },
+    });
     await state.dependencies.repo.updateRun({
       userId: state.userId,
       runId: state.runId,
@@ -702,6 +1612,7 @@ export const runCandidateScreeningGraph = async (params: {
         contexts: new Map(),
         liveInputs: [],
         vectorInputs: [],
+        candidatePool: [],
         evaluations: new Map(),
         rankedCandidates: [],
         route: 'finalize',
@@ -938,6 +1849,20 @@ async function executePlannedActionsForRun(params: {
     try {
       const adapter = await params.getAdapterAfterClaim();
       const storedCandidate = createStoredCandidateRef(result);
+      await recordRunEvent({
+        dependencies: params.dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescriptionId,
+        candidateId: result.candidateId,
+        stage: 'executing_actions',
+        message: `执行动作：${result.candidate.displayName}`,
+        detail: {
+          candidateName: result.candidate.displayName,
+          action: result.actionPlan.action,
+          priority: result.actionPlan.priority,
+        },
+      });
       const executionResult =
         result.actionPlan.action === 'chat'
           ? await adapter.chatCandidate(storedCandidate, result.actionPlan)
@@ -953,6 +1878,24 @@ async function executePlannedActionsForRun(params: {
         executionResult,
         stats: params.stats,
       });
+      await recordRunEvent({
+        dependencies: params.dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescriptionId,
+        candidateId: result.candidateId,
+        stage: 'executing_actions',
+        level: executionResult.success ? 'success' : 'error',
+        message: executionResult.success
+          ? `动作执行成功：${result.candidate.displayName}`
+          : `动作执行失败：${result.candidate.displayName}`,
+        detail: {
+          candidateName: result.candidate.displayName,
+          action: result.actionPlan.action,
+          errorMessage: executionResult.error ?? null,
+          browserTrace: executionResult.browserTrace ?? null,
+        },
+      });
     } catch (error) {
       await markExecutionFailed({
         dependencies: params.dependencies,
@@ -963,6 +1906,21 @@ async function executePlannedActionsForRun(params: {
         actionLog: claimedActionLog,
         errorMessage: getErrorMessage(error),
         stats: params.stats,
+      });
+      await recordRunEvent({
+        dependencies: params.dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescriptionId,
+        candidateId: result.candidateId,
+        stage: 'executing_actions',
+        level: 'error',
+        message: `动作执行失败：${result.candidate.displayName}`,
+        detail: {
+          candidateName: result.candidate.displayName,
+          action: result.actionPlan.action,
+          errorMessage: getErrorMessage(error),
+        },
       });
     }
 

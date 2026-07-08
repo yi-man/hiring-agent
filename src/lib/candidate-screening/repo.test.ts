@@ -3,11 +3,14 @@
 import {
   claimCandidateActionLog,
   createCandidateActionLog,
+  createCandidateScreeningRunEvent,
   createCandidateScreeningRun,
   createOrReuseCandidateResume,
+  findCandidateResumeByHash,
   getCandidateTrackingOverview,
   listCandidateInterviewRecords,
   listCandidateResumeLibrary,
+  listCandidateScreeningRunEvents,
   listCandidateScreeningResults,
   replaceCandidateResumeChunks,
   searchCandidateResumeChunks,
@@ -38,6 +41,10 @@ type PrismaMock = {
     findFirst: jest.Mock;
     findMany: jest.Mock;
     updateMany: jest.Mock;
+  };
+  candidateScreeningRunEvent: {
+    create: jest.Mock;
+    findMany: jest.Mock;
   };
   candidateScreeningResult: {
     create: jest.Mock;
@@ -79,6 +86,10 @@ jest.mock('@/lib/prisma', () => ({
       findFirst: jest.fn(),
       findMany: jest.fn(),
       updateMany: jest.fn(),
+    },
+    candidateScreeningRunEvent: {
+      create: jest.fn(),
+      findMany: jest.fn(),
     },
     candidateScreeningResult: {
       create: jest.fn(),
@@ -221,6 +232,8 @@ describe('candidate screening repository', () => {
     prismaMock.candidateScreeningRun.findFirst.mockReset();
     prismaMock.candidateScreeningRun.findMany.mockReset();
     prismaMock.candidateScreeningRun.updateMany.mockReset();
+    prismaMock.candidateScreeningRunEvent.create.mockReset();
+    prismaMock.candidateScreeningRunEvent.findMany.mockReset();
     prismaMock.candidateScreeningResult.create.mockReset();
     prismaMock.candidateScreeningResult.findFirst.mockReset();
     prismaMock.candidateScreeningResult.findMany.mockReset();
@@ -289,6 +302,61 @@ describe('candidate screening repository', () => {
       }),
     });
     expect(result.createdAt).toBe(createdAt.toISOString());
+  });
+
+  it('creates and lists run events scoped to user and run', async () => {
+    const runEvent = {
+      id: 'event-1',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      stage: 'evaluating',
+      level: 'info',
+      message: '完成评估：Ada',
+      detail: {
+        candidateName: 'Ada',
+        scoreDetail: { skill: 90, domain: 80, ability: 88, risk: 95, llmBonus: 0, total: 89 },
+      },
+      createdAt,
+    };
+    prismaMock.candidateScreeningRunEvent.create.mockResolvedValueOnce(runEvent);
+    prismaMock.candidateScreeningRunEvent.findMany.mockResolvedValueOnce([runEvent]);
+
+    const created = await createCandidateScreeningRunEvent({
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      stage: 'evaluating',
+      level: 'info',
+      message: '完成评估：Ada',
+      detail: runEvent.detail,
+    });
+    const events = await listCandidateScreeningRunEvents({
+      userId: 'u1',
+      runId: 'run-1',
+      limit: 100,
+    });
+
+    expect(prismaMock.candidateScreeningRunEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'u1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        stage: 'evaluating',
+        level: 'info',
+        message: '完成评估：Ada',
+      }),
+    });
+    expect(prismaMock.candidateScreeningRunEvent.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', runId: 'run-1' },
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+    });
+    expect(created.detail?.candidateName).toBe('Ada');
+    expect(events[0]?.message).toBe('完成评估：Ada');
   });
 
   it('builds a cross-JD candidate tracking overview scoped to user', async () => {
@@ -1049,6 +1117,32 @@ describe('candidate screening repository', () => {
     expect(prismaMock.candidateResume.upsert).not.toHaveBeenCalled();
   });
 
+  it('finds an existing resume snapshot by user, candidate, and hash', async () => {
+    prismaMock.candidateResume.findFirst.mockResolvedValueOnce({
+      id: 'resume-1',
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      sourcePlatform: 'boss-like',
+      profileUrl: 'https://example.test/ada',
+      rawText: 'resume text',
+      structuredSummary: null,
+      resumeHash: 'resume-hash-1',
+      fetchedAt: createdAt,
+      createdAt,
+    });
+
+    const result = await findCandidateResumeByHash({
+      userId: 'u1',
+      candidateId: 'candidate-1',
+      resumeHash: 'resume-hash-1',
+    });
+
+    expect(prismaMock.candidateResume.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', candidateId: 'candidate-1', resumeHash: 'resume-hash-1' },
+    });
+    expect(result?.id).toBe('resume-1');
+  });
+
   it('replaces resume chunks with raw pgvector inserts inside a transaction', async () => {
     const tx = {
       candidateResumeChunk: { deleteMany: jest.fn() },
@@ -1098,6 +1192,7 @@ describe('candidate screening repository', () => {
         currentTitle: 'Frontend Engineer',
         currentCompany: 'Acme',
         profileUrl: 'https://example.test/ada',
+        contacted: false,
         score: '0.91',
       },
     ]);
@@ -1117,6 +1212,7 @@ describe('candidate screening repository', () => {
     expect(sqlText).toContain('candidate.contacted = false');
     expect(sqlText).toContain('ORDER BY c.embedding <=>');
     expect(result[0]?.score).toBe(0.91);
+    expect(result[0]?.contacted).toBe(false);
   });
 
   it('upserts JD screening results by job description and candidate', async () => {
@@ -1568,7 +1664,7 @@ describe('candidate screening repository', () => {
     expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
   });
 
-  it('lists JD-scoped results for a specific screening run', async () => {
+  it('lists JD-scoped results owned by a run or planned by its action logs', async () => {
     prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
 
     await listCandidateScreeningResults({
@@ -1583,7 +1679,17 @@ describe('candidate screening repository', () => {
       where: {
         userId: 'u1',
         jobDescriptionId: 'jd-1',
-        runId: 'run-2',
+        OR: [
+          { runId: 'run-2' },
+          {
+            actionLogs: {
+              some: {
+                userId: 'u1',
+                runId: 'run-2',
+              },
+            },
+          },
+        ],
       },
       include: { candidate: true, resume: true },
       orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
@@ -1616,6 +1722,29 @@ describe('candidate screening repository', () => {
     });
   });
 
+  it('filters JD-scoped results by candidate ids for historical evaluation reuse', async () => {
+    prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
+
+    await listCandidateScreeningResults({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateIds: ['candidate-1', 'candidate-2'],
+      limit: 2,
+    });
+
+    expect(prismaMock.candidateScreeningResult.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        candidateId: { in: ['candidate-1', 'candidate-2'] },
+      },
+      include: { candidate: true, resume: true },
+      orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],
+      skip: 0,
+      take: 2,
+    });
+  });
+
   it('can restrict current-run planned action results to executable actions', async () => {
     prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([]);
 
@@ -1632,7 +1761,6 @@ describe('candidate screening repository', () => {
       where: {
         userId: 'u1',
         jobDescriptionId: 'jd-1',
-        runId: 'run-2',
         actionLogs: {
           some: {
             userId: 'u1',

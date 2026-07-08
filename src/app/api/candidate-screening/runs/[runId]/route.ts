@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getCandidateScreeningRun } from '@/lib/candidate-screening/repo';
+import {
+  getCandidateScreeningRun,
+  listCandidateScreeningRunEvents,
+} from '@/lib/candidate-screening/repo';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -26,12 +29,15 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
       return badRequest('candidate screening run id is required');
     }
 
-    const run = await getCandidateScreeningRun({ userId: auth.user.id, runId });
+    const [run, events] = await Promise.all([
+      getCandidateScreeningRun({ userId: auth.user.id, runId }),
+      listCandidateScreeningRunEvents({ userId: auth.user.id, runId, limit: 300 }),
+    ]);
     if (!run) {
       return NextResponse.json({ error: 'candidate screening run not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ run });
+    return NextResponse.json({ run, events });
   } catch (error) {
     return serverErrorResponse(error);
   }

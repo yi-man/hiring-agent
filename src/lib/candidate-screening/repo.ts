@@ -12,6 +12,7 @@ import type {
   CandidateInterviewFeedbackStage,
   CandidateInterviewStage,
   CandidateScreeningMode,
+  CandidateScreeningRunEventLevel,
   CandidateScreeningPlatform,
   CandidateScreeningRunStage,
   CandidateScreeningRunStatus,
@@ -44,6 +45,19 @@ type CandidateScreeningRunRecord = {
   finishedAt: NullableDate;
   createdAt: Date;
   updatedAt: Date;
+};
+
+type CandidateScreeningRunEventRecord = {
+  id: string;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  candidateId: string | null;
+  stage: string;
+  level: string;
+  message: string;
+  detail: unknown | null;
+  createdAt: Date;
 };
 
 type CandidateRecord = {
@@ -189,6 +203,19 @@ export type CandidateScreeningRunDto = {
   updatedAt: string;
 };
 
+export type CandidateScreeningRunEventDto = {
+  id: string;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  candidateId: string | null;
+  stage: CandidateScreeningRunStage;
+  level: CandidateScreeningRunEventLevel;
+  message: string;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+};
+
 export type CandidateDto = {
   id: string;
   userId: string;
@@ -305,6 +332,7 @@ export type CandidateVectorSearchResult = {
   currentTitle: string | null;
   currentCompany: string | null;
   profileUrl: string | null;
+  contacted: boolean;
   score: number;
 };
 
@@ -390,6 +418,23 @@ export type UpdateRunParams = {
   finishedAt?: Date | null;
 };
 
+export type CreateRunEventParams = {
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  candidateId?: string | null;
+  stage: CandidateScreeningRunStage;
+  level?: CandidateScreeningRunEventLevel;
+  message: string;
+  detail?: Record<string, unknown> | null;
+};
+
+export type ListRunEventsParams = {
+  userId: string;
+  runId: string;
+  limit?: number;
+};
+
 export type UpsertCandidateParams = {
   userId: string;
   displayName: string;
@@ -459,6 +504,7 @@ export type UpsertScreeningResultParams = {
 export type ListCandidateResultsParams = {
   userId: string;
   jobDescriptionId: string;
+  candidateIds?: string[];
   runId?: string;
   plannedActions?: CandidateDecisionAction[];
   limit: number;
@@ -549,10 +595,17 @@ function iso(date: NullableDate): string | null {
 
 const DEFAULT_LIST_LIMIT = 200;
 const MAX_LIST_LIMIT = 500;
+const DEFAULT_EVENT_LIMIT = 300;
+const MAX_EVENT_LIMIT = 1000;
 
 function clampListLimit(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return DEFAULT_LIST_LIMIT;
   return Math.max(1, Math.min(MAX_LIST_LIMIT, Math.trunc(value)));
+}
+
+function clampEventLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_EVENT_LIMIT;
+  return Math.max(1, Math.min(MAX_EVENT_LIMIT, Math.trunc(value)));
 }
 
 function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
@@ -572,6 +625,21 @@ function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
     finishedAt: iso(row.finishedAt),
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
+  };
+}
+
+function mapRunEvent(row: CandidateScreeningRunEventRecord): CandidateScreeningRunEventDto {
+  return {
+    id: row.id,
+    userId: row.userId,
+    runId: row.runId,
+    jobDescriptionId: row.jobDescriptionId,
+    candidateId: row.candidateId,
+    stage: row.stage as CandidateScreeningRunStage,
+    level: row.level as CandidateScreeningRunEventLevel,
+    message: row.message,
+    detail: toRecordOrNull(row.detail),
+    createdAt: iso(row.createdAt),
   };
 }
 
@@ -837,6 +905,38 @@ export async function updateCandidateScreeningRun(
   return getCandidateScreeningRun({ userId: params.userId, runId: params.runId });
 }
 
+export async function createCandidateScreeningRunEvent(
+  params: CreateRunEventParams,
+): Promise<CandidateScreeningRunEventDto> {
+  const row = await prisma.candidateScreeningRunEvent.create({
+    data: {
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: params.candidateId ?? null,
+      stage: params.stage,
+      level: params.level ?? 'info',
+      message: params.message,
+      detail: params.detail === undefined ? Prisma.JsonNull : toNullableJson(params.detail),
+    },
+  });
+  return mapRunEvent(row);
+}
+
+export async function listCandidateScreeningRunEvents(
+  params: ListRunEventsParams,
+): Promise<CandidateScreeningRunEventDto[]> {
+  const rows = await prisma.candidateScreeningRunEvent.findMany({
+    where: {
+      userId: params.userId,
+      runId: params.runId,
+    },
+    orderBy: { createdAt: 'asc' },
+    take: clampEventLimit(params.limit),
+  });
+  return rows.map(mapRunEvent);
+}
+
 export async function upsertCandidateWithIdentity(
   params: UpsertCandidateParams,
 ): Promise<CandidateDto> {
@@ -950,6 +1050,21 @@ export async function createOrReuseCandidateResume(
   }
 }
 
+export async function findCandidateResumeByHash(params: {
+  userId: string;
+  candidateId: string;
+  resumeHash: string;
+}): Promise<CandidateResumeDto | null> {
+  const row = await prisma.candidateResume.findFirst({
+    where: {
+      userId: params.userId,
+      candidateId: params.candidateId,
+      resumeHash: params.resumeHash,
+    },
+  });
+  return row ? mapResume(row) : null;
+}
+
 export async function replaceCandidateResumeChunks(
   params: ReplaceCandidateChunksParams,
 ): Promise<number> {
@@ -1004,6 +1119,7 @@ export async function searchCandidateResumeChunks(
       currentTitle: string | null;
       currentCompany: string | null;
       profileUrl: string | null;
+      contacted: boolean;
       score: number | string;
     }>
   >(Prisma.sql`
@@ -1018,6 +1134,7 @@ export async function searchCandidateResumeChunks(
       candidate.current_title AS "currentTitle",
       candidate.current_company AS "currentCompany",
       candidate.profile_url AS "profileUrl",
+      candidate.contacted AS "contacted",
       1 - (c.embedding <=> ${vectorLiteral}::vector) AS score
     FROM "public"."candidate_resume_chunks" c
     INNER JOIN "public"."candidate_resumes" r ON r.id = c.resume_id
@@ -1124,25 +1241,53 @@ export async function upsertCandidateScreeningResult(
 export async function listCandidateScreeningResults(
   params: ListCandidateResultsParams,
 ): Promise<CandidateScreeningResultListItem[]> {
+  if (params.candidateIds && params.candidateIds.length === 0) {
+    return [];
+  }
+
+  const hasCurrentRunActionFilter =
+    params.runId !== undefined &&
+    params.plannedActions !== undefined &&
+    params.plannedActions.length > 0;
+  const currentRunWhere: Prisma.CandidateScreeningResultWhereInput =
+    params.runId === undefined || hasCurrentRunActionFilter
+      ? {}
+      : {
+          OR: [
+            { runId: params.runId },
+            {
+              actionLogs: {
+                some: {
+                  userId: params.userId,
+                  runId: params.runId,
+                },
+              },
+            },
+          ],
+        };
+  const currentRunActionWhere: Prisma.CandidateScreeningResultWhereInput =
+    hasCurrentRunActionFilter && params.runId
+      ? {
+          actionLogs: {
+            some: {
+              userId: params.userId,
+              runId: params.runId,
+              status: 'planned',
+              action: { in: params.plannedActions },
+            },
+          },
+        }
+      : {};
+
   const rows = await prisma.candidateScreeningResult.findMany({
     where: {
       userId: params.userId,
       jobDescriptionId: params.jobDescriptionId,
-      ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.candidateIds ? { candidateId: { in: params.candidateIds } } : {}),
+      ...currentRunWhere,
       ...(params.interviewStage ? { interviewStage: params.interviewStage } : {}),
       ...(params.minScore !== undefined ? { finalScore: { gte: params.minScore } } : {}),
-      ...(params.runId && params.plannedActions && params.plannedActions.length > 0
-        ? {
-            actionLogs: {
-              some: {
-                userId: params.userId,
-                runId: params.runId,
-                status: 'planned',
-                action: { in: params.plannedActions },
-              },
-            },
-          }
-        : {}),
+      ...currentRunActionWhere,
     },
     include: { candidate: true, resume: true },
     orderBy: [{ finalScore: 'desc' }, { rank: 'asc' }],

@@ -2,6 +2,7 @@
 
 import type { CandidateSourceAdapter, RawCandidateBatch } from './adapters/types';
 import type { RawCandidate } from './ingest';
+import { buildCalibrationProfileFromJd, buildScoringQualityPolicy } from './calibration';
 import type {
   CandidateScreeningDetailDto,
   CandidateScreeningResultListItem,
@@ -18,6 +19,12 @@ import type {
   ScreeningRunStats,
 } from './types';
 import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
+import {
+  CANDIDATE_EVALUATION_PROMPT_VERSION,
+  CANDIDATE_SCREENING_CALIBRATION_VERSION,
+  CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+  CANDIDATE_SCREENING_SCORING_VERSION,
+} from './constants';
 import {
   executeScreeningRunActions,
   runCandidateScreeningGraph,
@@ -59,6 +66,10 @@ const score: ScoreDetail = {
   risk: 10,
   llmBonus: 5,
   total: 88,
+  promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
+  scoringVersion: CANDIDATE_SCREENING_SCORING_VERSION,
+  calibrationVersion: CANDIDATE_SCREENING_CALIBRATION_VERSION,
+  qualityPolicyVersion: CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
 };
 
 const chatDecision: CandidateActionPlan = {
@@ -167,6 +178,29 @@ function makeRawCandidate(overrides: Partial<RawCandidate> = {}): RawCandidate {
     resumeText: 'React TypeScript platform work',
     profileUrl: 'https://example.com/ada',
     lastActiveAt: '2026-05-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeVectorRecallCandidate(overrides: Record<string, unknown> = {}) {
+  const candidateId =
+    typeof overrides.candidateId === 'string' ? overrides.candidateId : 'candidate-vector';
+  const displayName =
+    typeof overrides.displayName === 'string' ? overrides.displayName : 'Grace Hopper';
+
+  return {
+    id: `chunk-${candidateId}`,
+    candidateId,
+    resumeId: `resume-${candidateId}`,
+    userId: 'user-1',
+    chunkIndex: 0,
+    content: 'React SaaS search workflow',
+    displayName,
+    currentTitle: 'Staff Engineer',
+    currentCompany: 'Compilers Inc',
+    profileUrl: '/employer/resumes/1',
+    contacted: false,
+    score: 0.82,
     ...overrides,
   };
 }
@@ -328,6 +362,18 @@ function makeDependencies(adapter = makeAdapter()): ScreeningRunnerDependencies 
         updatedAt,
       }),
       updateActionLog: jest.fn().mockResolvedValue(null),
+      createRunEvent: jest.fn().mockResolvedValue({
+        id: 'event-1',
+        userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: null,
+        stage: 'planning',
+        level: 'info',
+        message: 'event',
+        detail: null,
+        createdAt,
+      }),
       listResults: jest.fn().mockResolvedValue([]),
       getDetail: jest.fn().mockResolvedValue(null),
       upsertCandidate: jest.fn().mockResolvedValue(makeResult().candidate),
@@ -373,7 +419,7 @@ describe('candidate screening runner', () => {
         displayName: 'Grace Hopper',
         currentTitle: 'Staff Engineer',
         currentCompany: 'Compilers Inc',
-        profileUrl: 'https://example.com/grace',
+        profileUrl: '/employer/resumes/2',
         score: 0.82,
       },
     ]);
@@ -385,21 +431,22 @@ describe('candidate screening runner', () => {
       .fn()
       .mockResolvedValueOnce({ tags, score, decision: chatDecision })
       .mockResolvedValueOnce({ tags, score: { ...score, total: 72 }, decision: collectDecision });
-    dependencies.repo.upsertResult = jest
-      .fn()
-      .mockResolvedValueOnce(makeResult({ id: 'result-live', candidateId: 'candidate-live' }))
-      .mockResolvedValueOnce(
+    dependencies.repo.upsertResult = jest.fn(
+      async (params: Parameters<ScreeningRunnerDependencies['repo']['upsertResult']>[0]) =>
         makeResult({
-          id: 'result-vector',
-          candidateId: 'candidate-vector',
-          source: 'vector_recall',
-          rank: 2,
-          decisionAction: 'collect',
-          decisionPriority: 'medium',
-          decisionReason: 'needs resume',
-          actionPlan: collectDecision,
+          id: `result-${params.candidateId}`,
+          candidateId: params.candidateId,
+          resumeId: params.resumeId,
+          source: params.source,
+          scoreDetail: params.scoreDetail,
+          finalScore: params.finalScore,
+          rank: params.rank,
+          decisionAction: params.decisionAction,
+          decisionPriority: params.decisionPriority,
+          decisionReason: params.decisionReason,
+          actionPlan: params.actionPlan ?? null,
         }),
-      );
+    );
 
     await runCandidateScreening({
       runId: 'run-1',
@@ -414,6 +461,7 @@ describe('candidate screening runner', () => {
       'planning',
       'searching_live',
       'ingesting_live',
+      'indexing_resumes',
       'recalling_vectors',
       'evaluating',
       'ranking',
@@ -435,7 +483,7 @@ describe('candidate screening runner', () => {
     expect(dependencies.recallCandidates).toHaveBeenCalledWith({
       userId: 'user-1',
       retrievalQuery: 'frontend react',
-      topK: 20,
+      topK: 10,
       allowAlreadyContacted: false,
     });
     expect(dependencies.mergeAndRank).toHaveBeenCalledWith({
@@ -450,7 +498,7 @@ describe('candidate screening runner', () => {
         mode: 'dry_run',
         status: 'planned',
         action: 'chat',
-        candidateId: 'candidate-live',
+        candidateId: 'candidate-vector',
       }),
     );
     expect(dependencies.repo.createActionLog).toHaveBeenNthCalledWith(
@@ -459,7 +507,7 @@ describe('candidate screening runner', () => {
         mode: 'dry_run',
         status: 'planned',
         action: 'collect',
-        candidateId: 'candidate-vector',
+        candidateId: 'candidate-live',
       }),
     );
     expect(adapter.chatCandidate).not.toHaveBeenCalled();
@@ -481,6 +529,58 @@ describe('candidate screening runner', () => {
           recommendedCollect: 1,
           skipped: 0,
           failed: 0,
+        }),
+      }),
+    );
+  });
+
+  it('records the loaded scoring quality mechanism during planning', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() => batches({ candidates: [] })),
+    });
+    const dependencies = makeDependencies(adapter);
+    const evaluationSchemaWithQuality: EvaluationSchema = {
+      ...evaluationSchema,
+      calibrationProfile: buildCalibrationProfileFromJd(jobDescription),
+      qualityPolicy: buildScoringQualityPolicy(),
+    };
+    dependencies.buildPlan = jest
+      .fn()
+      .mockReturnValueOnce({ searchPlan, evaluationSchema: evaluationSchemaWithQuality });
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-1',
+        stage: 'planning',
+        level: 'success',
+        message: '加载评分质量机制：技术研发',
+        detail: expect.objectContaining({
+          category: 'technical',
+          categoryLabel: '技术研发',
+          versions: expect.objectContaining({
+            promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
+            scoringVersion: CANDIDATE_SCREENING_SCORING_VERSION,
+            calibrationVersion: CANDIDATE_SCREENING_CALIBRATION_VERSION,
+            qualityPolicyVersion: CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+          }),
+          anchors: expect.arrayContaining([
+            expect.objectContaining({
+              label: '强匹配',
+              expectedAction: 'chat',
+              scoreRange: [85, 100],
+            }),
+          ]),
+          regressionTiers: expect.arrayContaining([
+            expect.objectContaining({ name: 'replay', llmCalls: 'none' }),
+          ]),
         }),
       }),
     );
@@ -801,6 +901,708 @@ describe('candidate screening runner', () => {
     expect(adapter.close).toHaveBeenCalledTimes(1);
   });
 
+  it('evaluates only the merged candidate pool and ranks final actions by evaluation score', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-a',
+              name: 'Ada One',
+              resumeText: 'React platform work',
+            }),
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-b',
+              name: 'Ada Two',
+              resumeText: 'React SaaS leadership',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-a',
+        resumeId: 'resume-a',
+        identityHash: 'identity-a',
+        chunkCount: 1,
+      })
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-b',
+        resumeId: 'resume-b',
+        identityHash: 'identity-b',
+        chunkCount: 1,
+      });
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-vector-a',
+        displayName: 'Vector One',
+        score: 0.99,
+      }),
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-vector-b',
+        displayName: 'Vector Two',
+        score: 0.98,
+      }),
+    ]);
+    dependencies.mergeAndRank = jest.fn().mockReturnValueOnce([
+      { candidateId: 'candidate-a', matchScore: 1, source: 'live_search', rank: 1 },
+      { candidateId: 'candidate-b', matchScore: 1, source: 'live_search', rank: 2 },
+      { candidateId: 'candidate-vector-a', matchScore: 0.99, source: 'vector_recall', rank: 3 },
+      { candidateId: 'candidate-vector-b', matchScore: 0.98, source: 'vector_recall', rank: 4 },
+    ]);
+    dependencies.evaluateCandidate = jest.fn(async ({ candidateName }) => {
+      if (candidateName === 'Ada Two') {
+        return { tags, score: { ...score, total: 95 }, decision: chatDecision };
+      }
+      return { tags, score: { ...score, total: 70 }, decision: collectDecision };
+    });
+    dependencies.repo.upsertResult = jest.fn(
+      async (params: Parameters<ScreeningRunnerDependencies['repo']['upsertResult']>[0]) =>
+        makeResult({
+          id: `result-${params.candidateId}`,
+          candidateId: params.candidateId,
+          resumeId: params.resumeId,
+          source: params.source,
+          scoreDetail: params.scoreDetail,
+          finalScore: params.finalScore,
+          rank: params.rank,
+          decisionAction: params.decisionAction,
+          decisionPriority: params.decisionPriority,
+          decisionReason: params.decisionReason,
+          actionPlan: params.actionPlan ?? null,
+        }),
+    );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 4, batchSize: 2 },
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(4);
+    expect(
+      (dependencies.evaluateCandidate as jest.Mock).mock.calls.map((call) => call[0].candidateName),
+    ).toEqual(['Vector One', 'Ada One', 'Vector Two', 'Ada Two']);
+    expect(dependencies.repo.upsertResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        candidateId: 'candidate-b',
+        rank: 1,
+        finalScore: 95,
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        candidateId: 'candidate-a',
+        rank: 2,
+        finalScore: 70,
+      }),
+    );
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'ranking',
+        level: 'success',
+        message: '排序完成：4 人',
+        detail: expect.objectContaining({
+          candidates: expect.arrayContaining([
+            expect.objectContaining({
+              candidateId: 'candidate-b',
+              candidateName: 'Ada Two',
+              rank: 1,
+              finalScore: 95,
+              action: 'chat',
+            }),
+            expect.objectContaining({
+              candidateId: 'candidate-a',
+              candidateName: 'Ada One',
+              rank: 2,
+              finalScore: 70,
+              action: 'collect',
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('keeps recalled candidates in the evaluation pool when live search fills the request limit', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-a',
+              name: 'Live One',
+              resumeText: 'React platform work',
+            }),
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-b',
+              name: 'Live Two',
+              resumeText: 'React dashboard work',
+            }),
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-c',
+              name: 'Live Three',
+              resumeText: 'React component work',
+            }),
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-d',
+              name: 'Live Four',
+              resumeText: 'React form work',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-live-a',
+        resumeId: 'resume-live-a',
+        identityHash: 'identity-live-a',
+        chunkCount: 1,
+      })
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-live-b',
+        resumeId: 'resume-live-b',
+        identityHash: 'identity-live-b',
+        chunkCount: 1,
+      })
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-live-c',
+        resumeId: 'resume-live-c',
+        identityHash: 'identity-live-c',
+        chunkCount: 1,
+      })
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-live-d',
+        resumeId: 'resume-live-d',
+        identityHash: 'identity-live-d',
+        chunkCount: 1,
+      });
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-vector-a',
+        displayName: 'Vector One',
+        score: 0.99,
+      }),
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-vector-b',
+        displayName: 'Vector Two',
+        score: 0.98,
+      }),
+    ]);
+    dependencies.mergeAndRank = jest.fn().mockReturnValue([
+      { candidateId: 'candidate-live-a', matchScore: 1, source: 'live_search', rank: 1 },
+      { candidateId: 'candidate-live-b', matchScore: 1, source: 'live_search', rank: 2 },
+      { candidateId: 'candidate-live-c', matchScore: 1, source: 'live_search', rank: 3 },
+      { candidateId: 'candidate-live-d', matchScore: 1, source: 'live_search', rank: 4 },
+      { candidateId: 'candidate-vector-a', matchScore: 0.99, source: 'vector_recall', rank: 5 },
+      { candidateId: 'candidate-vector-b', matchScore: 0.98, source: 'vector_recall', rank: 6 },
+    ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 4, batchSize: 4 },
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(4);
+    expect(
+      (dependencies.evaluateCandidate as jest.Mock).mock.calls.map((call) => call[0].candidateName),
+    ).toEqual(['Vector One', 'Live One', 'Vector Two', 'Live Two']);
+  });
+
+  it('continues a run when one candidate evaluation returns empty content', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-a',
+              name: 'Ada One',
+              resumeText: 'React platform work',
+            }),
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-b',
+              name: 'Ada Two',
+              resumeText: 'React SaaS leadership',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-a',
+        resumeId: 'resume-a',
+        identityHash: 'identity-a',
+        chunkCount: 1,
+      })
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-b',
+        resumeId: 'resume-b',
+        identityHash: 'identity-b',
+        chunkCount: 1,
+      });
+    dependencies.mergeAndRank = jest.fn().mockReturnValueOnce([
+      { candidateId: 'candidate-a', matchScore: 1, source: 'live_search', rank: 1 },
+      { candidateId: 'candidate-b', matchScore: 1, source: 'live_search', rank: 2 },
+    ]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score, decision: chatDecision })
+      .mockRejectedValueOnce(new Error('Candidate evaluation returned empty content'));
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 2, batchSize: 2, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'evaluating',
+        level: 'error',
+        message: '评估失败：Ada Two',
+        detail: expect.objectContaining({
+          candidateName: 'Ada Two',
+          errorMessage: 'Candidate evaluation returned empty content',
+        }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        currentStage: 'finalizing',
+        stats: expect.objectContaining({
+          evaluated: 1,
+          failed: 1,
+        }),
+      }),
+    );
+  });
+
+  it('fails the run when every selected candidate evaluation fails', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-a',
+              name: 'Ada One',
+              resumeText: 'React platform work',
+            }),
+            makeRawCandidate({
+              platformCandidateId: 'platform-live-b',
+              name: 'Ada Two',
+              resumeText: 'React SaaS leadership',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-a',
+        resumeId: 'resume-a',
+        identityHash: 'identity-a',
+        chunkCount: 1,
+      })
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-b',
+        resumeId: 'resume-b',
+        identityHash: 'identity-b',
+        chunkCount: 1,
+      });
+    dependencies.mergeAndRank = jest.fn().mockReturnValue([
+      { candidateId: 'candidate-a', matchScore: 1, source: 'live_search', rank: 1 },
+      { candidateId: 'candidate-b', matchScore: 1, source: 'live_search', rank: 2 },
+    ]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('Candidate evaluation returned empty content'))
+      .mockRejectedValueOnce(new Error('Candidate evaluation returned empty content'));
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 2, batchSize: 2, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(dependencies.repo.upsertResult).not.toHaveBeenCalled();
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'evaluating',
+        level: 'error',
+        message: '评估阶段无可用结果',
+        detail: expect.objectContaining({
+          selectedCandidateCount: 2,
+          failed: 2,
+        }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        errorMessage: 'No candidate evaluations succeeded',
+        stats: expect.objectContaining({
+          evaluated: 0,
+          failed: 3,
+        }),
+      }),
+    );
+  });
+
+  it('skips exact raw identity duplicates before ingesting resume work', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({ platformCandidateId: 'platform-candidate-1', name: 'Ada One' }),
+            makeRawCandidate({ platformCandidateId: 'platform-candidate-1', name: 'Ada Again' }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 1,
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.ingestCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        stage: 'indexing_resumes',
+        level: 'warning',
+        message: '跳过重复候选人：Ada Again',
+        detail: expect.objectContaining({
+          candidateName: 'Ada Again',
+          dedupeBy: 'raw_identity',
+          duplicateOf: expect.objectContaining({
+            candidateName: 'Ada One',
+            candidateId: 'candidate-1',
+            resumeId: 'resume-1',
+            platformCandidateId: 'platform-candidate-1',
+          }),
+        }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        stats: expect.objectContaining({
+          fetched: 2,
+          stored: 1,
+          deduped: 1,
+        }),
+      }),
+    );
+  });
+
+  it('logs existing library candidates during ingest without dropping them from this run', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-candidate-1',
+              name: 'Ada Existing',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 1,
+      candidateWasExisting: true,
+      resumeWasExisting: true,
+      existingCandidateId: 'candidate-1',
+      existingCandidateName: 'Ada Existing',
+      existingResumeId: 'resume-1',
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.mergeAndRank).toHaveBeenCalledWith({
+      live: [{ candidateId: 'candidate-1', matchScore: 1 }],
+      vector: [],
+    });
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'indexing_resumes',
+        level: 'warning',
+        message: '复用已有候选人：Ada Existing',
+        detail: expect.objectContaining({
+          candidateName: 'Ada Existing',
+          candidateWasExisting: true,
+          resumeWasExisting: true,
+          dedupeBy: 'existing_candidate_identity',
+          duplicateOf: expect.objectContaining({
+            candidateName: 'Ada Existing',
+            candidateId: 'candidate-1',
+            resumeId: 'resume-1',
+            platformCandidateId: 'platform-candidate-1',
+          }),
+        }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        stats: expect.objectContaining({
+          fetched: 1,
+          stored: 0,
+          deduped: 1,
+          evaluated: 1,
+        }),
+      }),
+    );
+  });
+
+  it('skips action planning for already contacted live candidates when repeats are disallowed', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-candidate-1',
+              name: 'Ada Contacted',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 1,
+      candidateContacted: true,
+      candidateWasExisting: true,
+      resumeWasExisting: true,
+      existingCandidateId: 'candidate-1',
+      existingCandidateName: 'Ada Contacted',
+      existingResumeId: 'resume-1',
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score, decision: chatDecision });
+    const contactedResult = makeResult({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      actionStatus: 'success',
+      interviewStage: 'contacted',
+      candidate: {
+        ...makeResult().candidate,
+        contacted: true,
+      },
+    });
+    dependencies.repo.listResults = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([contactedResult]);
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValueOnce(
+      makeResult({
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        decisionAction: 'skip',
+        decisionReason: '候选人已联系过，跳过本次自动动作',
+        actionStatus: 'success',
+        interviewStage: 'contacted',
+      }),
+    );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.repo.listResults).toHaveBeenNthCalledWith(2, {
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      candidateIds: ['candidate-1'],
+      limit: 1,
+    });
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        decisionAction: 'skip',
+        decisionReason: '候选人已联系过，跳过本次自动动作',
+      }),
+    );
+    const upsertPayload = (dependencies.repo.upsertResult as jest.Mock).mock.calls[0]?.[0] as {
+      actionStatus?: string;
+      interviewStage?: string;
+      notes?: string | null;
+    };
+    expect(upsertPayload).not.toHaveProperty('actionStatus');
+    expect(upsertPayload).not.toHaveProperty('interviewStage');
+    expect(upsertPayload).not.toHaveProperty('notes');
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        action: 'skip',
+        status: 'skipped',
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        stats: expect.objectContaining({
+          recommendedChat: 0,
+          skipped: 1,
+        }),
+      }),
+    );
+  });
+
+  it('preserves already contacted progress even when the evaluated action is skip', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-candidate-1',
+              name: 'Ada Contacted',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 1,
+      candidateContacted: true,
+      candidateWasExisting: true,
+      resumeWasExisting: true,
+      existingCandidateId: 'candidate-1',
+      existingCandidateName: 'Ada Contacted',
+      existingResumeId: 'resume-1',
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score, decision: skipDecision });
+    dependencies.repo.listResults = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        makeResult({
+          candidateId: 'candidate-1',
+          resumeId: 'resume-1',
+          actionStatus: 'success',
+          interviewStage: 'contacted',
+          candidate: {
+            ...makeResult().candidate,
+            contacted: true,
+          },
+        }),
+      ]);
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValueOnce(
+      makeResult({
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        decisionAction: 'skip',
+        decisionReason: skipDecision.reason,
+        actionStatus: 'success',
+        interviewStage: 'contacted',
+      }),
+    );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    const upsertPayload = (dependencies.repo.upsertResult as jest.Mock).mock.calls[0]?.[0] as {
+      actionStatus?: string;
+      interviewStage?: string;
+      notes?: string | null;
+    };
+    expect(upsertPayload).not.toHaveProperty('actionStatus');
+    expect(upsertPayload).not.toHaveProperty('interviewStage');
+    expect(upsertPayload).not.toHaveProperty('notes');
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        action: 'skip',
+        status: 'skipped',
+      }),
+    );
+  });
+
   it('skips duplicate candidates inside the same run', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() =>
@@ -854,6 +1656,500 @@ describe('candidate screening runner', () => {
           fetched: 2,
           stored: 1,
           deduped: 1,
+        }),
+      }),
+    );
+  });
+
+  it('records per-candidate evaluation score details as run events', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [makeRawCandidate({ name: 'Ada Lovelace' })],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        stage: 'evaluating',
+        level: 'success',
+        message: '完成评估：Ada Lovelace',
+        detail: expect.objectContaining({
+          candidateName: 'Ada Lovelace',
+          scoreDetail: score,
+          decision: chatDecision,
+        }),
+      }),
+    );
+  });
+
+  it('reuses historical JD evaluation for recalled candidates instead of scoring again', async () => {
+    const dependencies = makeDependencies();
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      {
+        id: 'chunk-vector-1',
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-vector',
+        userId: 'user-1',
+        chunkIndex: 0,
+        content: 'React SaaS search workflow',
+        displayName: 'Grace Hopper',
+        currentTitle: 'Staff Engineer',
+        currentCompany: 'Compilers Inc',
+        profileUrl: '/employer/resumes/2',
+        score: 0.82,
+      },
+    ]);
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-vector', matchScore: 0.82, source: 'vector_recall', rank: 1 },
+      ]);
+    const historicalScore = { ...score, total: 91 };
+    const historicalResult = makeResult({
+      id: 'result-history',
+      runId: 'previous-run',
+      candidateId: 'candidate-vector',
+      resumeId: 'resume-vector',
+      source: 'vector_recall',
+      scoreDetail: historicalScore,
+      finalScore: 91,
+      decisionAction: 'collect',
+      decisionPriority: 'medium',
+      decisionReason: '历史评分已确认匹配',
+      actionPlan: { ...collectDecision, reason: '历史评分已确认匹配' },
+      candidate: {
+        ...makeResult().candidate,
+        id: 'candidate-vector',
+        displayName: 'Grace Hopper',
+        profileUrl: '/employer/resumes/2',
+      },
+      resume: {
+        ...makeResult().resume!,
+        id: 'resume-vector',
+        candidateId: 'candidate-vector',
+        rawText: 'React SaaS search workflow',
+        profileUrl: '/employer/resumes/2',
+      },
+    });
+    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([historicalResult]);
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValueOnce(
+      makeResult({
+        id: 'result-history',
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-vector',
+        source: 'vector_recall',
+        scoreDetail: historicalScore,
+        finalScore: 91,
+        decisionAction: 'collect',
+        decisionPriority: 'medium',
+        decisionReason: '历史评分已确认匹配',
+        actionPlan: { ...collectDecision, reason: '历史评分已确认匹配' },
+      }),
+    );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.repo.listResults).toHaveBeenCalledWith({
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      candidateIds: ['candidate-vector'],
+      limit: 1,
+    });
+    expect(dependencies.evaluateCandidate).not.toHaveBeenCalled();
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-vector',
+        stage: 'evaluating',
+        level: 'info',
+        message: '复用历史评估：Grace Hopper',
+        detail: expect.objectContaining({
+          candidateName: 'Grace Hopper',
+          previousRunId: 'previous-run',
+          resultId: 'result-history',
+          scoreDetail: historicalScore,
+          decision: expect.objectContaining({
+            action: 'collect',
+            priority: 'medium',
+            reason: '历史评分已确认匹配',
+          }),
+        }),
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-vector',
+        scoreDetail: historicalScore,
+        finalScore: 91,
+        decisionAction: 'collect',
+        decisionPriority: 'medium',
+        decisionReason: '历史评分已确认匹配',
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        stats: expect.objectContaining({
+          evaluated: 1,
+          recommendedCollect: 1,
+        }),
+      }),
+    );
+  });
+
+  it('re-evaluates a candidate when the historical JD result belongs to a different resume', async () => {
+    const dependencies = makeDependencies();
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        displayName: 'Grace Hopper',
+        profileUrl: '/employer/resumes/2',
+        score: 0.82,
+      }),
+    ]);
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-vector', matchScore: 0.82, source: 'vector_recall', rank: 1 },
+      ]);
+    const historicalResult = makeResult({
+      id: 'result-history',
+      runId: 'previous-run',
+      candidateId: 'candidate-vector',
+      resumeId: 'resume-previous',
+      source: 'vector_recall',
+      scoreDetail: { ...score, total: 91 },
+      finalScore: 91,
+      decisionAction: 'collect',
+      decisionPriority: 'medium',
+      decisionReason: '历史评分已确认匹配',
+      actionPlan: { ...collectDecision, reason: '历史评分已确认匹配' },
+      candidate: {
+        ...makeResult().candidate,
+        id: 'candidate-vector',
+        displayName: 'Grace Hopper',
+        profileUrl: '/employer/resumes/2',
+      },
+      resume: {
+        ...makeResult().resume!,
+        id: 'resume-previous',
+        candidateId: 'candidate-vector',
+        rawText: 'Old React SaaS workflow',
+        profileUrl: '/employer/resumes/2',
+      },
+    });
+    const freshScore = { ...score, total: 84 };
+    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([historicalResult]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score: freshScore, decision: chatDecision });
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValueOnce(
+      makeResult({
+        id: 'result-history',
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        source: 'vector_recall',
+        scoreDetail: freshScore,
+        finalScore: 84,
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        decisionReason: 'fresh score',
+        actionPlan: chatDecision,
+      }),
+    );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateName: 'Grace Hopper',
+        resumeText: 'React SaaS search workflow',
+      }),
+    );
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-vector',
+        stage: 'evaluating',
+        level: 'warning',
+        message: '历史评估已过期：Grace Hopper',
+        detail: expect.objectContaining({
+          staleEvaluation: true,
+          previousRunId: 'previous-run',
+          resultId: 'result-history',
+          previousResumeId: 'resume-previous',
+          currentResumeId: 'resume-current',
+        }),
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        scoreDetail: freshScore,
+        finalScore: 84,
+        decisionAction: 'chat',
+      }),
+    );
+  });
+
+  it('re-evaluates a candidate when the historical result is older than the JD update', async () => {
+    const dependencies = makeDependencies();
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        displayName: 'Grace Hopper',
+        profileUrl: '/employer/resumes/2',
+        score: 0.82,
+      }),
+    ]);
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-vector', matchScore: 0.82, source: 'vector_recall', rank: 1 },
+      ]);
+    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([
+      makeResult({
+        id: 'result-history',
+        runId: 'previous-run',
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        source: 'vector_recall',
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        scoreDetail: { ...score, total: 91 },
+        finalScore: 91,
+        decisionAction: 'collect',
+        decisionPriority: 'medium',
+        decisionReason: '历史评分已确认匹配',
+        actionPlan: { ...collectDecision, reason: '历史评分已确认匹配' },
+      }),
+    ]);
+    const freshScore = { ...score, total: 86 };
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score: freshScore, decision: chatDecision });
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription: {
+        ...jobDescription,
+        updatedAt: '2026-06-02T00:00:00.000Z',
+      },
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-vector',
+        stage: 'evaluating',
+        level: 'warning',
+        message: '历史评估已过期：Grace Hopper',
+        detail: expect.objectContaining({
+          staleEvaluation: true,
+          staleReasons: ['JD 已更新，重新评估当前版本'],
+          previousRunId: 'previous-run',
+          resultId: 'result-history',
+          previousResumeId: 'resume-current',
+          currentResumeId: 'resume-current',
+          jobDescriptionUpdatedAt: '2026-06-02T00:00:00.000Z',
+        }),
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        scoreDetail: freshScore,
+        finalScore: 86,
+      }),
+    );
+  });
+
+  it('re-evaluates a candidate when the historical score uses an old quality version', async () => {
+    const dependencies = makeDependencies();
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        displayName: 'Grace Hopper',
+        profileUrl: '/employer/resumes/2',
+        score: 0.82,
+      }),
+    ]);
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-vector', matchScore: 0.82, source: 'vector_recall', rank: 1 },
+      ]);
+    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([
+      makeResult({
+        id: 'result-history',
+        runId: 'previous-run',
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        source: 'vector_recall',
+        updatedAt: '2026-06-02T00:00:00.000Z',
+        scoreDetail: {
+          ...score,
+          calibrationVersion: 'candidate-calibration-v0',
+          total: 91,
+        },
+        finalScore: 91,
+        decisionAction: 'collect',
+        decisionPriority: 'medium',
+        decisionReason: '历史评分已确认匹配',
+        actionPlan: { ...collectDecision, reason: '历史评分已确认匹配' },
+      }),
+    ]);
+    const freshScore = { ...score, total: 86 };
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score: freshScore, decision: chatDecision });
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription: {
+        ...jobDescription,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+      },
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-vector',
+        stage: 'evaluating',
+        level: 'warning',
+        message: '历史评估已过期：Grace Hopper',
+        detail: expect.objectContaining({
+          staleEvaluation: true,
+          staleReasons: ['评分质量机制已更新，重新评估当前版本'],
+          previousQualityVersions: expect.objectContaining({
+            promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
+            scoringVersion: CANDIDATE_SCREENING_SCORING_VERSION,
+            calibrationVersion: 'candidate-calibration-v0',
+            qualityPolicyVersion: CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+          }),
+          currentQualityVersions: expect.objectContaining({
+            promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
+            scoringVersion: CANDIDATE_SCREENING_SCORING_VERSION,
+            calibrationVersion: CANDIDATE_SCREENING_CALIBRATION_VERSION,
+            qualityPolicyVersion: CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+          }),
+        }),
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-vector',
+        resumeId: 'resume-current',
+        scoreDetail: freshScore,
+        finalScore: 86,
+      }),
+    );
+  });
+
+  it('skips recalled boss-like candidates with unusable profile URLs before evaluation', async () => {
+    const dependencies = makeDependencies();
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-invalid',
+        displayName: 'Stale Vector Candidate',
+        profileUrl: '/employer/resumes/boss-visible-flow-5381d7473713-ada',
+        score: 0.99,
+      }),
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-valid',
+        displayName: 'Valid Boss Candidate',
+        profileUrl: '/employer/resumes/303',
+        score: 0.95,
+      }),
+    ]);
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-valid', matchScore: 0.95, source: 'vector_recall', rank: 1 },
+      ]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score, decision: chatDecision });
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.mergeAndRank).toHaveBeenCalledWith({
+      live: [],
+      vector: [{ candidateId: 'candidate-valid', matchScore: 0.95 }],
+    });
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateName: 'Valid Boss Candidate',
+      }),
+    );
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'recalling_vectors',
+        level: 'warning',
+        message: '跳过无效召回候选人：Stale Vector Candidate',
+        detail: expect.objectContaining({
+          candidateName: 'Stale Vector Candidate',
+          candidateId: 'candidate-invalid',
+          profileUrl: '/employer/resumes/boss-visible-flow-5381d7473713-ada',
+          reason: expect.stringMatching(/invalid candidate profileUrl/),
+        }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        stats: expect.objectContaining({
+          vectorRecalled: 2,
+          evaluated: 1,
+          skipped: 1,
+          failed: 0,
         }),
       }),
     );
