@@ -14,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  Save,
   Sparkles,
 } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
@@ -855,6 +856,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [status, setStatus] = useState<JDStatus>('created');
   const [extraInstruction, setExtraInstruction] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isScreening, setIsScreening] = useState(false);
@@ -905,6 +907,28 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     void loadJobDescription();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobDescriptionId]);
+
+  async function handleSave() {
+    if (!jobDescription || !form) return;
+    if (status === 'published') return;
+    setIsSaving(true);
+    setError('');
+    try {
+      const next = await updateJobDescriptionResource(jobDescription.id, {
+        status,
+        salaryRange: publishSalary || null,
+        workLocations: selectedPublishLocations,
+        content: formToJd(form),
+      });
+      setJobDescription(next);
+      setForm(jdToForm(next.content));
+      setStatus(next.status);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存 JD 失败');
+    } finally {
+      setIsSaving(false);
+    }
+  }
 
   async function handleRegenerate() {
     if (!jobDescription || !form) return;
@@ -1080,6 +1104,17 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         <div aria-label="JD 详情主操作" className="flex flex-wrap gap-2">
           {isEditable ? (
             <>
+              <Button
+                className="gap-2"
+                disableRipple
+                isDisabled={isSaving}
+                type="button"
+                variant="bordered"
+                onClick={() => void handleSave()}
+              >
+                <Save className="h-4 w-4" aria-hidden />
+                {isSaving ? '保存中' : '保存修改'}
+              </Button>
               <Button
                 className="gap-2"
                 color="primary"

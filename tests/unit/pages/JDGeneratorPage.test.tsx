@@ -233,7 +233,7 @@ describe('JD pages', () => {
     expect(pushMock).toHaveBeenCalledWith('/jd-generator/jd-1/runs/create');
   });
 
-  it('regenerates editable JD detail from the primary action area', async () => {
+  it('edits, saves, and regenerates a JD detail', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
@@ -265,6 +265,17 @@ describe('JD pages', () => {
 
     const summary = await screen.findByLabelText('岗位摘要');
     fireEvent.change(summary, { target: { value: '手动调整后的 JD' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: expect.stringContaining('手动调整后的 JD'),
+        }),
+      );
+    });
 
     fireEvent.change(screen.getByLabelText('追加要求'), {
       target: { value: '强调 AI 招聘经验' },
@@ -284,7 +295,6 @@ describe('JD pages', () => {
       );
     });
     expect(screen.getByText('company.md')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
   });
 
   it('JD detail returns to the supplied source context', async () => {

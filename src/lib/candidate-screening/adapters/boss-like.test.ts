@@ -334,11 +334,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('opens detail pages when list cards have short resume text', async () => {
-    const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
-      shortResumeListFixture,
-      detailFixture,
-    ]);
+    const executor = new FakeBrowserExecutor([shortResumeListFixture, detailFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     const batches = await collectAsyncBatches(
@@ -355,11 +351,23 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
+  it('uses the caller-authenticated session without performing a second login check while searching', async () => {
+    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', resumeListFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await adapter.loginIfNeeded();
+    executor.clearCalls();
+
+    const batches = await collectAsyncBatches(
+      adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }),
+    );
+
+    expect(executor.calls.filter((call) => call === 'snapshot')).toHaveLength(1);
+    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('1');
+  });
+
   it('waits for candidate cards instead of ambiguous resume text before reading snapshots', async () => {
-    const executor = new AmbiguousResumeTextExecutor([
-      '<main>候选人列表</main>',
-      resumeListFixture,
-    ]);
+    const executor = new AmbiguousResumeTextExecutor([resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     const batches = await collectAsyncBatches(
@@ -372,11 +380,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('submits each keyword search and continues after an empty result page', async () => {
-    const executor = new EmptyThenResultExecutor([
-      '<main>候选人列表</main>',
-      '<main>暂无简历数据</main>',
-      resumeListFixture,
-    ]);
+    const executor = new EmptyThenResultExecutor(['<main>暂无简历数据</main>', resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     const batches = await collectAsyncBatches(
@@ -400,7 +404,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('rejects blank browser snapshots during candidate search', async () => {
-    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', '   ']);
+    const executor = new FakeBrowserExecutor(['   ']);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     await expect(
@@ -409,11 +413,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('rejects blank browser snapshots during detail enrichment', async () => {
-    const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
-      shortResumeListFixture,
-      '\n\t ',
-    ]);
+    const executor = new FakeBrowserExecutor([shortResumeListFixture, '\n\t ']);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     await expect(
@@ -423,7 +423,6 @@ describe('BossLikeCandidateSourceAdapter', () => {
 
   it('restores the resume list before continuing keyword search after detail enrichment', async () => {
     const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
       shortResumeListFixture,
       detailFixture,
       secondResumeListFixture,
@@ -456,11 +455,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('trims and deduplicates keywords before searching', async () => {
-    const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
-      resumeListFixture,
-      secondResumeListFixture,
-    ]);
+    const executor = new FakeBrowserExecutor([resumeListFixture, secondResumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
     const noisyKeywordPlan: SearchPlan = {
       ...searchPlan,
@@ -478,7 +473,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('falls back to retrieval query when keywords normalize to empty', async () => {
-    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', resumeListFixture]);
+    const executor = new FakeBrowserExecutor([resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
     const blankKeywordPlan: SearchPlan = {
       ...searchPlan,
@@ -496,7 +491,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('executes collect and chat only through explicit adapter methods', async () => {
-    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', resumeListFixture]);
+    const executor = new FakeBrowserExecutor([resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     await collectAsyncBatches(

@@ -127,7 +127,7 @@ bun run candidate-screening:calibration -- export sales
 | 想调整什么                          | 文件                                         |
 | ----------------------------------- | -------------------------------------------- |
 | 岗位类型识别、默认校准锚点          | `src/lib/candidate-screening/calibration.ts` |
-| prompt 文案和输出约束               | `src/lib/candidate-screening/llm.ts`         |
+| prompt 文案和输出约束               | `src/lib/candidate-screening/prompts.ts`     |
 | 评分公式、`llmBonus` 范围、版本写入 | `src/lib/candidate-screening/scoring.ts`     |
 | 历史评分复用判断                    | `src/lib/candidate-screening/runner.ts`      |
 | 质量版本常量                        | `src/lib/candidate-screening/constants.ts`   |

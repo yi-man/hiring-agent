@@ -249,8 +249,6 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     plan: SearchPlan,
     options: SearchOptions,
   ): AsyncIterable<RawCandidateBatch> {
-    await this.loginIfNeeded();
-
     const seen = new Set<string>();
     const keywords = createSearchKeywords(plan);
     const maxCandidates = Math.max(0, options.maxCandidates);

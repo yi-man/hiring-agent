@@ -862,7 +862,11 @@ async function createPlannedActions(params: {
       decisionReason: actionPlan.reason,
       actionPlan,
       ...(skipAlreadyContacted && existingResult
-        ? {}
+        ? {
+            actionStatus,
+            interviewStage: existingResult.interviewStage,
+            notes: existingResult.notes,
+          }
         : {
             actionStatus,
             interviewStage: actionPlan.action === 'skip' ? 'screened' : 'to_contact',

@@ -1451,6 +1451,7 @@ describe('candidate screening runner', () => {
       resumeId: 'resume-1',
       actionStatus: 'success',
       interviewStage: 'contacted',
+      notes: 'already reached on previous run',
       candidate: {
         ...makeResult().candidate,
         contacted: true,
@@ -1497,9 +1498,11 @@ describe('candidate screening runner', () => {
       interviewStage?: string;
       notes?: string | null;
     };
-    expect(upsertPayload).not.toHaveProperty('actionStatus');
-    expect(upsertPayload).not.toHaveProperty('interviewStage');
-    expect(upsertPayload).not.toHaveProperty('notes');
+    expect(upsertPayload).toMatchObject({
+      actionStatus: 'skipped',
+      interviewStage: 'contacted',
+      notes: 'already reached on previous run',
+    });
     expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
       expect.objectContaining({
         candidateId: 'candidate-1',
@@ -1561,6 +1564,7 @@ describe('candidate screening runner', () => {
           resumeId: 'resume-1',
           actionStatus: 'success',
           interviewStage: 'contacted',
+          notes: 'keep contacted progress',
           candidate: {
             ...makeResult().candidate,
             contacted: true,
@@ -1591,9 +1595,11 @@ describe('candidate screening runner', () => {
       interviewStage?: string;
       notes?: string | null;
     };
-    expect(upsertPayload).not.toHaveProperty('actionStatus');
-    expect(upsertPayload).not.toHaveProperty('interviewStage');
-    expect(upsertPayload).not.toHaveProperty('notes');
+    expect(upsertPayload).toMatchObject({
+      actionStatus: 'skipped',
+      interviewStage: 'contacted',
+      notes: 'keep contacted progress',
+    });
     expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
       expect.objectContaining({
         candidateId: 'candidate-1',
