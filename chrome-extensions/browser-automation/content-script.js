@@ -544,6 +544,13 @@
     if (command.action === 'wait_for_text') return waitForText(command);
     if (command.action === 'add_keywords') return addKeywords(command);
     if (command.action === 'check') return { commandId: command.id, success: check(command) };
+    if (command.action === 'snapshot') {
+      return {
+        commandId: command.id,
+        success: true,
+        htmlSnapshot: document.documentElement?.outerHTML || '',
+      };
+    }
     if (command.action === 'snapshot_structured') {
       return { commandId: command.id, success: true, domSnapshot: snapshotStructured() };
     }

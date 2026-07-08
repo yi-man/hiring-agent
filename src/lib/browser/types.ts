@@ -74,6 +74,7 @@ export type BrowserCommandAction =
   | 'check'
   | 'click_selector'
   | 'fill_selector'
+  | 'snapshot'
   | 'snapshot_structured'
   | 'resolve_target';
 
@@ -91,6 +92,7 @@ export type BrowserCommandResult = {
   commandId: string;
   success: boolean;
   error?: string;
+  htmlSnapshot?: string;
   domSnapshot?: StructuredDomSnapshot;
   match?: LocatorMatchReport;
   failedTargetKey?: BrowserStepTargetKey;

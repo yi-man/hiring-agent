@@ -185,6 +185,14 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
     return result.domSnapshot;
   }
 
+  async snapshot(): Promise<string> {
+    const result = await this.send('snapshot', {});
+    if (!result.success || typeof result.htmlSnapshot !== 'string') {
+      throw new Error(result.error ?? 'snapshot command returned no HTML snapshot');
+    }
+    return result.htmlSnapshot;
+  }
+
   async resolveTarget(
     target: BrowserTargetInput,
     options: BrowserResolveOptions = {},
