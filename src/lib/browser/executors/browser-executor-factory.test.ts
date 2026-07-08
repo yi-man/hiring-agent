@@ -1,6 +1,8 @@
 import { createBrowserExecutorFromEnv } from './browser-executor-factory';
 import { CommandTransportBrowserExecutor } from './command-transport-executor';
 import { PlaywrightBrowserExecutor } from './playwright-executor';
+import { BrowserAutomationConnectionRegistry } from './websocket-command-registry';
+import type { BrowserCommand } from '@/lib/browser/types';
 
 jest.mock('./playwright-executor', () => ({
   PlaywrightBrowserExecutor: jest.fn(),
@@ -61,5 +63,51 @@ describe('shared createBrowserExecutorFromEnv', () => {
     });
 
     expect(executor).toBeInstanceOf(CommandTransportBrowserExecutor);
+  });
+
+  it('requires a user id for the same-port WebSocket browser executor', () => {
+    expect(() =>
+      createBrowserExecutorFromEnv({
+        BROWSER_EXECUTOR: 'websocket-command',
+      }),
+    ).toThrow(/userId is required/);
+  });
+
+  it('routes same-port WebSocket commands through the user connection registry', async () => {
+    const registry = new BrowserAutomationConnectionRegistry();
+    const sent: BrowserCommand[] = [];
+    registry.register('user-1', {
+      sendCommand: async (command) => {
+        sent.push(command);
+        return { commandId: command.id, success: true };
+      },
+      close: jest.fn(),
+    });
+
+    const executor = createBrowserExecutorFromEnv(
+      {
+        BROWSER_EXECUTOR: 'websocket-command',
+        BROWSER_COMMAND_TIMEOUT_MS: '1234',
+      },
+      {
+        userId: 'user-1',
+        registry,
+      },
+    );
+
+    await expect(executor.navigate('https://example.com/jobs/new')).resolves.toEqual({
+      success: true,
+      error: undefined,
+      domSnapshot: undefined,
+      match: undefined,
+      failedTargetKey: undefined,
+    });
+    expect(sent).toEqual([
+      expect.objectContaining({
+        action: 'navigate',
+        params: { url: 'https://example.com/jobs/new' },
+        timeoutMs: 1234,
+      }),
+    ]);
   });
 });

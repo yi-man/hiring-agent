@@ -6,9 +6,9 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "NODE_ENV=development tsx src/scripts/next-server.ts --dev",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_ENV=production tsx src/scripts/next-server.ts",
     "postinstall": "prisma generate",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "lint:fix": "eslint . --ext .js,.jsx,.ts,.tsx --fix",
@@ -28,7 +28,7 @@
     "test:integration:chat": "bunx jest tests/integration/chat/real-deps.e2e.test.ts --runInBand --coverage=false",
     "test:integration:candidate-communication": "bunx jest tests/integration/candidate-communication/communication-flow.e2e.test.ts --runInBand --coverage=false",
     "test:integration:jd-publishing": "bunx jest tests/integration/jd-publishing/publish-flow.e2e.test.ts --runInBand --coverage=false",
-    "browser:chrome-bridge": "bunx tsx src/scripts/browser-chrome-bridge.ts",
+    "browser:chrome-bridge": "tsx src/scripts/browser-chrome-bridge.ts",
     "jd:chrome-bridge": "bun run browser:chrome-bridge",
     "obs:run": "bunx tsx src/scripts/llm-observability-ops.ts",
     "obs:realtime": "bun run obs:run -- realtime",
@@ -82,6 +82,8 @@
     "sonner": "1.7.4",
     "tailwind-merge": "3.5.0",
     "tailwindcss-animate": "1.0.7",
+    "tsx": "4.21.0",
+    "ws": "^8.21.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
@@ -99,6 +101,7 @@
     "@types/pg": "8.20.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "@types/ws": "^8.18.1",
     "chalk": "5.6.2",
     "dotenv": "17.3.1",
     "eslint": "8.57.1",
@@ -119,7 +122,6 @@
     "semver": "7.7.4",
     "tailwindcss": "4.2.1",
     "ts-node": "10.9.2",
-    "tsx": "4.21.0",
     "typescript": "5.9.3"
   },
   "engines": {

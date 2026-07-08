@@ -159,7 +159,9 @@ describe('publishJobDescriptionToBossLike', () => {
       settings: settings(),
     });
 
-    expect(createBrowserExecutorFromEnvMock).toHaveBeenCalledWith();
+    expect(createBrowserExecutorFromEnvMock).toHaveBeenCalledWith(process.env, {
+      userId: sampleJobDescription.userId,
+    });
     expect(JSON.stringify(runPublishingAgentGraphMock.mock.calls[0]?.[0])).not.toContain('6810');
     expect(executor.close).toHaveBeenCalledTimes(1);
   });

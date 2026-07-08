@@ -1,4 +1,4 @@
-const bridgeBaseUrl = document.getElementById('bridgeBaseUrl');
+const serverBaseUrl = document.getElementById('serverBaseUrl');
 const enabled = document.getElementById('enabled');
 const state = document.getElementById('state');
 const details = document.getElementById('details');
@@ -14,7 +14,7 @@ function send(message) {
 function render(payload) {
   const config = payload?.config || {};
   const status = payload?.status || {};
-  bridgeBaseUrl.value = config.bridgeBaseUrl || 'http://127.0.0.1:4100';
+  serverBaseUrl.value = config.serverBaseUrl || 'http://localhost:3000';
   enabled.checked = config.enabled !== false;
   state.textContent = status.state || 'unknown';
   details.textContent = JSON.stringify(status, null, 2);
@@ -29,7 +29,7 @@ save.addEventListener('click', async () => {
     await send({
       type: 'SAVE_CONFIG',
       config: {
-        bridgeBaseUrl: bridgeBaseUrl.value,
+        serverBaseUrl: serverBaseUrl.value,
         enabled: enabled.checked,
       },
     }),
@@ -40,9 +40,15 @@ refresh.addEventListener('click', refreshStatus);
 enabled.addEventListener('change', async () => {
   render(
     await send({
-      type: enabled.checked ? 'START_POLLING' : 'STOP_POLLING',
+      type: enabled.checked ? 'START_CONNECTION' : 'STOP_CONNECTION',
     }),
   );
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes.lastStatus) {
+    void refreshStatus();
+  }
 });
 
 void refreshStatus();

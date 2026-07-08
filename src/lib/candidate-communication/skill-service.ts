@@ -18,7 +18,10 @@ export async function runUnreadCandidateCommunicationSkill(params: {
     jobDescriptionId: params.jobDescriptionId,
     platform: params.platform,
     adapter: new BossLikeCandidateCommunicationAdapter({
-      executor: createBrowserExecutorFromEnv(process.env, { defaultTimeoutMs: 10_000 }),
+      executor: createBrowserExecutorFromEnv(process.env, {
+        defaultTimeoutMs: 10_000,
+        userId: params.userId,
+      }),
     }),
     maxPasses: params.maxPasses,
   });

@@ -42,7 +42,11 @@ export async function publishJobDescriptionToBossLike(options: {
     username: readBossLikeConfig('BOSS_LIKE_EMPLOYER_USERNAME', DEFAULT_BOSS_LIKE_USERNAME),
     password: readBossLikeConfig('BOSS_LIKE_EMPLOYER_PASSWORD', DEFAULT_BOSS_LIKE_PASSWORD),
   };
-  const executor = options.executor ?? createBrowserExecutorFromEnv();
+  const executor =
+    options.executor ??
+    createBrowserExecutorFromEnv(process.env, {
+      userId: jobDescription.userId,
+    });
   const shouldCloseExecutor = !options.executor;
 
   try {

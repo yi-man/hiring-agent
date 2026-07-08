@@ -1,29 +1,44 @@
 # Hiring Agent Browser Automation Extension
 
-This unpacked Chrome extension executes the shared Hiring Agent
-`http-command` browser adapter in a real Chrome tab.
+This unpacked Chrome extension executes Hiring Agent browser automation commands in the
+user's real Chrome tab. The extension connects to the Hiring Agent app over the app's
+existing WebSocket route:
+
+```text
+/api/browser-automation/socket
+```
+
+No extra local bridge port is required for the product flow.
 
 ## Local Setup
 
-1. Start the bridge:
+1. Start the app with the WebSocket browser executor enabled:
 
    ```bash
-   bun run browser:chrome-bridge
+   BROWSER_EXECUTOR=websocket-command bun run dev
    ```
 
-2. Open `chrome://extensions`, enable Developer Mode, and load this folder as
+   You can also put `BROWSER_EXECUTOR=websocket-command` in your local `.env` before
+   running `bun run dev`.
+
+2. Open `http://localhost:3000` and sign in.
+
+3. Open `chrome://extensions`, enable Developer Mode, and load this folder as
    an unpacked extension:
 
    ```text
    chrome-extensions/browser-automation
    ```
 
-3. Configure the app:
+4. Open the extension popup and set Server URL to:
 
-   ```bash
-   BROWSER_EXECUTOR=http-command
-   BROWSER_COMMAND_ENDPOINT=http://127.0.0.1:4100/browser-command
+   ```text
+   http://localhost:3000
    ```
 
-The extension polls `http://127.0.0.1:4100` by default. Use the popup to change
-the bridge URL or pause polling.
+The extension reads the app session cookie for the configured Server URL, sends a
+`hello` message to the WebSocket route, receives `BrowserCommand` messages, runs them
+in Chrome, and sends `BrowserCommandResult` messages back on the same connection.
+
+The legacy `bun run browser:chrome-bridge` HTTP polling bridge remains available as a
+development fallback for `BROWSER_EXECUTOR=http-command`.

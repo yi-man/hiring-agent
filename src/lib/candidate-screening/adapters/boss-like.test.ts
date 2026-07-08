@@ -599,10 +599,13 @@ describe('BossLikeCandidateSourceAdapter', () => {
     const executor = new FakeBrowserExecutor();
     createBrowserExecutorFromEnvMock.mockReturnValueOnce(executor);
 
-    const adapter = createCandidateSourceAdapter('boss-like');
+    const adapter = createCandidateSourceAdapter('boss-like', { userId: 'user-1' });
 
     expect(adapter).toBeInstanceOf(BossLikeCandidateSourceAdapter);
     expect(adapter.platform).toBe('boss-like');
     expect(createBrowserExecutorFromEnvMock).toHaveBeenCalledTimes(1);
+    expect(createBrowserExecutorFromEnvMock).toHaveBeenCalledWith(process.env, {
+      userId: 'user-1',
+    });
   });
 });

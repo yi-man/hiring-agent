@@ -1,21 +1,18 @@
-const DEFAULT_BRIDGE_BASE_URL = 'http://127.0.0.1:4100';
-const POLL_IDLE_DELAY_MS = 250;
-const POLL_ERROR_DELAY_MS = 1000;
+const DEFAULT_SERVER_BASE_URL = 'http://localhost:3000';
+const SOCKET_PATH = '/api/browser-automation/socket';
+const SESSION_COOKIE_NAME = 'hiring-agent.session';
+const RECONNECT_DELAY_MS = 1000;
 const CONTENT_SCRIPT_FILE = 'content-script.js';
 
-let pollLoopActive = false;
+let connectInFlight = false;
+let reconnectTimer = null;
+let activeSocket = null;
 let activeTabId = null;
 let lastStatus = {
   state: 'starting',
-  bridgeBaseUrl: DEFAULT_BRIDGE_BASE_URL,
+  serverBaseUrl: DEFAULT_SERVER_BASE_URL,
   updatedAt: new Date().toISOString(),
 };
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 function chromeCall(fn) {
   return new Promise((resolve, reject) => {
@@ -30,25 +27,34 @@ function chromeCall(fn) {
   });
 }
 
-function normalizeBridgeBaseUrl(value) {
-  const raw = String(value || DEFAULT_BRIDGE_BASE_URL).trim();
-  const url = new URL(raw || DEFAULT_BRIDGE_BASE_URL);
+function normalizeServerBaseUrl(value) {
+  const raw = String(value || DEFAULT_SERVER_BASE_URL).trim();
+  const url = new URL(raw || DEFAULT_SERVER_BASE_URL);
   url.search = '';
   url.hash = '';
-  url.pathname = url.pathname.replace(/\/browser-command\/?$/, '').replace(/\/$/, '');
+  url.pathname = url.pathname
+    .replace(/\/api\/browser-automation\/socket\/?$/, '')
+    .replace(/\/$/, '');
   return url.toString().replace(/\/$/, '');
 }
 
-function endpoint(baseUrl, path) {
-  return `${normalizeBridgeBaseUrl(baseUrl)}${path}`;
+function socketUrl(serverBaseUrl) {
+  const url = new URL(normalizeServerBaseUrl(serverBaseUrl));
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = SOCKET_PATH;
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 }
 
 async function getConfig() {
   const stored = await chromeCall((done) =>
-    chrome.storage.local.get(['bridgeBaseUrl', 'enabled'], done),
+    chrome.storage.local.get(['serverBaseUrl', 'bridgeBaseUrl', 'enabled'], done),
   );
   return {
-    bridgeBaseUrl: normalizeBridgeBaseUrl(stored.bridgeBaseUrl || DEFAULT_BRIDGE_BASE_URL),
+    serverBaseUrl: normalizeServerBaseUrl(
+      stored.serverBaseUrl || stored.bridgeBaseUrl || DEFAULT_SERVER_BASE_URL,
+    ),
     enabled: stored.enabled !== false,
   };
 }
@@ -58,11 +64,19 @@ async function setConfig(nextConfig) {
   const merged = {
     ...current,
     ...nextConfig,
-    bridgeBaseUrl: normalizeBridgeBaseUrl(nextConfig.bridgeBaseUrl || current.bridgeBaseUrl),
+    serverBaseUrl: normalizeServerBaseUrl(nextConfig.serverBaseUrl || current.serverBaseUrl),
   };
-  await chromeCall((done) => chrome.storage.local.set(merged, done));
+  await chromeCall((done) =>
+    chrome.storage.local.set(
+      {
+        serverBaseUrl: merged.serverBaseUrl,
+        enabled: merged.enabled,
+      },
+      done,
+    ),
+  );
   await updateStatus({ state: merged.enabled ? 'configured' : 'paused', ...merged });
-  if (merged.enabled) startPolling();
+  restartConnection();
   return merged;
 }
 
@@ -73,6 +87,56 @@ async function updateStatus(patch) {
     updatedAt: new Date().toISOString(),
   };
   await chromeCall((done) => chrome.storage.local.set({ lastStatus }, done)).catch(() => {});
+}
+
+async function getSessionToken(serverBaseUrl) {
+  const cookie = await chromeCall((done) =>
+    chrome.cookies.get(
+      {
+        url: normalizeServerBaseUrl(serverBaseUrl),
+        name: SESSION_COOKIE_NAME,
+      },
+      done,
+    ),
+  );
+  if (!cookie?.value) {
+    throw new Error('not_logged_in_to_hiring_agent');
+  }
+  return cookie.value;
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function closeActiveSocket() {
+  const socket = activeSocket;
+  activeSocket = null;
+  if (
+    socket &&
+    (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+  ) {
+    socket.close();
+  }
+}
+
+function scheduleReconnect() {
+  clearReconnectTimer();
+  reconnectTimer = setTimeout(() => {
+    void startConnection();
+  }, RECONNECT_DELAY_MS);
+  chrome.alarms.create('browser-automation-reconnect', {
+    when: Date.now() + RECONNECT_DELAY_MS,
+  });
+}
+
+function restartConnection() {
+  clearReconnectTimer();
+  closeActiveSocket();
+  void startConnection();
 }
 
 async function getTab(tabId) {
@@ -223,87 +287,150 @@ async function executeCommand(command) {
   }
 }
 
-async function postResult(baseUrl, result) {
-  const response = await fetch(endpoint(baseUrl, '/browser-command/result'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(result),
-  });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`bridge rejected result with HTTP ${response.status}`);
+function sendSocketMessage(socket, message) {
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(message));
   }
 }
 
-async function pollOnce(config) {
-  const response = await fetch(endpoint(config.bridgeBaseUrl, '/browser-command/next'), {
-    method: 'GET',
-    cache: 'no-store',
-  });
-  if (response.status === 204) {
-    await updateStatus({ state: 'idle', bridgeBaseUrl: config.bridgeBaseUrl });
-    await delay(POLL_IDLE_DELAY_MS);
+async function handleSocketMessage(socket, config, event) {
+  let message;
+  try {
+    message = JSON.parse(event.data);
+  } catch {
+    await updateStatus({
+      state: 'protocol_error',
+      serverBaseUrl: config.serverBaseUrl,
+      lastError: 'invalid_server_message',
+    });
     return;
   }
-  if (!response.ok) {
-    throw new Error(`bridge returned HTTP ${response.status}`);
+
+  if (message?.type === 'ready') {
+    await updateStatus({
+      state: 'connected',
+      serverBaseUrl: config.serverBaseUrl,
+      userId: message.userId,
+      socketUrl: socketUrl(config.serverBaseUrl),
+      lastError: undefined,
+    });
+    return;
   }
 
-  const command = await response.json();
+  if (message?.type !== 'command' || !message.command?.id) {
+    await updateStatus({
+      state: 'protocol_error',
+      serverBaseUrl: config.serverBaseUrl,
+      lastError: 'unsupported_server_message',
+    });
+    return;
+  }
+
+  const command = message.command;
   await updateStatus({
     state: 'running',
-    bridgeBaseUrl: config.bridgeBaseUrl,
+    serverBaseUrl: config.serverBaseUrl,
     lastCommandId: command.id,
     lastAction: command.action,
+    lastError: undefined,
   });
   const result = await executeCommand(command);
-  await postResult(config.bridgeBaseUrl, result);
+  sendSocketMessage(socket, { type: 'result', result });
   await updateStatus({
-    state: result.success ? 'idle' : 'command_failed',
-    bridgeBaseUrl: config.bridgeBaseUrl,
+    state: result.success ? 'connected' : 'command_failed',
+    serverBaseUrl: config.serverBaseUrl,
     lastCommandId: command.id,
     lastAction: command.action,
     lastError: result.error,
   });
 }
 
-async function pollLoop() {
-  if (pollLoopActive) return;
-  pollLoopActive = true;
+async function startConnection() {
+  if (connectInFlight) return;
+  if (
+    activeSocket &&
+    (activeSocket.readyState === WebSocket.OPEN || activeSocket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
+  connectInFlight = true;
   try {
-    while (true) {
-      const config = await getConfig();
-      if (!config.enabled) {
-        await updateStatus({ state: 'paused', bridgeBaseUrl: config.bridgeBaseUrl });
-        return;
-      }
-      try {
-        await pollOnce(config);
-      } catch (error) {
-        await updateStatus({
-          state: 'bridge_unavailable',
-          bridgeBaseUrl: config.bridgeBaseUrl,
-          lastError: error instanceof Error ? error.message : String(error),
-        });
-        await delay(POLL_ERROR_DELAY_MS);
-      }
+    const config = await getConfig();
+    if (!config.enabled) {
+      closeActiveSocket();
+      await updateStatus({ state: 'paused', serverBaseUrl: config.serverBaseUrl });
+      return;
     }
+
+    const sessionToken = await getSessionToken(config.serverBaseUrl);
+    const nextSocketUrl = socketUrl(config.serverBaseUrl);
+    const socket = new WebSocket(nextSocketUrl);
+    activeSocket = socket;
+    await updateStatus({
+      state: 'connecting',
+      serverBaseUrl: config.serverBaseUrl,
+      socketUrl: nextSocketUrl,
+    });
+
+    socket.addEventListener('open', () => {
+      sendSocketMessage(socket, { type: 'hello', sessionToken });
+      void updateStatus({ state: 'authenticating', serverBaseUrl: config.serverBaseUrl });
+    });
+
+    socket.addEventListener('message', (event) => {
+      void handleSocketMessage(socket, config, event);
+    });
+
+    socket.addEventListener('error', () => {
+      void updateStatus({
+        state: 'connection_error',
+        serverBaseUrl: config.serverBaseUrl,
+        socketUrl: nextSocketUrl,
+        lastError: 'websocket_error',
+      });
+    });
+
+    socket.addEventListener('close', () => {
+      if (activeSocket === socket) {
+        activeSocket = null;
+      }
+      void updateStatus({
+        state: 'disconnected',
+        serverBaseUrl: config.serverBaseUrl,
+        socketUrl: nextSocketUrl,
+      });
+      scheduleReconnect();
+    });
+  } catch (error) {
+    const config = await getConfig().catch(() => ({
+      serverBaseUrl: DEFAULT_SERVER_BASE_URL,
+      enabled: true,
+    }));
+    await updateStatus({
+      state:
+        error instanceof Error && error.message === 'not_logged_in_to_hiring_agent'
+          ? 'auth_required'
+          : 'server_unavailable',
+      serverBaseUrl: config.serverBaseUrl,
+      lastError: error instanceof Error ? error.message : String(error),
+    });
+    scheduleReconnect();
   } finally {
-    pollLoopActive = false;
+    connectInFlight = false;
   }
 }
 
-function startPolling() {
-  void pollLoop();
-}
-
 chrome.runtime.onInstalled.addListener(() => {
-  void setConfig({ bridgeBaseUrl: DEFAULT_BRIDGE_BASE_URL, enabled: true });
-  chrome.alarms.create('browser-automation-poll', { periodInMinutes: 0.5 });
+  void setConfig({ enabled: true });
+  chrome.alarms.create('browser-automation-reconnect', { periodInMinutes: 0.5 });
 });
 
-chrome.runtime.onStartup.addListener(startPolling);
+chrome.runtime.onStartup.addListener(startConnection);
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'browser-automation-poll') startPolling();
+  if (alarm.name === 'browser-automation-reconnect') {
+    void startConnection();
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -316,13 +443,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const config = await setConfig(message.config || {});
       return { config, status: lastStatus };
     }
-    if (message?.type === 'START_POLLING') {
-      await setConfig({ enabled: true });
-      return { status: lastStatus };
+    if (message?.type === 'START_CONNECTION' || message?.type === 'START_POLLING') {
+      const config = await setConfig({ enabled: true });
+      return { config, status: lastStatus };
     }
-    if (message?.type === 'STOP_POLLING') {
-      await setConfig({ enabled: false });
-      return { status: lastStatus };
+    if (message?.type === 'STOP_CONNECTION' || message?.type === 'STOP_POLLING') {
+      const config = await setConfig({ enabled: false });
+      return { config, status: lastStatus };
     }
     return { error: 'unknown_message' };
   })()
@@ -333,4 +460,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-startPolling();
+void startConnection();

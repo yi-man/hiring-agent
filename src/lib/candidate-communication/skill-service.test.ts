@@ -69,7 +69,7 @@ describe('runUnreadCandidateCommunicationSkill', () => {
         BROWSER_EXECUTOR: 'http-command',
         BROWSER_COMMAND_ENDPOINT: 'http://127.0.0.1:4100/browser-command',
       }),
-      { defaultTimeoutMs: 10_000 },
+      { defaultTimeoutMs: 10_000, userId: 'user-1' },
     );
     expect(BossLikeCandidateCommunicationAdapterMock).toHaveBeenCalledWith({ executor });
     expect(runCandidateCommunicationSkillMock).toHaveBeenCalledWith(

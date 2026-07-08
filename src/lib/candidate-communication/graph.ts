@@ -462,7 +462,9 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
     });
 
     if (state.payload.executeReply) {
-      const adapter = dependencies.createAdapter(state.payload.platform);
+      const adapter = dependencies.createAdapter(state.payload.platform, {
+        userId: state.userId,
+      });
       try {
         const executionResult = await sendReply({
           adapter,
