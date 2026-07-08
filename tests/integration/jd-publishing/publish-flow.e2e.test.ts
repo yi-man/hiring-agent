@@ -10,7 +10,7 @@ import {
   requireIntegrationEnv,
 } from '../chat/test-env';
 import { createJobDescription } from '@/lib/jd/job-description-repo';
-import { PlaywrightBrowserExecutor } from '@/lib/jd-publishing/executors/playwright-executor';
+import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-executor';
 import { createExploredPublishSkill } from '@/lib/jd-publishing/publish-repo';
 import { publishJobDescriptionToBossLike } from '@/lib/jd-publishing/service';
 import { bossLikePublishSkill } from '@/lib/jd-publishing/skill-registry';

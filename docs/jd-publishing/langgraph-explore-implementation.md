@@ -201,14 +201,39 @@ Explore 和执行共用同一套 resolver。执行器不会直接 `.first()` 操
 adapter 机制已接入运行时入口。默认配置使用 `PlaywrightBrowserExecutor`；如果配置：
 
 ```bash
-JD_PUBLISHING_BROWSER_EXECUTOR=http-command
-JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT=http://127.0.0.1:4100/browser-command
+BROWSER_EXECUTOR=http-command
+BROWSER_COMMAND_ENDPOINT=http://127.0.0.1:4100/browser-command
 ```
 
 service 会创建 `CommandTransportBrowserExecutor`，并用 `HttpBrowserCommandTransport`
 把每个浏览器动作 POST 到外部浏览器运行时。该外部运行时可以是 Chrome extension、
 agent-browser server 或其它实现，只要接受 `BrowserCommand` 并返回 `BrowserCommandResult`。
 graph 不依赖具体执行器实现。
+
+### Chrome extension runtime
+
+仓库内提供了一个本机 Chrome 插件运行时：
+
+```bash
+bun run browser:chrome-bridge
+```
+
+然后在 `chrome://extensions` 开启 Developer Mode，选择 Load unpacked，目录指向：
+
+```text
+chrome-extensions/browser-automation
+```
+
+应用侧使用既有 adapter 配置即可：
+
+```bash
+BROWSER_EXECUTOR=http-command
+BROWSER_COMMAND_ENDPOINT=http://127.0.0.1:4100/browser-command
+```
+
+bridge 对应用暴露 `/browser-command`，插件通过 `/browser-command/next` 长轮询取命令，
+执行完成后 POST `/browser-command/result`。这样 Chrome 插件不需要在浏览器内监听 HTTP
+端口，也不改变 graph/service 与 `BrowserExecutor` 的边界。
 
 `BrowserCommand` envelope：
 

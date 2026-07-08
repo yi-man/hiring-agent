@@ -28,6 +28,8 @@
     "test:integration:chat": "bunx jest tests/integration/chat/real-deps.e2e.test.ts --runInBand --coverage=false",
     "test:integration:candidate-communication": "bunx jest tests/integration/candidate-communication/communication-flow.e2e.test.ts --runInBand --coverage=false",
     "test:integration:jd-publishing": "bunx jest tests/integration/jd-publishing/publish-flow.e2e.test.ts --runInBand --coverage=false",
+    "browser:chrome-bridge": "bunx tsx src/scripts/browser-chrome-bridge.ts",
+    "jd:chrome-bridge": "bun run browser:chrome-bridge",
     "obs:run": "bunx tsx src/scripts/llm-observability-ops.ts",
     "obs:realtime": "bun run obs:run -- realtime",
     "obs:retention": "bun run obs:run -- retention",

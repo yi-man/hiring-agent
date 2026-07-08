@@ -15,7 +15,7 @@ import { BossLikeCandidateSourceAdapter } from '@/lib/candidate-screening/adapte
 import { createCandidateIdentity } from '@/lib/candidate-screening/dedupe';
 import { runCandidateCommunicationSkill } from '@/lib/candidate-communication/skill-runner';
 import { handleCandidateMessage } from '@/lib/candidate-communication/service';
-import { PlaywrightBrowserExecutor } from '@/lib/jd-publishing/executors/playwright-executor';
+import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-executor';
 import { createJobDescription } from '@/lib/jd/job-description-repo';
 import { prisma } from '@/lib/prisma';
 import type { JD, JobDescriptionDto } from '@/types';

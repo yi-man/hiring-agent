@@ -1,4 +1,4 @@
-import { createBrowserExecutorFromEnv } from '@/lib/jd-publishing/executors/browser-executor-factory';
+import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
 import { BossLikeCandidateSourceAdapter } from './boss-like';
 import type { CandidateSourceAdapter } from './types';
 import type { CandidateScreeningPlatform } from '../types';

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Hiring Agent Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Hiring Agent</h1>
+        <span id="state">...</span>
+      </header>
+      <label>
+        Bridge URL
+        <input id="bridgeBaseUrl" type="url" spellcheck="false" />
+      </label>
+      <label class="row">
+        <input id="enabled" type="checkbox" />
+        Enabled
+      </label>
+      <div class="actions">
+        <button id="save" type="button">Save</button>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+      <pre id="details"></pre>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

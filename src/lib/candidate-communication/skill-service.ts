@@ -1,6 +1,6 @@
 import { BossLikeCandidateCommunicationAdapter } from './adapters/boss-like';
 import { runCandidateCommunicationSkill } from './skill-runner';
-import { PlaywrightBrowserExecutor } from '@/lib/jd-publishing/executors/playwright-executor';
+import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
 import type { CandidateScreeningPlatform } from '@/lib/candidate-screening/types';
 
 export async function runUnreadCandidateCommunicationSkill(params: {
@@ -18,7 +18,7 @@ export async function runUnreadCandidateCommunicationSkill(params: {
     jobDescriptionId: params.jobDescriptionId,
     platform: params.platform,
     adapter: new BossLikeCandidateCommunicationAdapter({
-      executor: new PlaywrightBrowserExecutor({ timeoutMs: 10_000 }),
+      executor: createBrowserExecutorFromEnv(process.env, { defaultTimeoutMs: 10_000 }),
     }),
     maxPasses: params.maxPasses,
   });

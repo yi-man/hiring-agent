@@ -5,7 +5,7 @@ import type {
   BrowserCommandTransport,
   LocatorMatchReport,
   TargetDescriptor,
-} from '@/lib/jd-publishing/types';
+} from '@/lib/browser/types';
 
 class RecordingTransport implements BrowserCommandTransport {
   readonly commands: BrowserCommand[] = [];
