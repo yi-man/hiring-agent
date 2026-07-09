@@ -81,6 +81,37 @@ describe('evaluateCandidateForJd', () => {
     expect(result.decision.reason).toContain('LLM 评估失败，已使用规则兜底');
   });
 
+  it('clamps out-of-contract LLM bonus instead of discarding an otherwise valid evaluation', async () => {
+    const result = await evaluateCandidateForJd({
+      jobTitle: '高级后端工程师',
+      evaluationSchema,
+      resumeText: 'Java Spring Boot 高并发',
+      candidateName: '王小明',
+      runLLM: async () => ({
+        tags: {
+          skills: ['Java', 'Spring Boot'],
+          domainKnowledge: ['高并发'],
+          generalAbility: ['owner'],
+          risk: [],
+          activity: [],
+          custom: [],
+        },
+        score: { skill: 80, domain: 70, ability: 75, risk: 0, llmBonus: 50 },
+        reason: '主体评分有效，但校准项越界',
+      }),
+    });
+
+    expect(result.score).toMatchObject({
+      skill: 80,
+      domain: 70,
+      ability: 75,
+      risk: 0,
+      llmBonus: 5,
+      total: 73.5,
+    });
+    expect(result.decision.reason).toBe('主体评分有效，但校准项越界');
+  });
+
   it('rejects out-of-range LLM scores and falls back instead of high-confidence chat', async () => {
     const outOfRangeOutput = {
       tags: {

@@ -1,3 +1,4 @@
+import type { ElementType, ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { JDCreateView, JDDetailView, JDListView } from '@/components/jd-generator/jd-pages';
 import type { JobDescriptionDto } from '@/types';
@@ -11,6 +12,29 @@ jest.mock('next/navigation', () => ({
     refresh: jest.fn(),
   }),
   useSearchParams: () => mockSearchParams,
+}));
+
+jest.mock('@/components/ui', () => ({
+  Button: ({
+    as: Component = 'button',
+    children,
+    href,
+    isDisabled,
+    onClick,
+    type = 'button',
+  }: {
+    as?: ElementType;
+    children: ReactNode;
+    href?: string;
+    isDisabled?: boolean;
+    onClick?: () => void;
+    type?: 'button' | 'submit' | 'reset';
+  }) => {
+    const props =
+      Component === 'button' ? { disabled: isDisabled, onClick, type } : { href, onClick };
+    return <Component {...props}>{children}</Component>;
+  },
+  Chip: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }));
 
 const sampleJobDescription: JobDescriptionDto = {
@@ -138,20 +162,19 @@ describe('JD pages', () => {
     expect(screen.getAllByText('published').length).toBeGreaterThan(0);
     expect(screen.getByText('已筛选')).toBeInTheDocument();
     expect(screen.getByText('合格 2 / 全部 3')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建 JD' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '新建 JD' })).toHaveAttribute(
       'href',
       '/jd-generator/new',
     );
-    const detailHref = screen.getByRole('button', { name: '详情' }).getAttribute('href') ?? '';
+    const detailHref = screen.getByRole('link', { name: '详情' }).getAttribute('href') ?? '';
     expect(parsedHref(detailHref).pathname).toBe('/jd-generator/jd-1');
     expectReturnContext(detailHref, '/jd-generator', '返回列表');
     expect(screen.getByRole('button', { name: '继续筛选' })).toBeInTheDocument();
     const screeningRunHref =
-      screen.getByRole('button', { name: '筛选记录' }).getAttribute('href') ?? '';
+      screen.getByRole('link', { name: '筛选记录' }).getAttribute('href') ?? '';
     expect(parsedHref(screeningRunHref).pathname).toBe('/jd-generator/jd-1/screening-runs/run-1');
     expectReturnContext(screeningRunHref, '/jd-generator', '返回列表');
-    const candidatesHref =
-      screen.getByRole('button', { name: '候选人' }).getAttribute('href') ?? '';
+    const candidatesHref = screen.getByRole('link', { name: '候选人' }).getAttribute('href') ?? '';
     expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-1/candidates');
     expectReturnContext(candidatesHref, '/jd-generator', '返回列表');
 
@@ -210,7 +233,7 @@ describe('JD pages', () => {
     expect(pushMock).toHaveBeenCalledWith('/jd-generator/jd-1/runs/create');
   });
 
-  it('edits, saves and regenerates a JD detail', async () => {
+  it('edits, saves, and regenerates a JD detail', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
@@ -292,7 +315,7 @@ describe('JD pages', () => {
 
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    expect(await screen.findByRole('button', { name: '返回工作台' })).toHaveAttribute('href', '/');
+    expect(await screen.findByRole('link', { name: '返回工作台' })).toHaveAttribute('href', '/');
   });
 
   it('uses the logged-in user company profile when publishing a JD', async () => {
@@ -339,7 +362,7 @@ describe('JD pages', () => {
     expect(await screen.findByDisplayValue('深海数据')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: '远程' })).toBeChecked();
     fireEvent.change(screen.getByLabelText('发布薪资范围'), { target: { value: '30-50K' } });
-    fireEvent.click(screen.getByRole('button', { name: '发布到 Boss-like' }));
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
@@ -356,6 +379,34 @@ describe('JD pages', () => {
         }),
       );
     });
+  });
+
+  it('keeps the generic publish action enabled for ready-to-publish JD detail', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescription: {
+            ...sampleJobDescription,
+            salaryRange: null,
+            workLocations: [],
+            status: 'ready_to_publish',
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    const publishButton = await screen.findByRole('button', { name: '发布' });
+    expect(publishButton).toBeEnabled();
   });
 
   it('renders published JD detail as read-only with primary actions at the top', async () => {
@@ -382,16 +433,32 @@ describe('JD pages', () => {
 
     const topActions = screen.getByLabelText('JD 详情主操作');
     expect(within(topActions).getByRole('button', { name: '继续筛选' })).toBeInTheDocument();
+    expect(
+      within(topActions).queryByRole('link', { name: /已筛选候选人/ }),
+    ).not.toBeInTheDocument();
+    expect(within(topActions).queryByRole('link', { name: '筛选记录' })).not.toBeInTheDocument();
+    expect(within(topActions).queryByRole('button', { name: '批量沟通' })).not.toBeInTheDocument();
     const candidatesHref =
-      within(topActions)
-        .getByRole('button', { name: /已筛选候选人/ })
-        .getAttribute('href') ?? '';
+      screen.getByRole('link', { name: /已筛选候选人/ }).getAttribute('href') ?? '';
     expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-1/candidates');
     expectReturnContext(candidatesHref, '/jd-generator/jd-1', '返回 JD');
-    expect(within(topActions).getByRole('button', { name: '批量沟通' })).toBeInTheDocument();
+    const screeningRunHref =
+      screen.getByRole('link', { name: '筛选记录' }).getAttribute('href') ?? '';
+    expect(parsedHref(screeningRunHref).pathname).toBe('/jd-generator/jd-1/screening-runs/run-1');
+    expectReturnContext(screeningRunHref, '/jd-generator/jd-1', '返回 JD');
 
     expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '重新生成' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发布到 Boss-like' })).not.toBeInTheDocument();
+  });
+
+  it('shows global batch communication on the JD workbench header', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({ jobDescriptions: [], total: 0 }),
+    });
+
+    render(<JDListView />);
+
+    expect(await screen.findByRole('button', { name: '批量沟通' })).toBeInTheDocument();
   });
 });

@@ -1,8 +1,19 @@
 import type { CandidateActionPlan, ScoreDetail } from './types';
+import {
+  CANDIDATE_EVALUATION_PROMPT_VERSION,
+  CANDIDATE_SCREENING_CALIBRATION_VERSION,
+  CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+  CANDIDATE_SCREENING_SCORING_VERSION,
+} from './constants';
 
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
+}
+
+function clampBonus(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(5, Math.max(-5, value));
 }
 
 function roundTwo(value: number): number {
@@ -14,7 +25,7 @@ export function scoreCandidate(input: Omit<ScoreDetail, 'total'>): ScoreDetail {
   const domain = clampScore(input.domain);
   const ability = clampScore(input.ability);
   const risk = clampScore(input.risk);
-  const llmBonus = clampScore(input.llmBonus);
+  const llmBonus = clampBonus(input.llmBonus);
   const total = clampScore(skill * 0.4 + domain * 0.2 + ability * 0.3 - risk * 0.1 + llmBonus);
 
   return {
@@ -24,6 +35,10 @@ export function scoreCandidate(input: Omit<ScoreDetail, 'total'>): ScoreDetail {
     risk,
     llmBonus,
     total: roundTwo(total),
+    promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
+    scoringVersion: CANDIDATE_SCREENING_SCORING_VERSION,
+    calibrationVersion: CANDIDATE_SCREENING_CALIBRATION_VERSION,
+    qualityPolicyVersion: CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
   };
 }
 

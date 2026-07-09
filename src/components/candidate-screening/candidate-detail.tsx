@@ -389,7 +389,7 @@ export function CandidateDetail({
                   ['domain', candidate.scoreDetail.domain],
                   ['ability', candidate.scoreDetail.ability],
                   ['risk', candidate.scoreDetail.risk],
-                  ['bonus', candidate.scoreDetail.llmBonus],
+                  ['calibration', candidate.scoreDetail.llmBonus],
                 ].map(([label, value]) => (
                   <div key={label} className="border-border rounded-md border px-3 py-2">
                     <dt className="text-muted-foreground">{label}</dt>

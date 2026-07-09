@@ -1,4 +1,10 @@
 import { buildScreeningPlanFromJd } from './planner';
+import {
+  CANDIDATE_SCREENING_CALIBRATION_VERSION,
+  CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+  CANDIDATE_SCREENING_SCORING_VERSION,
+  CANDIDATE_EVALUATION_PROMPT_VERSION,
+} from './constants';
 import type { JobDescriptionDto } from '@/types';
 
 const jd = {
@@ -34,6 +40,26 @@ describe('candidate screening planner', () => {
     expect(result.evaluationSchema.skills).toEqual(
       expect.arrayContaining(['Java', 'Spring Boot', 'PostgreSQL']),
     );
+    expect(result.evaluationSchema.calibrationProfile).toMatchObject({
+      version: CANDIDATE_SCREENING_CALIBRATION_VERSION,
+      category: 'technical',
+      categoryLabel: '技术研发',
+    });
+    expect(result.evaluationSchema.calibrationProfile?.anchors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: '强匹配',
+          expectedAction: 'chat',
+          scoreRange: [85, 100],
+        }),
+      ]),
+    );
+    expect(result.evaluationSchema.qualityPolicy).toMatchObject({
+      version: CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
+      promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
+      scoringVersion: CANDIDATE_SCREENING_SCORING_VERSION,
+      calibrationVersion: CANDIDATE_SCREENING_CALIBRATION_VERSION,
+    });
     expect(result.searchPlan.retrievalQuery).toContain('高级后端工程师');
   });
 
@@ -122,5 +148,43 @@ describe('candidate screening planner', () => {
     });
 
     expect(result.searchPlan.keywords).toEqual(['React', 'Node.js', 'LangChain', '全栈工程师']);
+  });
+
+  it('selects a role-specific calibration profile from the JD text', () => {
+    const productResult = buildScreeningPlanFromJd({
+      ...jd,
+      department: '产品部',
+      position: '高级产品经理',
+      positionDescription: '负责 B 端产品规划、需求分析和跨团队推进',
+      content: {
+        ...jd.content,
+        title: '高级产品经理',
+        summary: '负责产品路线图和需求优先级',
+        responsibilities: ['调研用户需求', '推进产品上线'],
+        requirements: ['B端产品经验', '数据分析', '跨团队协作'],
+      },
+    });
+    const salesResult = buildScreeningPlanFromJd({
+      ...jd,
+      department: '销售部',
+      position: '大客户销售',
+      positionDescription: '负责企业客户开拓和销售转化',
+      content: {
+        ...jd.content,
+        title: '大客户销售',
+        summary: '负责 SaaS 大客户商机推进',
+        responsibilities: ['开发大客户', '推进合同签约'],
+        requirements: ['企业销售经验', '客户关系维护', '销售漏斗管理'],
+      },
+    });
+
+    expect(productResult.evaluationSchema.calibrationProfile).toMatchObject({
+      category: 'product',
+      categoryLabel: '产品',
+    });
+    expect(salesResult.evaluationSchema.calibrationProfile).toMatchObject({
+      category: 'sales',
+      categoryLabel: '销售商务',
+    });
   });
 });

@@ -42,6 +42,13 @@ describe('AppSidebar', () => {
       'href',
       '/settings/company',
     );
+
+    const menuText = menu.textContent ?? '';
+    const otherSectionIndex = menuText.indexOf('其他');
+    expect(otherSectionIndex).toBeGreaterThan(-1);
+    expect(menuText.indexOf('Workflow 库')).toBeLessThan(otherSectionIndex);
+    expect(menuText.indexOf('智能对话')).toBeGreaterThan(otherSectionIndex);
+    expect(menuText.indexOf('Workflow 学习')).toBeGreaterThan(otherSectionIndex);
   });
 
   it('highlights the active route branch', () => {
