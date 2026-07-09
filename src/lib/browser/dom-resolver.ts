@@ -226,7 +226,11 @@ const SEMANTIC_PROXIMITY_EVALUATOR = new Function(
     var fieldSelector = input.fieldSelector;
 
     function normalize(value) {
-      return (value || '').replace(/\\s+/g, ' ').trim();
+      return (value || '')
+        .replace(/\\s+/g, ' ')
+        .trim()
+        .replace(/\\s*[＊*]\\s*$/, '')
+        .trim();
     }
 
     function matches(value) {
@@ -448,9 +452,15 @@ function normalizeText(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeComparableName(value: string | null | undefined): string {
+  return normalizeText(value)
+    .replace(/\s*[＊*]\s*$/, '')
+    .trim();
+}
+
 function includesName(candidate: string | undefined, target: TargetDescriptor): boolean {
-  const candidateText = normalizeText(candidate);
-  const targetText = normalizeText(target.name);
+  const candidateText = normalizeComparableName(candidate);
+  const targetText = normalizeComparableName(target.name);
   if (!candidateText || !targetText) return false;
   return target.exact ? candidateText === targetText : candidateText.includes(targetText);
 }

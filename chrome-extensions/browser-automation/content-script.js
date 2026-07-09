@@ -17,6 +17,13 @@
       .trim();
   }
 
+  function comparableText(value) {
+    return cleanText(value)
+      .replace(/\s*[＊*]\s*$/, '')
+      .trim()
+      .toLowerCase();
+  }
+
   function isVisible(element) {
     if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) return false;
     const style = globalThis.getComputedStyle(element);
@@ -279,8 +286,8 @@
   }
 
   function textScore(value, targetName, exact) {
-    const text = cleanText(value).toLowerCase();
-    const wanted = cleanText(targetName).toLowerCase();
+    const text = comparableText(value);
+    const wanted = comparableText(targetName);
     if (!text || !wanted) return 0;
     if (exact) return text === wanted ? 1 : 0;
     if (text === wanted) return 1;

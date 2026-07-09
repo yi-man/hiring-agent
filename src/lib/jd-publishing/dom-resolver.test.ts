@@ -95,6 +95,43 @@ describe('dom resolver', () => {
     });
   });
 
+  it('resolves exact field labels with required markers', async () => {
+    await withPage(
+      `
+        <main>
+          <h1>发布职位</h1>
+          <form>
+            <div>
+              <label>职位名称 *</label>
+              <input type="text" placeholder="如：高级前端工程师" />
+            </div>
+          </form>
+        </main>
+      `,
+      async (page) => {
+        const result = await resolveTarget(
+          page,
+          {
+            kind: 'field',
+            role: 'textbox',
+            name: '职位名称',
+            exact: true,
+            scope: { kind: 'form', name: '发布职位' },
+          },
+          { action: 'fill' },
+        );
+
+        expect(result.report.status).toBe('unique');
+        expect(result.report.strategy).toBe('semantic_proximity');
+        expect(result.report.chosen).toEqual(
+          expect.objectContaining({ tag: 'input', label: '职位名称 *' }),
+        );
+        await result.locator?.fill('高级前端工程师');
+        await expect(page.locator('input').inputValue()).resolves.toBe('高级前端工程师');
+      },
+    );
+  });
+
   it('resolves a field through placeholder', async () => {
     await withPage('<input placeholder="工作地点" />', async (page) => {
       const result = await resolveTarget(
