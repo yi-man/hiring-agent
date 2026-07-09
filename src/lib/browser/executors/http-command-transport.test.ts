@@ -1,7 +1,7 @@
 import { createServer } from 'http';
 import type { AddressInfo } from 'net';
 import { HttpBrowserCommandTransport } from './http-command-transport';
-import type { BrowserCommand } from '@/lib/jd-publishing/types';
+import type { BrowserCommand } from '@/lib/browser/types';
 
 async function withCommandServer(
   handler: (command: BrowserCommand) => Record<string, unknown>,

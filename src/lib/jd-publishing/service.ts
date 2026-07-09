@@ -1,7 +1,8 @@
 import type { JobDescriptionDto } from '@/types';
-import { createBrowserExecutorFromEnv } from './executors/browser-executor-factory';
+import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
 import { runPublishingAgentGraph } from './graph';
-import type { BrowserExecutor, PublishJobDescriptionSettings, PublishTaskResult } from './types';
+import type { BrowserExecutor } from '@/lib/browser/types';
+import type { PublishJobDescriptionSettings, PublishTaskResult } from './types';
 
 const DEFAULT_BOSS_LIKE_BASE_URL = 'http://localhost:6183';
 const DEFAULT_BOSS_LIKE_USERNAME = 'admin';
@@ -41,7 +42,11 @@ export async function publishJobDescriptionToBossLike(options: {
     username: readBossLikeConfig('BOSS_LIKE_EMPLOYER_USERNAME', DEFAULT_BOSS_LIKE_USERNAME),
     password: readBossLikeConfig('BOSS_LIKE_EMPLOYER_PASSWORD', DEFAULT_BOSS_LIKE_PASSWORD),
   };
-  const executor = options.executor ?? createBrowserExecutorFromEnv();
+  const executor =
+    options.executor ??
+    createBrowserExecutorFromEnv(process.env, {
+      userId: jobDescription.userId,
+    });
   const shouldCloseExecutor = !options.executor;
 
   try {

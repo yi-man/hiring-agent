@@ -15,7 +15,7 @@ import {
   runCandidateScreening,
   type ScreeningRunnerDependencies,
 } from '@/lib/candidate-screening/runner';
-import { PlaywrightBrowserExecutor } from '@/lib/jd-publishing/executors/playwright-executor';
+import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-executor';
 import { createJobDescription } from '@/lib/jd/job-description-repo';
 import { prisma } from '@/lib/prisma';
 import type { JD, JobDescriptionDto } from '@/types';

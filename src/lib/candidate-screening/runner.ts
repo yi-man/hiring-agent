@@ -1052,7 +1052,9 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       },
     });
 
-    const adapter = state.dependencies.createAdapter(state.request.platform);
+    const adapter = state.dependencies.createAdapter(state.request.platform, {
+      userId: state.userId,
+    });
     resources.adapter = adapter;
     await adapter.loginIfNeeded();
     const rawCandidates = await collectRawCandidates({
@@ -1960,7 +1962,9 @@ export async function executeScreeningRunActions(params: {
       return adapter;
     }
 
-    const nextAdapter = dependencies.createAdapter(currentRun.platform);
+    const nextAdapter = dependencies.createAdapter(currentRun.platform, {
+      userId: params.userId,
+    });
     try {
       await nextAdapter.loginIfNeeded();
     } catch (error) {
@@ -2059,7 +2063,9 @@ export async function executeSingleCandidateAction(params: {
   const stats = createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
   try {
-    adapter = dependencies.createAdapter(run.platform);
+    adapter = dependencies.createAdapter(run.platform, {
+      userId: params.userId,
+    });
     await adapter.loginIfNeeded();
     const executionResult = await adapter.chatCandidate(
       createStoredCandidateRef(detail),

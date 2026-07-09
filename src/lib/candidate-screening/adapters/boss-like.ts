@@ -2,7 +2,7 @@ import type {
   BrowserExecutor,
   BrowserStepResult,
   StructuredDomSnapshot,
-} from '@/lib/jd-publishing/types';
+} from '@/lib/browser/types';
 import type { RawCandidate } from '../ingest';
 import type { CandidateActionPlan, CandidateScreeningPlatform, SearchPlan } from '../types';
 import type {

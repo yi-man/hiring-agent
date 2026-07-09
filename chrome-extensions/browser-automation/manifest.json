@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Hiring Agent Browser Automation",
+  "version": "0.1.0",
+  "description": "Runs Hiring Agent browser automation commands in a real Chrome tab.",
+  "permissions": ["alarms", "cookies", "scripting", "storage", "tabs"],
+  "host_permissions": ["http://127.0.0.1:*/*", "http://localhost:*/*", "http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Hiring Agent Browser Automation",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

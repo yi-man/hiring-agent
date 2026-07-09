@@ -5,16 +5,16 @@ import type {
   BrowserExecutor,
   BrowserStepResult,
   BrowserTargetInput,
-  PublishStepCheck,
+  BrowserStepCheck,
   StructuredDomSnapshot,
-} from '@/lib/jd-publishing/types';
-import { createBrowserExecutorFromEnv } from '@/lib/jd-publishing/executors/browser-executor-factory';
+} from '@/lib/browser/types';
+import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
 import { BossLikeCandidateSourceAdapter, extractBossLikeCandidatesFromHtml } from './boss-like';
 import { createCandidateSourceAdapter } from './factory';
 import type { RawCandidateBatch } from './types';
 import type { CandidateActionPlan, SearchPlan } from '../types';
 
-jest.mock('@/lib/jd-publishing/executors/browser-executor-factory', () => ({
+jest.mock('@/lib/browser/executors/browser-executor-factory', () => ({
   createBrowserExecutorFromEnv: jest.fn(),
 }));
 
@@ -148,7 +148,7 @@ class FakeBrowserExecutor implements BrowserExecutor {
     return { success: true };
   }
 
-  async check(check: PublishStepCheck): Promise<boolean> {
+  async check(check: BrowserStepCheck): Promise<boolean> {
     this.calls.push(`check:${check.id ?? check.text ?? check.selector ?? ''}`);
     return true;
   }
@@ -203,7 +203,7 @@ class AmbiguousResumeTextExecutor extends FakeBrowserExecutor {
 class EmptyThenResultExecutor extends FakeBrowserExecutor {
   private cardChecks = 0;
 
-  async check(check: PublishStepCheck): Promise<boolean> {
+  async check(check: BrowserStepCheck): Promise<boolean> {
     this.calls.push(`check:${check.id ?? check.text ?? check.selector ?? ''}`);
     if (check.type === 'dom_exists' && check.selector === 'article[data-candidate-id]') {
       this.cardChecks += 1;
@@ -233,7 +233,7 @@ function createSnapshotlessExecutor(): BrowserExecutor & { calls: string[] } {
       calls.push(`waitForUrl:${url}`);
       return { success: true };
     },
-    async check(check: PublishStepCheck): Promise<boolean> {
+    async check(check: BrowserStepCheck): Promise<boolean> {
       calls.push(`check:${check.id ?? check.text ?? check.selector ?? ''}`);
       return true;
     },
@@ -595,10 +595,13 @@ describe('BossLikeCandidateSourceAdapter', () => {
     const executor = new FakeBrowserExecutor();
     createBrowserExecutorFromEnvMock.mockReturnValueOnce(executor);
 
-    const adapter = createCandidateSourceAdapter('boss-like');
+    const adapter = createCandidateSourceAdapter('boss-like', { userId: 'user-1' });
 
     expect(adapter).toBeInstanceOf(BossLikeCandidateSourceAdapter);
     expect(adapter.platform).toBe('boss-like');
     expect(createBrowserExecutorFromEnvMock).toHaveBeenCalledTimes(1);
+    expect(createBrowserExecutorFromEnvMock).toHaveBeenCalledWith(process.env, {
+      userId: 'user-1',
+    });
   });
 });

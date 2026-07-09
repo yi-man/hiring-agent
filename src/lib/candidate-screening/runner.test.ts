@@ -469,7 +469,7 @@ describe('candidate screening runner', () => {
       'finalizing',
     ]);
     expect(dependencies.buildPlan).toHaveBeenCalledWith(jobDescription);
-    expect(dependencies.createAdapter).toHaveBeenCalledWith('boss-like');
+    expect(dependencies.createAdapter).toHaveBeenCalledWith('boss-like', { userId: 'user-1' });
     expect(adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
     expect(adapter.searchCandidates).toHaveBeenCalledWith(searchPlan, {
       maxCandidates: 20,
@@ -2255,7 +2255,7 @@ describe('candidate screening runner', () => {
       dependencies,
     });
 
-    expect(dependencies.createAdapter).toHaveBeenCalledWith('boss-like');
+    expect(dependencies.createAdapter).toHaveBeenCalledWith('boss-like', { userId: 'user-1' });
     expect(adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
     expect(dependencies.repo.listResults).toHaveBeenCalledWith(
       expect.objectContaining({

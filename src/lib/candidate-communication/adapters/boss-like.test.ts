@@ -3,7 +3,7 @@ import {
   extractBossLikeUnreadMessagesFromRenderedHtml,
 } from './boss-like';
 import { BossLikeCandidateCommunicationAdapter } from './boss-like';
-import type { BrowserExecutor } from '@/lib/jd-publishing/types';
+import type { BrowserExecutor } from '@/lib/browser/types';
 
 describe('boss-like candidate communication adapter', () => {
   it('extracts only unread candidate messages from the inbox html', () => {

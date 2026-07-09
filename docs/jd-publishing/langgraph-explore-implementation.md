@@ -201,14 +201,34 @@ Explore 和执行共用同一套 resolver。执行器不会直接 `.first()` 操
 adapter 机制已接入运行时入口。默认配置使用 `PlaywrightBrowserExecutor`；如果配置：
 
 ```bash
-JD_PUBLISHING_BROWSER_EXECUTOR=http-command
-JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT=http://127.0.0.1:4100/browser-command
+BROWSER_EXECUTOR=websocket-command
 ```
 
-service 会创建 `CommandTransportBrowserExecutor`，并用 `HttpBrowserCommandTransport`
-把每个浏览器动作 POST 到外部浏览器运行时。该外部运行时可以是 Chrome extension、
-agent-browser server 或其它实现，只要接受 `BrowserCommand` 并返回 `BrowserCommandResult`。
-graph 不依赖具体执行器实现。
+service 会创建 `CommandTransportBrowserExecutor`，并用 `WebSocketBrowserCommandTransport`
+通过同端口 `/api/browser-automation/socket` 把每个浏览器动作发送给当前用户已连接的
+Chrome extension。graph 不依赖具体执行器实现；JD 发布、候选筛选、候选沟通都复用
+`src/lib/browser` 下的共享 adapter。
+
+### Chrome extension runtime
+
+仓库内提供了一个 Chrome 插件运行时。先用 WebSocket browser executor 启动应用并登录：
+
+```bash
+BROWSER_EXECUTOR=websocket-command bun run dev
+```
+
+然后在 `chrome://extensions` 开启 Developer Mode，选择 Load unpacked，目录指向：
+
+```text
+chrome-extensions/browser-automation
+```
+
+插件 popup 中填写当前网站地址，例如 `http://localhost:3000`。
+
+插件主动连接应用同端口的 `/api/browser-automation/socket`，用网站 session cookie 完成
+鉴权，随后在同一条 WebSocket 上接收 `BrowserCommand` 并返回 `BrowserCommandResult`。
+旧的 `bun run browser:chrome-bridge` + `BROWSER_EXECUTOR=http-command` HTTP polling bridge
+保留为本地开发 fallback。
 
 `BrowserCommand` envelope：
 

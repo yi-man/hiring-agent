@@ -5,7 +5,7 @@ import type {
   BrowserCommandTransport,
   LocatorMatchReport,
   TargetDescriptor,
-} from '@/lib/jd-publishing/types';
+} from '@/lib/browser/types';
 
 class RecordingTransport implements BrowserCommandTransport {
   readonly commands: BrowserCommand[] = [];
@@ -79,13 +79,14 @@ describe('CommandTransportBrowserExecutor', () => {
     ]);
   });
 
-  it('supports async resolver and structured snapshot commands for extension adapters', async () => {
+  it('supports async resolver and snapshot commands for extension adapters', async () => {
     const target: TargetDescriptor = {
       kind: 'button',
       role: 'button',
       name: '发布职位',
       exact: true,
     };
+    const htmlSnapshot = '<article data-candidate-id="candidate-1"></article>';
     const snapshot = {
       url: 'https://boss.example.com/employer/jobs/new',
       title: '发布职位',
@@ -96,6 +97,9 @@ describe('CommandTransportBrowserExecutor', () => {
       textBlocks: [],
     };
     const transport = new RecordingTransport((command) => {
+      if (command.action === 'snapshot') {
+        return { commandId: command.id, success: true, htmlSnapshot };
+      }
       if (command.action === 'snapshot_structured') {
         return { commandId: command.id, success: true, domSnapshot: snapshot };
       }
@@ -114,9 +118,11 @@ describe('CommandTransportBrowserExecutor', () => {
     await expect(executor.resolveTarget?.(target, { action: 'click' })).resolves.toEqual(
       expect.objectContaining({ target, status: 'unique' }),
     );
+    await expect(executor.snapshot?.()).resolves.toBe(htmlSnapshot);
     await expect(executor.snapshotStructured?.()).resolves.toBe(snapshot);
     expect(transport.commands.map((command) => command.action)).toEqual([
       'resolve_target',
+      'snapshot',
       'snapshot_structured',
     ]);
   });

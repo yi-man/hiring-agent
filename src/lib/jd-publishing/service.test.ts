@@ -1,20 +1,20 @@
 import type { JobDescriptionDto, JD } from '@/types';
-import { CommandTransportBrowserExecutor } from './executors/command-transport-executor';
-import { PlaywrightBrowserExecutor } from './executors/playwright-executor';
+import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
 import { runPublishingAgentGraph } from './graph';
 import { publishJobDescriptionToBossLike } from './service';
-import type { BrowserExecutor, PublishTaskResult } from './types';
+import type { BrowserExecutor } from '@/lib/browser/types';
+import type { PublishTaskResult } from './types';
 
-jest.mock('./executors/playwright-executor', () => ({
-  PlaywrightBrowserExecutor: jest.fn(),
+jest.mock('@/lib/browser/executors/browser-executor-factory', () => ({
+  createBrowserExecutorFromEnv: jest.fn(),
 }));
 
 jest.mock('./graph', () => ({
   runPublishingAgentGraph: jest.fn(),
 }));
 
-const PlaywrightBrowserExecutorMock = PlaywrightBrowserExecutor as jest.MockedClass<
-  typeof PlaywrightBrowserExecutor
+const createBrowserExecutorFromEnvMock = createBrowserExecutorFromEnv as jest.MockedFunction<
+  typeof createBrowserExecutorFromEnv
 >;
 const runPublishingAgentGraphMock = runPublishingAgentGraph as jest.MockedFunction<
   typeof runPublishingAgentGraph
@@ -104,9 +104,9 @@ describe('publishJobDescriptionToBossLike', () => {
     restoreEnv('BOSS_LIKE_API_BASE_URL');
     restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
     restoreEnv('BOSS_LIKE_EMPLOYER_PASSWORD');
-    restoreEnv('JD_PUBLISHING_BROWSER_EXECUTOR');
-    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT');
-    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_TIMEOUT_MS');
+    restoreEnv('BROWSER_EXECUTOR');
+    restoreEnv('BROWSER_COMMAND_ENDPOINT');
+    restoreEnv('BROWSER_COMMAND_TIMEOUT_MS');
     runPublishingAgentGraphMock.mockResolvedValue(successfulResult);
   });
 
@@ -116,9 +116,9 @@ describe('publishJobDescriptionToBossLike', () => {
     restoreEnv('BOSS_LIKE_API_BASE_URL');
     restoreEnv('BOSS_LIKE_EMPLOYER_USERNAME');
     restoreEnv('BOSS_LIKE_EMPLOYER_PASSWORD');
-    restoreEnv('JD_PUBLISHING_BROWSER_EXECUTOR');
-    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT');
-    restoreEnv('JD_PUBLISHING_BROWSER_COMMAND_TIMEOUT_MS');
+    restoreEnv('BROWSER_EXECUTOR');
+    restoreEnv('BROWSER_COMMAND_ENDPOINT');
+    restoreEnv('BROWSER_COMMAND_TIMEOUT_MS');
   });
 
   it('delegates publishing to the LangGraph agent with page target URLs', async () => {
@@ -149,35 +149,33 @@ describe('publishJobDescriptionToBossLike', () => {
     expect(executor.close).not.toHaveBeenCalled();
   });
 
-  it('creates and closes the default headed Playwright executor without any boss-like API URL', async () => {
+  it('creates and closes the shared browser executor without any boss-like API URL', async () => {
     const executor = createExecutor();
     process.env.BOSS_LIKE_API_BASE_URL = 'http://localhost:6810';
-    PlaywrightBrowserExecutorMock.mockImplementationOnce(
-      () => executor as unknown as PlaywrightBrowserExecutor,
-    );
+    createBrowserExecutorFromEnvMock.mockReturnValueOnce(executor);
 
     await publishJobDescriptionToBossLike({
       jobDescription: sampleJobDescription,
       settings: settings(),
     });
 
-    expect(PlaywrightBrowserExecutorMock).toHaveBeenCalledWith();
+    expect(createBrowserExecutorFromEnvMock).toHaveBeenCalledWith(process.env, {
+      userId: sampleJobDescription.userId,
+    });
     expect(JSON.stringify(runPublishingAgentGraphMock.mock.calls[0]?.[0])).not.toContain('6810');
     expect(executor.close).toHaveBeenCalledTimes(1);
   });
 
-  it('creates a configured command transport browser executor adapter', async () => {
-    process.env.JD_PUBLISHING_BROWSER_EXECUTOR = 'http-command';
-    process.env.JD_PUBLISHING_BROWSER_COMMAND_ENDPOINT = 'http://127.0.0.1:4100/browser-command';
+  it('uses the shared browser executor factory when no executor is injected', async () => {
+    const executor = createExecutor();
+    createBrowserExecutorFromEnvMock.mockReturnValueOnce(executor);
 
     await publishJobDescriptionToBossLike({
       jobDescription: sampleJobDescription,
       settings: settings(),
     });
 
-    expect(runPublishingAgentGraphMock.mock.calls[0]?.[0].executor).toBeInstanceOf(
-      CommandTransportBrowserExecutor,
-    );
+    expect(runPublishingAgentGraphMock.mock.calls[0]?.[0].executor).toBe(executor);
   });
 
   it('requires an explicit boss-like base URL outside local test runtimes', async () => {

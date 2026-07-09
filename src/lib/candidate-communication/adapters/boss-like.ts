@@ -5,7 +5,7 @@ import {
 import type { CandidateSourceAdapter } from '@/lib/candidate-screening/adapters/types';
 import type { RawCandidate } from '@/lib/candidate-screening/ingest';
 import type { CandidateActionPlan } from '@/lib/candidate-screening/types';
-import type { BrowserStepResult } from '@/lib/jd-publishing/types';
+import type { BrowserStepResult } from '@/lib/browser/types';
 import type {
   CandidateCommunicationSkillAdapter,
   UnreadCandidateMessage,
