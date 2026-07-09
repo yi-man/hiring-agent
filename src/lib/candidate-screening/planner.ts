@@ -1,4 +1,5 @@
 import type { EvaluationSchema, SearchPlan } from './types';
+import { buildCalibrationProfileFromJd, buildScoringQualityPolicy } from './calibration';
 import {
   buildSearchKeywordsFromProfile,
   extractAtomicKeywords,
@@ -75,6 +76,8 @@ export function buildScreeningPlanFromJd(jobDescription: JobDescriptionDto): {
       domainKnowledge,
       generalAbility,
       risk,
+      calibrationProfile: buildCalibrationProfileFromJd(jobDescription),
+      qualityPolicy: buildScoringQualityPolicy(),
     },
   };
 }

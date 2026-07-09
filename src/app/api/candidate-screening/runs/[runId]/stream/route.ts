@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import {
   getCandidateScreeningRun,
+  listCandidateScreeningRunEvents,
   type CandidateScreeningRunDto,
 } from '@/lib/candidate-screening/repo';
 
@@ -57,7 +58,8 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
             break;
           }
 
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ run })}\n\n`));
+          const events = await listCandidateScreeningRunEvents({ userId, runId, limit: 300 });
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ run, events })}\n\n`));
           if (isTerminalRun(run) || elapsedSeconds === MAX_STREAM_SECONDS) {
             break;
           }

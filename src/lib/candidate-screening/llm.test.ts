@@ -79,23 +79,31 @@ describe('runCandidateEvaluationLLM', () => {
     );
     const request = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
       model: string;
+      temperature?: number;
       response_format?: { type: string };
       messages: Array<{ role: string; content: string }>;
     };
     expect(request).toMatchObject({
       model: 'gpt-test',
+      temperature: 0.2,
       response_format: { type: 'json_object' },
     });
     expect(request.messages[0]).toMatchObject({ role: 'system' });
-    expect(request.messages[0].content).toEqual(expect.stringContaining('untrusted'));
+    expect(request.messages[0].content).toEqual(expect.stringContaining('不可信'));
     expect(request.messages[0].content).toEqual(expect.stringContaining('resumeText'));
-    const userPayload = JSON.parse(request.messages[1].content) as { resumeText: string };
+    const userPayload = JSON.parse(request.messages[1].content) as {
+      promptVersion?: string;
+      scoringVersion?: string;
+      resumeText: string;
+    };
+    expect(userPayload.promptVersion).toBe('candidate-evaluation-zh-rubric-v2');
+    expect(userPayload.scoringVersion).toBe('candidate-screening-rubric-v2');
     expect(userPayload.resumeText).toHaveLength(12000);
     expect(result.tags.skills).toEqual(['Java']);
     expect(result.score.skill).toBe(90);
   });
 
-  it('instructs the model with the exact evaluation output contract and score scale', async () => {
+  it('instructs the model with a Chinese evidence-based rubric and output contract', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -117,7 +125,14 @@ describe('runCandidateEvaluationLLM', () => {
     expect(systemPrompt).toEqual(expect.stringContaining('"tags"'));
     expect(systemPrompt).toEqual(expect.stringContaining('"score"'));
     expect(systemPrompt).toEqual(expect.stringContaining('"reason"'));
+    expect(systemPrompt).toEqual(expect.stringContaining('评分规约'));
+    expect(systemPrompt).toEqual(expect.stringContaining('必须引用简历事实'));
+    expect(systemPrompt).toEqual(expect.stringContaining('calibrationProfile'));
+    expect(systemPrompt).toEqual(expect.stringContaining('校准锚点'));
+    expect(systemPrompt).toEqual(expect.stringContaining('技能匹配'));
     expect(systemPrompt).toEqual(expect.stringContaining('0-100'));
+    expect(systemPrompt).toEqual(expect.stringContaining('llmBonus'));
+    expect(systemPrompt).toEqual(expect.stringContaining('-5 到 5'));
     expect(systemPrompt).toEqual(expect.stringContaining('risk=0'));
   });
 
@@ -265,6 +280,29 @@ describe('runCandidateEvaluationLLM', () => {
       custom: [],
     });
     expect(result.score.skill).toBe(90);
+  });
+
+  it('defaults missing optional LLM bonus to zero', () => {
+    const result = parseCandidateEvaluationOutput({
+      tags: {
+        skills: ['Java'],
+        domainKnowledge: ['高并发'],
+        generalAbility: ['owner'],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      score: { skill: 90, domain: 70, ability: 80, risk: 10 },
+      reason: 'Java 和高并发匹配',
+    });
+
+    expect(result.score).toEqual({
+      skill: 90,
+      domain: 70,
+      ability: 80,
+      risk: 10,
+      llmBonus: 0,
+    });
   });
 
   it('validates bad JSON and schema errors', async () => {

@@ -20,7 +20,7 @@ const SHORT_RESUME_TEXT_MIN_LENGTH = 20;
 const RAW_SNAPSHOT_REQUIRED_ERROR = 'boss-like candidate search requires raw browser snapshots';
 const EMPTY_RAW_SNAPSHOT_ERROR = 'boss-like candidate search returned an empty browser snapshot';
 const INVALID_PROFILE_URL_ERROR =
-  'invalid candidate profileUrl: expected a same-origin boss-like resume URL';
+  'invalid candidate profileUrl: expected a same-origin boss-like numeric resume URL';
 
 type BossLikeCandidateSourceAdapterOptions = {
   executor: BrowserExecutor;
@@ -34,7 +34,7 @@ type BossLikeCredentials = {
   password: string;
 };
 
-type ProfileUrlResolution = {
+export type BossLikeProfileUrlResolution = {
   profileUrl: string | null;
   error?: string;
 };
@@ -143,6 +143,31 @@ function createSearchKeywords(plan: SearchPlan): string[] {
   return keywords.length > 0 ? keywords : normalizeKeywords([plan.retrievalQuery]);
 }
 
+export function resolveBossLikeProfileUrl(
+  profileUrl: string | null | undefined,
+  baseUrl: string,
+): BossLikeProfileUrlResolution {
+  const trimmed = profileUrl?.trim();
+  if (!trimmed) return { profileUrl: null };
+
+  try {
+    const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    const resolvedUrl = new URL(trimmed, `${normalizedBaseUrl}/`);
+    const parsedBaseUrl = new URL(normalizedBaseUrl);
+    const isHttpUrl = resolvedUrl.protocol === 'http:' || resolvedUrl.protocol === 'https:';
+    const isSameOrigin = resolvedUrl.origin === parsedBaseUrl.origin;
+    const hasCandidateDetailSegment = /^\/employer\/resumes\/\d+\/?$/.test(resolvedUrl.pathname);
+
+    if (!isHttpUrl || !isSameOrigin || !hasCandidateDetailSegment) {
+      return { profileUrl: null, error: INVALID_PROFILE_URL_ERROR };
+    }
+
+    return { profileUrl: resolvedUrl.toString() };
+  } catch {
+    return { profileUrl: null, error: INVALID_PROFILE_URL_ERROR };
+  }
+}
+
 export function extractBossLikeCandidatesFromHtml(html: string): RawCandidate[] {
   return Array.from(html.matchAll(/<article\b([\s\S]*?)<\/article>/gi)).map((match) => {
     const article = match[0];
@@ -224,8 +249,6 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     plan: SearchPlan,
     options: SearchOptions,
   ): AsyncIterable<RawCandidateBatch> {
-    await this.loginIfNeeded();
-
     const seen = new Set<string>();
     const keywords = createSearchKeywords(plan);
     const maxCandidates = Math.max(0, options.maxCandidates);
@@ -346,28 +369,8 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     return `${this.baseUrl}/employer/resumes`;
   }
 
-  private resolveProfileUrl(profileUrl?: string | null): ProfileUrlResolution {
-    const trimmed = profileUrl?.trim();
-    if (!trimmed) return { profileUrl: null };
-
-    try {
-      const resolvedUrl = new URL(trimmed, `${this.baseUrl}/`);
-      const baseUrl = new URL(this.baseUrl);
-      const isHttpUrl = resolvedUrl.protocol === 'http:' || resolvedUrl.protocol === 'https:';
-      const isSameOrigin = resolvedUrl.origin === baseUrl.origin;
-      const resumePathPrefix = '/employer/resumes/';
-      const hasCandidateDetailSegment =
-        resolvedUrl.pathname.startsWith(resumePathPrefix) &&
-        resolvedUrl.pathname.slice(resumePathPrefix.length).length > 0;
-
-      if (!isHttpUrl || !isSameOrigin || !hasCandidateDetailSegment) {
-        return { profileUrl: null, error: INVALID_PROFILE_URL_ERROR };
-      }
-
-      return { profileUrl: resolvedUrl.toString() };
-    } catch {
-      return { profileUrl: null, error: INVALID_PROFILE_URL_ERROR };
-    }
+  private resolveProfileUrl(profileUrl?: string | null): BossLikeProfileUrlResolution {
+    return resolveBossLikeProfileUrl(profileUrl, this.baseUrl);
   }
 
   private async waitForResumeContent(): Promise<void> {

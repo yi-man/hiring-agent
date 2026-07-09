@@ -30,6 +30,7 @@ import type {
   CandidateScreeningDetailDto,
   CandidateScreeningResultDto,
   CandidateScreeningResultListItem,
+  CandidateScreeningRunEventDto,
   CandidateScreeningRunDto,
   CandidateTrackingOverviewDto,
 } from '@/lib/candidate-screening/repo';
@@ -40,6 +41,7 @@ const getJobDescriptionByIdMock = jest.fn();
 const createAndStartCandidateScreeningRunMock = jest.fn();
 const listCandidateScreeningRunsMock = jest.fn();
 const getCandidateScreeningRunMock = jest.fn();
+const listCandidateScreeningRunEventsMock = jest.fn();
 const listCandidateScreeningResultsMock = jest.fn();
 const getCandidateTrackingOverviewMock = jest.fn();
 const getCandidateScreeningDetailMock = jest.fn();
@@ -89,6 +91,8 @@ jest.mock('@/lib/candidate-screening/service', () => ({
 jest.mock('@/lib/candidate-screening/repo', () => ({
   listCandidateScreeningRuns: (...args: unknown[]) => listCandidateScreeningRunsMock(...args),
   getCandidateScreeningRun: (...args: unknown[]) => getCandidateScreeningRunMock(...args),
+  listCandidateScreeningRunEvents: (...args: unknown[]) =>
+    listCandidateScreeningRunEventsMock(...args),
   listCandidateScreeningResults: (...args: unknown[]) => listCandidateScreeningResultsMock(...args),
   getCandidateTrackingOverview: (...args: unknown[]) => getCandidateTrackingOverviewMock(...args),
   getCandidateScreeningDetail: (...args: unknown[]) => getCandidateScreeningDetailMock(...args),
@@ -346,6 +350,19 @@ const sampleDecisionResult: CandidateDecisionResultDto = {
   suggestions: [{ type: 'action', content: '先确认薪资预期再发 offer' }],
 };
 
+const sampleRunEvent: CandidateScreeningRunEventDto = {
+  id: 'event-1',
+  userId: 'u1',
+  runId: 'run-1',
+  jobDescriptionId: 'jd-1',
+  candidateId: null,
+  stage: 'planning',
+  level: 'success',
+  message: '生成搜索计划',
+  detail: { retrievalQuery: 'frontend react' },
+  createdAt: now,
+};
+
 function jsonRequest(url: string, body: unknown): Request {
   return new Request(url, {
     method: 'POST',
@@ -373,6 +390,7 @@ describe('candidate screening API routes', () => {
     createAndStartCandidateScreeningRunMock.mockReset();
     listCandidateScreeningRunsMock.mockReset();
     getCandidateScreeningRunMock.mockReset();
+    listCandidateScreeningRunEventsMock.mockReset();
     listCandidateScreeningResultsMock.mockReset();
     getCandidateTrackingOverviewMock.mockReset();
     getCandidateScreeningDetailMock.mockReset();
@@ -384,6 +402,7 @@ describe('candidate screening API routes', () => {
     listCandidateResumeLibraryMock.mockReset();
     listCandidateInterviewRecordsMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
+    listCandidateScreeningRunEventsMock.mockResolvedValue([]);
   });
 
   it('creates a screening run for an owned published JD', async () => {
@@ -500,6 +519,7 @@ describe('candidate screening API routes', () => {
 
   it('returns run progress by run id', async () => {
     getCandidateScreeningRunMock.mockResolvedValueOnce(sampleRun);
+    listCandidateScreeningRunEventsMock.mockResolvedValueOnce([sampleRunEvent]);
 
     const response = await getScreeningRun({} as Request, {
       params: params({ runId: 'run-1' }),
@@ -508,15 +528,22 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(200);
     expect(body.run).toEqual(sampleRun);
+    expect(body.events).toEqual([sampleRunEvent]);
     expect(getCandidateScreeningRunMock).toHaveBeenCalledWith({
       userId: 'u1',
       runId: 'run-1',
+    });
+    expect(listCandidateScreeningRunEventsMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      runId: 'run-1',
+      limit: 300,
     });
   });
 
   it('streams run progress as SSE for a scoped terminal run', async () => {
     const terminalRun: CandidateScreeningRunDto = { ...sampleRun, status: 'success' };
     getCandidateScreeningRunMock.mockResolvedValue(terminalRun);
+    listCandidateScreeningRunEventsMock.mockResolvedValueOnce([sampleRunEvent]);
 
     const response = await streamScreeningRun({} as Request, {
       params: params({ runId: 'run-1' }),
@@ -525,10 +552,17 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/event-stream');
-    expect(body).toContain(`data: ${JSON.stringify({ run: terminalRun })}`);
+    expect(body).toContain(
+      `data: ${JSON.stringify({ run: terminalRun, events: [sampleRunEvent] })}`,
+    );
     expect(getCandidateScreeningRunMock).toHaveBeenCalledWith({
       userId: 'u1',
       runId: 'run-1',
+    });
+    expect(listCandidateScreeningRunEventsMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      runId: 'run-1',
+      limit: 300,
     });
   });
 

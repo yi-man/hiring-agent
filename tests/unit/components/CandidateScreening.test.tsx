@@ -16,6 +16,7 @@ import type {
   CandidateResumeDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultListItem,
+  CandidateScreeningRunEventDto,
   CandidateScreeningRunDto,
   CandidateTrackingOverviewDto,
 } from '@/lib/candidate-screening/repo';
@@ -29,6 +30,7 @@ const regenerateJobDescriptionMock = jest.fn();
 const publishJobDescriptionResourceMock = jest.fn();
 const createCandidateScreeningRunMock = jest.fn();
 const fetchCandidateScreeningRunMock = jest.fn();
+const fetchCandidateScreeningRunWithEventsMock = jest.fn();
 const fetchJdCandidatesMock = jest.fn();
 const fetchJdCandidateDetailMock = jest.fn();
 const fetchCandidateTrackingOverviewMock = jest.fn();
@@ -62,6 +64,8 @@ jest.mock('@/lib/jd/client', () => ({
 jest.mock('@/lib/candidate-screening/client', () => ({
   createCandidateScreeningRun: (...args: unknown[]) => createCandidateScreeningRunMock(...args),
   fetchCandidateScreeningRun: (...args: unknown[]) => fetchCandidateScreeningRunMock(...args),
+  fetchCandidateScreeningRunWithEvents: (...args: unknown[]) =>
+    fetchCandidateScreeningRunWithEventsMock(...args),
   fetchCandidateTrackingOverview: (...args: unknown[]) =>
     fetchCandidateTrackingOverviewMock(...args),
   fetchCandidateResumeLibrary: (...args: unknown[]) => fetchCandidateResumeLibraryMock(...args),
@@ -188,6 +192,174 @@ const sampleRun: CandidateScreeningRunDto = {
   createdAt: now,
   updatedAt: now,
 };
+
+const sampleRunEvents: CandidateScreeningRunEventDto[] = [
+  {
+    id: 'event-plan',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: null,
+    stage: 'planning',
+    level: 'info',
+    message: '生成搜索计划',
+    detail: {
+      keywords: ['Java', '招聘 SaaS'],
+      retrievalQuery: 'Java 微服务 招聘 SaaS',
+      filters: { experience: '5年以上', location: '上海' },
+    },
+    createdAt: now,
+  },
+  {
+    id: 'event-eval',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: 'cand-1',
+    stage: 'evaluating',
+    level: 'success',
+    message: '完成评估：Ada Lovelace',
+    detail: {
+      candidateName: 'Ada Lovelace',
+      scoreDetail: {
+        skill: 90,
+        domain: 82,
+        ability: 86,
+        risk: 94,
+        llmBonus: 4,
+        total: 90,
+      },
+      decision: {
+        action: 'chat',
+        priority: 'high',
+        reason: 'Java 微服务和招聘 SaaS 经验匹配',
+      },
+    },
+    createdAt: now,
+  },
+  {
+    id: 'event-pool',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: null,
+    stage: 'evaluating',
+    level: 'info',
+    message: '合并候选池：准备评估 2 人',
+    detail: {
+      selectedCandidates: [
+        {
+          candidateName: 'Vector Recall Candidate',
+          source: 'vector_recall',
+          matchScore: 0.98,
+        },
+        {
+          candidateName: 'Live Search Candidate',
+          source: 'live_search',
+          matchScore: 1,
+        },
+      ],
+    },
+    createdAt: now,
+  },
+  {
+    id: 'event-ranking',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: null,
+    stage: 'ranking',
+    level: 'success',
+    message: '排序完成：2 人',
+    detail: {
+      candidates: [
+        {
+          candidateName: 'Ada Lovelace',
+          rank: 1,
+          source: 'both',
+          finalScore: 90,
+          matchScore: 1,
+        },
+        {
+          candidateName: 'Grace Hopper',
+          rank: 2,
+          source: 'vector_recall',
+          finalScore: 89,
+          matchScore: 0.82,
+        },
+      ],
+    },
+    createdAt: now,
+  },
+  {
+    id: 'event-action',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: 'cand-1',
+    stage: 'executing_actions',
+    level: 'info',
+    message: '执行动作：Ada Lovelace',
+    detail: {
+      candidateName: 'Ada Lovelace',
+      action: 'chat',
+      priority: 'high',
+      actionMessage: '你好 Ada，我们正在招聘高级后端工程师，想进一步沟通一下。',
+    },
+    createdAt: now,
+  },
+  {
+    id: 'event-dedupe',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: null,
+    stage: 'indexing_resumes',
+    level: 'warning',
+    message: '跳过重复候选人：Ada Again',
+    detail: {
+      candidateName: 'Ada Again',
+      dedupeBy: 'raw_identity',
+      duplicateOf: {
+        candidateName: 'Ada One',
+        candidateId: 'cand-previous',
+        resumeId: 'resume-previous',
+        profileUrl: 'https://boss-like.test/employer/resumes/ada-one',
+      },
+    },
+    createdAt: now,
+  },
+  {
+    id: 'event-reuse',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: 'cand-2',
+    stage: 'evaluating',
+    level: 'info',
+    message: '复用历史评估：Grace Hopper',
+    detail: {
+      candidateName: 'Grace Hopper',
+      previousRunId: 'previous-run',
+      resultId: 'result-history',
+      reusedEvaluation: true,
+      scoreDetail: {
+        skill: 88,
+        domain: 84,
+        ability: 86,
+        risk: 92,
+        llmBonus: 3,
+        total: 89,
+      },
+      decision: {
+        action: 'collect',
+        priority: 'medium',
+        reason: '历史评分已确认匹配',
+      },
+    },
+    createdAt: now,
+  },
+];
 
 const sampleCandidate: CandidateDto = {
   id: 'cand-1',
@@ -440,6 +612,7 @@ describe('candidate screening UI', () => {
     publishJobDescriptionResourceMock.mockReset();
     createCandidateScreeningRunMock.mockReset();
     fetchCandidateScreeningRunMock.mockReset();
+    fetchCandidateScreeningRunWithEventsMock.mockReset();
     fetchJdCandidatesMock.mockReset();
     fetchJdCandidateDetailMock.mockReset();
     fetchCandidateTrackingOverviewMock.mockReset();
@@ -495,6 +668,37 @@ describe('candidate screening UI', () => {
         skipped: 1,
         failed: 0,
       },
+    });
+    fetchCandidateScreeningRunWithEventsMock.mockResolvedValue({
+      run: {
+        ...sampleRun,
+        status: 'success',
+        currentStage: 'finalizing',
+        searchPlan: {
+          keywords: ['Java', '招聘 SaaS'],
+          filters: { experience: '5年以上', location: '上海' },
+          priorityTags: ['Java', '微服务'],
+          retrievalQuery: 'Java 微服务 招聘 SaaS',
+        },
+        evaluationSchema: {
+          skills: ['Java', '微服务'],
+          domainKnowledge: ['招聘 SaaS'],
+          generalAbility: ['owner'],
+          risk: ['跳槽频繁'],
+        },
+        stats: {
+          fetched: 12,
+          deduped: 3,
+          stored: 9,
+          vectorRecalled: 4,
+          evaluated: 9,
+          recommendedChat: 1,
+          recommendedCollect: 1,
+          skipped: 1,
+          failed: 0,
+        },
+      },
+      events: sampleRunEvents,
     });
     fetchJdCandidatesMock.mockResolvedValue([sampleCandidateListItem]);
     fetchJdCandidateDetailMock.mockResolvedValue(sampleCandidateDetail);
@@ -674,7 +878,7 @@ describe('candidate screening UI', () => {
     render(<CandidateScreeningRunLog jobDescriptionId="jd-1" runId="run-1" />);
 
     expect(await screen.findByText('筛选执行日志')).toBeInTheDocument();
-    expect(fetchCandidateScreeningRunMock).toHaveBeenCalledWith('run-1');
+    expect(fetchCandidateScreeningRunWithEventsMock).toHaveBeenCalledWith('run-1');
     expect(fetchJdCandidatesMock).toHaveBeenCalledWith('jd-1', {
       runId: 'run-1',
       limit: 100,
@@ -684,7 +888,30 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('1 条入选')).toBeInTheDocument();
     expect(screen.getByText('制定搜索计划')).toBeInTheDocument();
     expect(screen.getByText('执行动作')).toBeInTheDocument();
-    expect(screen.getByText('Java 微服务 招聘 SaaS')).toBeInTheDocument();
+    expect(screen.getAllByText('Java 微服务 招聘 SaaS').length).toBeGreaterThan(0);
+    expect(screen.getByText('完成评估：Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('总分 90')).toBeInTheDocument();
+    expect(screen.getByText('技能 90')).toBeInTheDocument();
+    expect(screen.getAllByText('动作 chat · high').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText('发送内容：你好 Ada，我们正在招聘高级后端工程师，想进一步沟通一下。'),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Java 微服务和招聘 SaaS 经验匹配').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText('评估池：Vector Recall Candidate · vector_recall · 匹配 0.98'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('评估池：Live Search Candidate · live_search · 匹配 1.00'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('排序：#1 Ada Lovelace · both · 总分 90 · 匹配 1.00'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('排序：#2 Grace Hopper · vector_recall · 总分 89 · 匹配 0.82'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('重复于：Ada One')).toBeInTheDocument();
+    expect(screen.getByText('历史评估：previous-run')).toBeInTheDocument();
+    expect(screen.getByText('动作 collect · medium')).toBeInTheDocument();
     expect(screen.getByText('低分候选人')).toBeInTheDocument();
     expect(screen.getByText('未达标')).toBeInTheDocument();
     expect(screen.getByText('跳过候选人')).toBeInTheDocument();

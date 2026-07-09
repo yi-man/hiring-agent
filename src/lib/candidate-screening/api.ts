@@ -4,6 +4,7 @@ import {
   CANDIDATE_SCREENING_INTERVIEW_STAGES,
   DEFAULT_MAX_CHAT_ACTIONS,
   DEFAULT_MAX_COLLECT_ACTIONS,
+  DEFAULT_EXECUTION_SCREENING_MAX_CANDIDATES,
   DEFAULT_SCREENING_BATCH_SIZE,
   DEFAULT_SCREENING_MAX_CANDIDATES,
   MAX_SCREENING_MAX_CANDIDATES,
@@ -106,8 +107,12 @@ export function parseCreateScreeningRunPayload(
     return { ok: false, error: 'invalid JSON body' };
   }
 
+  const defaultMaxCandidates =
+    mode === 'execution'
+      ? DEFAULT_EXECUTION_SCREENING_MAX_CANDIDATES
+      : DEFAULT_SCREENING_MAX_CANDIDATES;
   const maxCandidates =
-    body.maxCandidates === undefined ? DEFAULT_SCREENING_MAX_CANDIDATES : body.maxCandidates;
+    body.maxCandidates === undefined ? defaultMaxCandidates : body.maxCandidates;
   if (!isIntegerInRange(maxCandidates, 1, MAX_SCREENING_MAX_CANDIDATES)) {
     return { ok: false, error: 'maxCandidates must be between 1 and 200' };
   }

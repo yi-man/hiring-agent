@@ -23,6 +23,19 @@ describe('candidate screening API parsing', () => {
     });
   });
 
+  it('uses a smaller default candidate count for execution runs', () => {
+    expect(parseCreateScreeningRunPayload({ platform: 'boss-like', mode: 'execution' })).toEqual({
+      ok: true,
+      value: {
+        platform: 'boss-like',
+        mode: 'execution',
+        maxCandidates: 10,
+        batchSize: 10,
+        allowAlreadyContacted: false,
+      },
+    });
+  });
+
   it('rejects unsupported platform and unsafe limits', () => {
     expect(parseCreateScreeningRunPayload({ platform: 'x' })).toEqual({
       ok: false,
