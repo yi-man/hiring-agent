@@ -54,6 +54,7 @@ type PrismaMock = {
     updateMany: jest.Mock;
   };
   candidateActionLog: {
+    findMany: jest.Mock;
     findFirst: jest.Mock;
     upsert: jest.Mock;
     updateMany: jest.Mock;
@@ -99,6 +100,7 @@ jest.mock('@/lib/prisma', () => ({
       updateMany: jest.fn(),
     },
     candidateActionLog: {
+      findMany: jest.fn(),
       findFirst: jest.fn(),
       upsert: jest.fn(),
       updateMany: jest.fn(),
@@ -240,6 +242,7 @@ describe('candidate screening repository', () => {
     prismaMock.candidateScreeningResult.upsert.mockReset();
     prismaMock.candidateScreeningResult.updateMany.mockReset();
     prismaMock.candidateActionLog.findFirst.mockReset();
+    prismaMock.candidateActionLog.findMany.mockReset();
     prismaMock.candidateActionLog.upsert.mockReset();
     prismaMock.candidateActionLog.updateMany.mockReset();
     prismaMock.$executeRaw.mockReset();
@@ -357,6 +360,57 @@ describe('candidate screening repository', () => {
     });
     expect(created.detail?.candidateName).toBe('Ada');
     expect(events[0]?.message).toBe('完成评估：Ada');
+  });
+
+  it('fills missing action message on historical executing action events from action logs', async () => {
+    const runEvent = {
+      id: 'event-action',
+      userId: 'u1',
+      runId: 'run-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      stage: 'executing_actions',
+      level: 'success',
+      message: '动作执行成功：Ada',
+      detail: {
+        candidateName: 'Ada',
+        action: 'chat',
+        errorMessage: null,
+      },
+      createdAt,
+    };
+    prismaMock.candidateScreeningRunEvent.findMany.mockResolvedValueOnce([runEvent]);
+    prismaMock.candidateActionLog.findMany.mockResolvedValueOnce([
+      {
+        candidateId: 'candidate-1',
+        action: 'chat',
+        message: '你好 Ada，我们正在招聘高级后端工程师，想进一步沟通一下。',
+      },
+    ]);
+
+    const events = await listCandidateScreeningRunEvents({
+      userId: 'u1',
+      runId: 'run-1',
+      limit: 100,
+    });
+
+    expect(prismaMock.candidateActionLog.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        runId: 'run-1',
+        candidateId: { in: ['candidate-1'] },
+        message: { not: null },
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        candidateId: true,
+        action: true,
+        message: true,
+      },
+    });
+    expect(events[0]?.detail?.actionMessage).toBe(
+      '你好 Ada，我们正在招聘高级后端工程师，想进一步沟通一下。',
+    );
   });
 
   it('builds a cross-JD candidate tracking overview scoped to user', async () => {

@@ -292,6 +292,23 @@ const sampleRunEvents: CandidateScreeningRunEventDto[] = [
     createdAt: now,
   },
   {
+    id: 'event-action',
+    userId: 'u1',
+    runId: 'run-1',
+    jobDescriptionId: 'jd-1',
+    candidateId: 'cand-1',
+    stage: 'executing_actions',
+    level: 'info',
+    message: '执行动作：Ada Lovelace',
+    detail: {
+      candidateName: 'Ada Lovelace',
+      action: 'chat',
+      priority: 'high',
+      actionMessage: '你好 Ada，我们正在招聘高级后端工程师，想进一步沟通一下。',
+    },
+    createdAt: now,
+  },
+  {
     id: 'event-dedupe',
     userId: 'u1',
     runId: 'run-1',
@@ -875,7 +892,10 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('完成评估：Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText('总分 90')).toBeInTheDocument();
     expect(screen.getByText('技能 90')).toBeInTheDocument();
-    expect(screen.getByText('动作 chat · high')).toBeInTheDocument();
+    expect(screen.getAllByText('动作 chat · high').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText('发送内容：你好 Ada，我们正在招聘高级后端工程师，想进一步沟通一下。'),
+    ).toBeInTheDocument();
     expect(screen.getAllByText('Java 微服务和招聘 SaaS 经验匹配').length).toBeGreaterThan(0);
     expect(
       screen.getByText('评估池：Vector Recall Candidate · vector_recall · 匹配 0.98'),

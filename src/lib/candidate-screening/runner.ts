@@ -1864,6 +1864,7 @@ async function executePlannedActionsForRun(params: {
         detail: {
           candidateName: result.candidate.displayName,
           action: result.actionPlan.action,
+          actionMessage: result.actionPlan.message ?? null,
           priority: result.actionPlan.priority,
         },
       });
@@ -1896,6 +1897,7 @@ async function executePlannedActionsForRun(params: {
         detail: {
           candidateName: result.candidate.displayName,
           action: result.actionPlan.action,
+          actionMessage: result.actionPlan.message ?? null,
           errorMessage: executionResult.error ?? null,
           browserTrace: executionResult.browserTrace ?? null,
         },
@@ -1923,6 +1925,7 @@ async function executePlannedActionsForRun(params: {
         detail: {
           candidateName: result.candidate.displayName,
           action: result.actionPlan.action,
+          actionMessage: result.actionPlan.message ?? null,
           errorMessage: getErrorMessage(error),
         },
       });

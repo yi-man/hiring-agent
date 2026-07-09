@@ -587,6 +587,10 @@ function toStringArray(value: unknown): string[] {
     : [];
 }
 
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function iso(date: Date): string;
 function iso(date: NullableDate): string | null;
 function iso(date: NullableDate): string | null {
@@ -641,6 +645,56 @@ function mapRunEvent(row: CandidateScreeningRunEventRecord): CandidateScreeningR
     detail: toRecordOrNull(row.detail),
     createdAt: iso(row.createdAt),
   };
+}
+
+function eventMissingActionMessage(event: CandidateScreeningRunEventDto): boolean {
+  return (
+    event.stage === 'executing_actions' &&
+    Boolean(event.candidateId) &&
+    !readNonEmptyString(event.detail?.actionMessage)
+  );
+}
+
+function enrichRunEventsWithActionMessages(
+  events: CandidateScreeningRunEventDto[],
+  logs: Array<{ candidateId: string; action: string; message: string | null }>,
+): CandidateScreeningRunEventDto[] {
+  if (logs.length === 0) return events;
+
+  const messagesByCandidateAndAction = new Map<string, string>();
+  const messagesByCandidate = new Map<string, string>();
+
+  for (const log of logs) {
+    const message = readNonEmptyString(log.message);
+    if (!message) continue;
+
+    const candidateKey = log.candidateId;
+    const actionKey = `${log.candidateId}:${log.action}`;
+    if (!messagesByCandidate.has(candidateKey)) {
+      messagesByCandidate.set(candidateKey, message);
+    }
+    if (!messagesByCandidateAndAction.has(actionKey)) {
+      messagesByCandidateAndAction.set(actionKey, message);
+    }
+  }
+
+  return events.map((event) => {
+    if (!eventMissingActionMessage(event) || !event.candidateId) return event;
+
+    const action = readNonEmptyString(event.detail?.action);
+    const actionMessage =
+      (action ? messagesByCandidateAndAction.get(`${event.candidateId}:${action}`) : null) ??
+      messagesByCandidate.get(event.candidateId);
+    if (!actionMessage) return event;
+
+    return {
+      ...event,
+      detail: {
+        ...(event.detail ?? {}),
+        actionMessage,
+      },
+    };
+  });
 }
 
 function mapCandidate(row: CandidateRecord): CandidateDto {
@@ -934,7 +988,35 @@ export async function listCandidateScreeningRunEvents(
     orderBy: { createdAt: 'asc' },
     take: clampEventLimit(params.limit),
   });
-  return rows.map(mapRunEvent);
+  const events = rows.map(mapRunEvent);
+  const candidateIdsMissingActionMessage = Array.from(
+    new Set(
+      events
+        .filter(eventMissingActionMessage)
+        .map((event) => event.candidateId)
+        .filter((candidateId): candidateId is string => Boolean(candidateId)),
+    ),
+  );
+  if (candidateIdsMissingActionMessage.length === 0) {
+    return events;
+  }
+
+  const actionLogs = await prisma.candidateActionLog.findMany({
+    where: {
+      userId: params.userId,
+      runId: params.runId,
+      candidateId: { in: candidateIdsMissingActionMessage },
+      message: { not: null },
+    },
+    orderBy: { updatedAt: 'desc' },
+    select: {
+      candidateId: true,
+      action: true,
+      message: true,
+    },
+  });
+
+  return enrichRunEventsWithActionMessages(events, actionLogs);
 }
 
 export async function upsertCandidateWithIdentity(

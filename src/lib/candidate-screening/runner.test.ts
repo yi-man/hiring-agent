@@ -2289,6 +2289,30 @@ describe('candidate screening runner', () => {
       chatDecision,
     );
     expect(adapter.collectCandidate).not.toHaveBeenCalled();
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'executing_actions',
+        message: '执行动作：Ada Lovelace',
+        detail: expect.objectContaining({
+          action: 'chat',
+          actionMessage: 'chat candidate',
+          candidateName: 'Ada Lovelace',
+          priority: 'high',
+        }),
+      }),
+    );
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'executing_actions',
+        level: 'success',
+        message: '动作执行成功：Ada Lovelace',
+        detail: expect.objectContaining({
+          action: 'chat',
+          actionMessage: 'chat candidate',
+          candidateName: 'Ada Lovelace',
+        }),
+      }),
+    );
     expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-1',

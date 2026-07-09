@@ -319,6 +319,8 @@ function renderRunEventDetail(event: CandidateScreeningRunEventDto) {
   const scoreDetail = isRecord(detail.scoreDetail) ? detail.scoreDetail : null;
   const decision = isRecord(detail.decision) ? detail.decision : null;
   const action = readString(detail.action) ?? (decision ? readString(decision.action) : null);
+  const actionMessage =
+    readString(detail.actionMessage) ?? (decision ? readString(decision.message) : null);
   const priority = readString(detail.priority) ?? (decision ? readString(decision.priority) : null);
   const reason = readString(detail.reason) ?? (decision ? readString(decision.reason) : null);
   const dedupeBy = readString(detail.dedupeBy);
@@ -339,6 +341,7 @@ function renderRunEventDetail(event: CandidateScreeningRunEventDto) {
     !retrievalQuery &&
     !scoreDetail &&
     !action &&
+    !actionMessage &&
     !reason &&
     !dedupeBy &&
     !duplicateOfName &&
@@ -364,6 +367,9 @@ function renderRunEventDetail(event: CandidateScreeningRunEventDto) {
           动作 {action}
           {priority ? ` · ${priority}` : ''}
         </div>
+      ) : null}
+      {actionMessage ? (
+        <div className="text-foreground/80 break-words">发送内容：{actionMessage}</div>
       ) : null}
       {reason ? <div className="text-foreground/80">{reason}</div> : null}
       {categoryLabel ? (
