@@ -1,4 +1,8 @@
-import { invokeLlmChat, resetLlmProviderCircuitBreakers } from './openai-chat';
+import {
+  invokeLlmChat,
+  LLM_PROVIDER_CONFIGURATION_ERROR_CODE,
+  resetLlmProviderCircuitBreakers,
+} from './openai-chat';
 
 jest.mock('@/lib/env', () => ({
   env: {
@@ -220,7 +224,27 @@ describe('invokeLlmChat', () => {
         operation: 'chat.reply',
         messages: [{ role: 'user', content: 'hello' }],
       }),
-    ).rejects.toThrow('OPENAI_API_KEY is not configured');
+    ).rejects.toMatchObject({
+      message: 'OPENAI_API_KEY is not configured',
+      code: LLM_PROVIDER_CONFIGURATION_ERROR_CODE,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(recordLlmCallStart).not.toHaveBeenCalled();
+  });
+
+  it('throws a provider-order configuration error when no requested fallback provider is configured', async () => {
+    mockEnv.OPENAI_API_KEY = '';
+    mockEnv.LLM_PROVIDER_ORDER = 'deepseek,doubao';
+
+    await expect(
+      invokeLlmChat({
+        operation: 'chat.reply',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    ).rejects.toMatchObject({
+      message: 'No configured LLM providers in LLM_PROVIDER_ORDER',
+      code: LLM_PROVIDER_CONFIGURATION_ERROR_CODE,
+    });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(recordLlmCallStart).not.toHaveBeenCalled();
   });

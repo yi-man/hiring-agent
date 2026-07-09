@@ -1,6 +1,5 @@
 import { ChatOpenAI } from '@langchain/openai';
-import { env } from '@/lib/env';
-import { DEFAULT_LLM_MODEL } from './openai-chat';
+import { getConfiguredLlmProviders, type LlmProviderConfig } from './openai-chat';
 
 export type CreateLangChainChatModelOptions = {
   model?: string;
@@ -8,26 +7,32 @@ export type CreateLangChainChatModelOptions = {
   streaming?: boolean;
 };
 
-function getOpenAiApiKey(): string {
-  const apiKey = env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured');
+export function getConfiguredLlmProvider(model?: string): LlmProviderConfig {
+  const provider = getConfiguredLlmProviders(model)[0];
+  if (!provider) {
+    throw new Error('No configured LLM providers in LLM_PROVIDER_ORDER');
   }
-  return apiKey;
+  return provider;
 }
 
 export function getConfiguredLlmModel(model?: string): string {
-  return model || env.OPENAI_MODEL || DEFAULT_LLM_MODEL;
+  return getConfiguredLlmProvider(model).model;
+}
+
+export function getConfiguredLlmChatCompletionsEndpoint(model?: string): string {
+  const provider = getConfiguredLlmProvider(model);
+  return `${provider.baseUrl.replace(/\/$/, '')}/chat/completions`;
 }
 
 export function createLangChainChatModel(
   options: CreateLangChainChatModelOptions = {},
 ): ChatOpenAI {
+  const provider = getConfiguredLlmProvider(options.model);
   return new ChatOpenAI({
-    apiKey: getOpenAiApiKey(),
-    model: getConfiguredLlmModel(options.model),
+    apiKey: provider.apiKey,
+    model: provider.model,
     configuration: {
-      baseURL: env.OPENAI_BASE_URL,
+      baseURL: provider.baseUrl,
     },
     temperature: options.temperature,
     streaming: options.streaming,

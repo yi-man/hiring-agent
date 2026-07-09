@@ -1,7 +1,6 @@
 import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts';
 import { RunnableWithMessageHistory } from '@langchain/core/runnables';
 import { AIMessageChunk, HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { env } from '@/lib/env';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 import {
   buildSystemPrompt,
@@ -9,8 +8,11 @@ import {
   CHAT_ASSISTANT_PROMPT_VERSION,
   chatAssistantPromptDefinition,
 } from '@/lib/chat/prompts';
-import { createLangChainChatModel, getConfiguredLlmModel } from '@/lib/llm/langchain';
-import { getOpenAiChatCompletionsEndpoint } from '@/lib/llm/openai-chat';
+import {
+  createLangChainChatModel,
+  getConfiguredLlmChatCompletionsEndpoint,
+  getConfiguredLlmProvider,
+} from '@/lib/llm/langchain';
 import { recordLlmCallEnd, recordLlmCallStart } from '@/lib/llm-observability/log-service';
 import { randomUUID } from 'node:crypto';
 
@@ -49,16 +51,17 @@ export async function streamChatReply(
   const systemPrompt = buildSystemPrompt();
   const retrievedContext = options?.retrievedContext?.trim();
   const userInput = buildUserInputWithRetrievedContext(input, retrievedContext);
+  const provider = getConfiguredLlmProvider();
   const start = recordLlmCallStart({
     callId: randomUUID(),
     traceId: randomUUID(),
     requestId: randomUUID(),
-    endpoint: getOpenAiChatCompletionsEndpoint(),
-    provider: 'openai',
-    model: getConfiguredLlmModel(),
+    endpoint: getConfiguredLlmChatCompletionsEndpoint(),
+    provider: provider.id,
+    model: provider.model,
     requestHeaders: {
       'Content-Type': 'application/json',
-      Authorization: env.OPENAI_API_KEY ? 'Bearer ***' : 'Bearer <missing>',
+      Authorization: 'Bearer ***',
     },
     requestPayload: {
       operation: CHAT_ASSISTANT_PROMPT_ID,

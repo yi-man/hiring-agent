@@ -1,4 +1,3 @@
-import { env } from '@/lib/env';
 import { invokeLlmChat } from '@/lib/llm/openai-chat';
 import { renderManagedPrompt } from '@/lib/prompt-management/app-registry';
 import { CANDIDATE_COMMUNICATION_PROMPT_ID } from './prompts';
@@ -100,8 +99,6 @@ async function invokeCandidateCommunicationChat(
 export async function runCandidateCommunicationLLM(
   input: CandidateCommunicationLlmInput,
 ): Promise<CandidateCommunicationDecision> {
-  if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured');
-
   const content = await invokeCandidateCommunicationChat(input);
   if (!content) throw new Error('Candidate communication returned empty content');
   return parseCandidateCommunicationDecisionContent(content);

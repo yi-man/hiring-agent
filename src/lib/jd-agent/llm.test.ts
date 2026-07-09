@@ -25,6 +25,7 @@ jest.mock('@/lib/prompt-management/app-registry', () => ({
 }));
 
 jest.mock('@/lib/llm/openai-chat', () => ({
+  LLM_PROVIDER_CONFIGURATION_ERROR_CODE: 'LLM_PROVIDER_CONFIGURATION',
   invokeLlmChat: jest.fn(),
 }));
 
@@ -124,13 +125,35 @@ describe('runLLM managed prompt and gateway wiring', () => {
     delete mockEnv.JD_LLM_MOCK;
   });
 
-  it('fails fast with a clear configuration error when api key is missing', async () => {
+  it('lets the centralized gateway own provider configuration errors', async () => {
     mockEnv.OPENAI_API_KEY = '';
+    invokeLlmChat.mockRejectedValueOnce(
+      Object.assign(new Error('No configured LLM providers in LLM_PROVIDER_ORDER'), {
+        code: 'LLM_PROVIDER_CONFIGURATION',
+      }),
+    );
 
     await expect(
       runLLM({ stage: 'generate', schema: { title: 'Engineer' } as never }),
-    ).rejects.toThrow('OPENAI_API_KEY is not configured');
-    expect(invokeLlmChat).not.toHaveBeenCalled();
+    ).rejects.toThrow('No configured LLM providers in LLM_PROVIDER_ORDER');
+    expect(invokeLlmChat).toHaveBeenCalled();
+  });
+
+  it('does not require OPENAI_API_KEY when another provider is configured in the gateway', async () => {
+    mockEnv.OPENAI_API_KEY = '';
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validJdJson,
+      model: 'doubao-model',
+      usage: { promptTokens: 11, completionTokens: 13, totalTokens: 24 },
+    });
+
+    await expect(
+      runLLM({ stage: 'generate', schema: { title: 'Engineer' } as never }),
+    ).resolves.toMatchObject({
+      model: 'doubao-model',
+      output: { title: 'JD' },
+    });
+    expect(invokeLlmChat).toHaveBeenCalled();
   });
 
   it('renders the generation prompt and invokes the centralized LLM gateway', async () => {

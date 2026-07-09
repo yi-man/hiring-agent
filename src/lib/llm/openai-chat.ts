@@ -12,6 +12,7 @@ import type {
 } from './types';
 
 export const DEFAULT_LLM_MODEL = 'gpt-4o-mini';
+export const LLM_PROVIDER_CONFIGURATION_ERROR_CODE = 'LLM_PROVIDER_CONFIGURATION' as const;
 
 type OpenAIChatResponse = {
   choices?: Array<{ message?: { content?: string } }>;
@@ -43,9 +44,9 @@ type ProviderAttemptResult = {
   meta: LlmProviderCallMeta;
 };
 
-type LlmProviderId = 'openai' | 'deepseek' | 'doubao';
+export type LlmProviderId = 'openai' | 'deepseek' | 'doubao';
 
-type LlmProviderConfig = {
+export type LlmProviderConfig = {
   id: LlmProviderId;
   apiKey: string;
   baseUrl: string;
@@ -56,6 +57,10 @@ type LlmProviderConfig = {
 type CircuitBreakerState = {
   failures: number;
   openedUntil: number;
+};
+
+type LlmConfigurationError = Error & {
+  code: typeof LLM_PROVIDER_CONFIGURATION_ERROR_CODE;
 };
 
 const SUPPORTED_PROVIDER_IDS = new Set<LlmProviderId>(['openai', 'deepseek', 'doubao']);
@@ -69,12 +74,20 @@ export function resetLlmProviderCircuitBreakers(): void {
   providerCircuitBreakers.clear();
 }
 
-function assertOpenAiConfigured(): string {
-  const apiKey = env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured');
+function createLlmConfigurationError(message: string): LlmConfigurationError {
+  return Object.assign(new Error(message), {
+    name: 'LlmConfigurationError',
+    code: LLM_PROVIDER_CONFIGURATION_ERROR_CODE,
+  });
+}
+
+function createMissingProviderConfigurationError(
+  providerOrder: LlmProviderId[],
+): LlmConfigurationError {
+  if (providerOrder.length === 1 && providerOrder[0] === 'openai') {
+    return createLlmConfigurationError('OPENAI_API_KEY is not configured');
   }
-  return apiKey;
+  return createLlmConfigurationError('No configured LLM providers in LLM_PROVIDER_ORDER');
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -85,8 +98,8 @@ function getChatCompletionsEndpoint(provider: LlmProviderConfig): string {
   return `${normalizeBaseUrl(provider.baseUrl)}/chat/completions`;
 }
 
-function parseProviderOrder(rawOrder: string): LlmProviderId[] {
-  const order = rawOrder
+function parseProviderOrder(rawOrder?: string): LlmProviderId[] {
+  const order = (rawOrder || 'openai')
     .split(',')
     .map((item) => item.trim().toLowerCase())
     .filter((item): item is LlmProviderId => SUPPORTED_PROVIDER_IDS.has(item as LlmProviderId));
@@ -140,14 +153,14 @@ function getProviderConfig(
   };
 }
 
-function getConfiguredProviders(modelOverride?: string): LlmProviderConfig[] {
-  const providers = parseProviderOrder(env.LLM_PROVIDER_ORDER)
+export function getConfiguredLlmProviders(modelOverride?: string): LlmProviderConfig[] {
+  const providerOrder = parseProviderOrder(env.LLM_PROVIDER_ORDER);
+  const providers = providerOrder
     .map((providerId) => getProviderConfig(providerId, modelOverride))
     .filter((provider): provider is LlmProviderConfig => provider !== null);
 
   if (!providers.length) {
-    assertOpenAiConfigured();
-    throw new Error('No configured LLM providers in LLM_PROVIDER_ORDER');
+    throw createMissingProviderConfigurationError(providerOrder);
   }
 
   return providers;
@@ -543,10 +556,10 @@ async function safeRecordEnd(
 }
 
 export async function invokeLlmChat(input: InvokeLlmChatInput): Promise<LlmChatResult> {
-  const providers = getConfiguredProviders(input.model);
+  const providers = getConfiguredLlmProviders(input.model);
   const firstProvider = providers[0];
   if (!firstProvider) {
-    throw new Error('No configured LLM providers in LLM_PROVIDER_ORDER');
+    throw createLlmConfigurationError('No configured LLM providers in LLM_PROVIDER_ORDER');
   }
   const providerAttempts: LlmProviderAttemptMeta[] = [];
   const timeoutMs = input.timeoutMs ?? env.JD_LLM_TIMEOUT_MS;

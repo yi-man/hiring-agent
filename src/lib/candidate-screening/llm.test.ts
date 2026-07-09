@@ -133,8 +133,11 @@ describe('runCandidateEvaluationLLM', () => {
     expect(systemPrompt).toEqual(expect.stringContaining('risk=0'));
   });
 
-  it('throws when API key is missing', async () => {
+  it('lets the centralized gateway own provider configuration errors', async () => {
     mockEnv.OPENAI_API_KEY = '';
+    invokeLlmChat.mockRejectedValueOnce(
+      new Error('No configured LLM providers in LLM_PROVIDER_ORDER'),
+    );
 
     await expect(
       runCandidateEvaluationLLM({
@@ -143,8 +146,27 @@ describe('runCandidateEvaluationLLM', () => {
         resumeText: 'Java',
         candidateName: '王小明',
       }),
-    ).rejects.toThrow('OPENAI_API_KEY is not configured');
-    expect(invokeLlmChat).not.toHaveBeenCalled();
+    ).rejects.toThrow('No configured LLM providers in LLM_PROVIDER_ORDER');
+    expect(invokeLlmChat).toHaveBeenCalled();
+  });
+
+  it('does not require OPENAI_API_KEY when another provider is configured in the gateway', async () => {
+    mockEnv.OPENAI_API_KEY = '';
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validContent,
+      model: 'doubao-model',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+    });
+
+    await expect(
+      runCandidateEvaluationLLM({
+        jobTitle: '高级后端工程师',
+        evaluationSchema,
+        resumeText: 'Java',
+        candidateName: '王小明',
+      }),
+    ).resolves.toMatchObject({ score: { skill: 90 } });
+    expect(invokeLlmChat).toHaveBeenCalled();
   });
 
   it('throws when provider response is not ok or content is empty', async () => {

@@ -18,6 +18,10 @@ const { invokeLlmChat } = jest.requireMock('@/lib/llm/openai-chat') as {
   invokeLlmChat: jest.Mock;
 };
 
+const mockEnv = jest.requireMock('@/lib/env').env as {
+  OPENAI_API_KEY?: string;
+};
+
 const baseInput = {
   currentStage: 'new' as const,
   ruleIntent: 'contact_shared' as const,
@@ -38,6 +42,10 @@ const baseInput = {
 };
 
 describe('candidate communication LLM runner', () => {
+  beforeEach(() => {
+    mockEnv.OPENAI_API_KEY = 'test-key';
+  });
+
   afterEach(() => {
     jest.restoreAllMocks();
     invokeLlmChat.mockReset();
@@ -80,5 +88,26 @@ describe('candidate communication LLM runner', () => {
       ruleIntent: 'contact_shared',
       message: '可以，加我微信 wxid_backend_2026',
     });
+  });
+
+  it('does not require OPENAI_API_KEY when another provider is configured in the gateway', async () => {
+    mockEnv.OPENAI_API_KEY = '';
+    const decision = {
+      intent: 'contact_shared',
+      intentLevel: 'high',
+      nextStage: 'contact_exchanged',
+      shouldReply: true,
+      reply: '收到，我稍后加你。',
+      actions: ['reply', 'capture_contact', 'close'],
+      rationale: 'candidate shared private contact information',
+    };
+    invokeLlmChat.mockResolvedValueOnce({
+      content: JSON.stringify(decision),
+      model: 'doubao-model',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+    });
+
+    await expect(runCandidateCommunicationLLM(baseInput)).resolves.toEqual(decision);
+    expect(invokeLlmChat).toHaveBeenCalled();
   });
 });

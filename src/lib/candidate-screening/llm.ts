@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { env } from '@/lib/env';
 import { invokeLlmChat } from '@/lib/llm/openai-chat';
 import { renderManagedPrompt } from '@/lib/prompt-management/app-registry';
 import {
@@ -148,8 +147,6 @@ export async function runCandidateEvaluationLLM(params: {
   resumeText: string;
   candidateName: string;
 }): Promise<CandidateEvaluationLlmOutput> {
-  if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured');
-
   const content = await invokeCandidateEvaluationChat(params);
   if (!content) throw new Error('Candidate evaluation returned empty content');
   return parseCandidateEvaluationContent(content);

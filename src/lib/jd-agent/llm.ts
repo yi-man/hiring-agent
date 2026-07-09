@@ -1,5 +1,4 @@
-import { env } from '@/lib/env';
-import { invokeLlmChat } from '@/lib/llm/openai-chat';
+import { LLM_PROVIDER_CONFIGURATION_ERROR_CODE, invokeLlmChat } from '@/lib/llm/openai-chat';
 import { renderManagedPrompt } from '@/lib/prompt-management/app-registry';
 import type { EvaluationResult, JD, JobSchema } from '@/types';
 import { mockEvaluateJD, mockGenerateJD, mockImproveJD } from './llm.mock';
@@ -40,18 +39,25 @@ export function shouldUseMockLlm(): boolean {
   return process.env.NODE_ENV === 'test';
 }
 
-function assertOpenAiConfigured(): void {
-  if (!env.OPENAI_API_KEY?.trim()) {
-    throw new Error('OPENAI_API_KEY is not configured');
-  }
-}
-
 function addUsage(a: LLMCallResult['usage'], b: LLMCallResult['usage']): LLMCallResult['usage'] {
   return {
     promptTokens: a.promptTokens + b.promptTokens,
     completionTokens: a.completionTokens + b.completionTokens,
     totalTokens: a.totalTokens + b.totalTokens,
   };
+}
+
+function isGatewayError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as { code?: unknown };
+  return (
+    'status' in error ||
+    'response' in error ||
+    'llmMeta' in error ||
+    candidate.code === LLM_PROVIDER_CONFIGURATION_ERROR_CODE
+  );
 }
 
 async function runManagedJsonPrompt<T>(input: {
@@ -61,7 +67,7 @@ async function runManagedJsonPrompt<T>(input: {
 }): Promise<{ model: string; output: T; usage: LLMCallResult['usage'] }> {
   const rendered = await renderManagedPrompt(input.promptId, input.variables);
   let lastError: Error | null = null;
-  let model = env.OPENAI_MODEL;
+  let model = 'unknown';
   let usage: LLMCallResult['usage'] = {
     promptTokens: 0,
     completionTokens: 0,
@@ -91,11 +97,7 @@ async function runManagedJsonPrompt<T>(input: {
       };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      if (
-        error &&
-        typeof error === 'object' &&
-        ('status' in error || 'response' in error || 'llmMeta' in error)
-      ) {
+      if (isGatewayError(error)) {
         throw error;
       }
     }
@@ -108,7 +110,6 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
   if (shouldUseMockLlm()) {
     return runMockLlm(input);
   }
-  assertOpenAiConfigured();
 
   if (input.stage === 'generate') {
     return runManagedJsonPrompt({
