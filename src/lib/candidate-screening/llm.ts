@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { env } from '@/lib/env';
+import { invokeLlmChat } from '@/lib/llm/openai-chat';
 import { renderManagedPrompt } from '@/lib/prompt-management/registry';
 import {
   CANDIDATE_EVALUATION_PROMPT_VERSION,
@@ -9,11 +10,6 @@ import {
 } from './constants';
 import { CANDIDATE_SCREENING_EVALUATION_PROMPT_ID } from './prompts';
 import type { CandidateTags, EvaluationSchema, ScoreDetail } from './types';
-
-type CandidateEvaluationResponsePayload = {
-  choices?: Array<{ message?: { content?: string } }>;
-  error?: { message?: string };
-};
 
 const scoreComponentSchema = z.number().finite().min(0).max(100);
 const llmBonusComponentSchema = z.number().finite();
@@ -49,15 +45,6 @@ export type CandidateEvaluationLlmOutput = {
 
 export function parseCandidateEvaluationOutput(value: unknown): CandidateEvaluationLlmOutput {
   return candidateEvaluationSchema.parse(value);
-}
-
-function isUnsupportedJsonObjectError(message: string): boolean {
-  return /json_object|response_format|response format/i.test(message);
-}
-
-function toCandidateEvaluationResponsePayload(value: unknown): CandidateEvaluationResponsePayload {
-  if (!value || typeof value !== 'object') return {};
-  return value as CandidateEvaluationResponsePayload;
 }
 
 function extractCompleteJsonObject(content: string, start: number): string | null {
@@ -123,38 +110,12 @@ function parseCandidateEvaluationContent(content: string): CandidateEvaluationLl
   }
 }
 
-async function parseResponseBody(
-  response: Response,
-): Promise<{ payload: CandidateEvaluationResponsePayload; rawText: string }> {
-  if (typeof response.text !== 'function') {
-    const value = (await response.json()) as unknown;
-    return {
-      payload: toCandidateEvaluationResponsePayload(value),
-      rawText: JSON.stringify(value),
-    };
-  }
-
-  const rawText = await response.text();
-  try {
-    return {
-      payload: toCandidateEvaluationResponsePayload(JSON.parse(rawText) as unknown),
-      rawText,
-    };
-  } catch {
-    return { payload: {}, rawText };
-  }
-}
-
-async function postCandidateEvaluationChat(
-  params: {
-    jobTitle: string;
-    evaluationSchema: EvaluationSchema;
-    resumeText: string;
-    candidateName: string;
-  },
-  includeJsonObjectFormat: boolean,
-  signal: AbortSignal,
-): Promise<{ response: Response; payload: CandidateEvaluationResponsePayload; rawText: string }> {
+async function invokeCandidateEvaluationChat(params: {
+  jobTitle: string;
+  evaluationSchema: EvaluationSchema;
+  resumeText: string;
+  candidateName: string;
+}): Promise<string> {
   const promptPayload = JSON.stringify({
     jobTitle: params.jobTitle,
     promptVersion: CANDIDATE_EVALUATION_PROMPT_VERSION,
@@ -168,22 +129,17 @@ async function postCandidateEvaluationChat(
   const renderedPrompt = await renderManagedPrompt(CANDIDATE_SCREENING_EVALUATION_PROMPT_ID, {
     payload: promptPayload,
   });
-  const response = await fetch(`${env.OPENAI_BASE_URL.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+  const response = await invokeLlmChat({
+    operation: CANDIDATE_SCREENING_EVALUATION_PROMPT_ID,
+    prompt: {
+      id: renderedPrompt.definition.id,
+      version: renderedPrompt.definition.version,
     },
-    body: JSON.stringify({
-      model: env.OPENAI_MODEL,
-      temperature: renderedPrompt.options.temperature,
-      ...(includeJsonObjectFormat ? { response_format: { type: 'json_object' } } : {}),
-      messages: renderedPrompt.messages,
-    }),
-    signal,
+    messages: renderedPrompt.messages,
+    temperature: renderedPrompt.options.temperature,
+    responseFormat: renderedPrompt.options.responseFormat,
   });
-  const { payload, rawText } = await parseResponseBody(response);
-  return { response, payload, rawText };
+  return response.content;
 }
 
 export async function runCandidateEvaluationLLM(params: {
@@ -194,39 +150,7 @@ export async function runCandidateEvaluationLLM(params: {
 }): Promise<CandidateEvaluationLlmOutput> {
   if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured');
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), env.JD_LLM_TIMEOUT_MS);
-
-  try {
-    let { response, payload, rawText } = await postCandidateEvaluationChat(
-      params,
-      env.OPENAI_JSON_MODE,
-      controller.signal,
-    );
-
-    if (
-      !response.ok &&
-      env.OPENAI_JSON_MODE &&
-      isUnsupportedJsonObjectError(payload.error?.message ?? rawText)
-    ) {
-      ({ response, payload, rawText } = await postCandidateEvaluationChat(
-        params,
-        false,
-        controller.signal,
-      ));
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        payload.error?.message || rawText || `Candidate evaluation HTTP ${response.status}`,
-      );
-    }
-
-    const content = payload.choices?.[0]?.message?.content;
-    if (!content) throw new Error('Candidate evaluation returned empty content');
-
-    return parseCandidateEvaluationContent(content);
-  } finally {
-    clearTimeout(timeout);
-  }
+  const content = await invokeCandidateEvaluationChat(params);
+  if (!content) throw new Error('Candidate evaluation returned empty content');
+  return parseCandidateEvaluationContent(content);
 }

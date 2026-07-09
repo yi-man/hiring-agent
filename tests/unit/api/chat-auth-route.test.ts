@@ -1,6 +1,6 @@
 import { POST } from '@/app/api/chat/route';
 
-const invokeMock = jest.fn();
+const invokeLlmChatMock = jest.fn();
 const requireAuthMock = jest.fn();
 
 jest.mock('next/server', () => ({
@@ -22,25 +22,8 @@ jest.mock('@/lib/auth/session', () => ({
   },
 }));
 
-jest.mock('@langchain/core/messages', () => ({
-  HumanMessage: class {
-    content: string;
-    constructor(content: string) {
-      this.content = content;
-    }
-  },
-  SystemMessage: class {
-    content: string;
-    constructor(content: string) {
-      this.content = content;
-    }
-  },
-}));
-
-jest.mock('@langchain/openai', () => ({
-  ChatOpenAI: class {
-    invoke = (...args: unknown[]) => invokeMock(...args);
-  },
+jest.mock('@/lib/llm/openai-chat', () => ({
+  invokeLlmChat: (...args: unknown[]) => invokeLlmChatMock(...args),
 }));
 
 describe('chat auth route', () => {
@@ -48,7 +31,7 @@ describe('chat auth route', () => {
 
   beforeEach(() => {
     requireAuthMock.mockReset();
-    invokeMock.mockReset();
+    invokeLlmChatMock.mockReset();
     process.env.OPENAI_API_KEY = 'test-key';
   });
 
@@ -70,11 +53,22 @@ describe('chat auth route', () => {
 
   it('returns success for authenticated user', async () => {
     requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
-    invokeMock.mockResolvedValueOnce({ text: 'ok' });
+    invokeLlmChatMock.mockResolvedValueOnce({
+      content: 'ok',
+      model: 'test-model',
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
     const req = { json: async () => ({ message: 'hello' }) } as Request;
     const res = await POST(req);
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.reply).toBe('ok');
+    expect(invokeLlmChatMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'chat.assistant',
+        prompt: { id: 'chat.assistant', version: 'chat-assistant-v1' },
+        responseFormat: 'text',
+      }),
+    );
   });
 });

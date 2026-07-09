@@ -1,26 +1,22 @@
 import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts';
 import { RunnableWithMessageHistory } from '@langchain/core/runnables';
 import { AIMessageChunk, HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { ChatOpenAI } from '@langchain/openai';
 import { env } from '@/lib/env';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
-import { buildSystemPrompt } from '@/lib/chat/prompts';
+import {
+  buildSystemPrompt,
+  CHAT_ASSISTANT_PROMPT_ID,
+  CHAT_ASSISTANT_PROMPT_VERSION,
+  chatAssistantPromptDefinition,
+} from '@/lib/chat/prompts';
+import { createLangChainChatModel, getConfiguredLlmModel } from '@/lib/llm/langchain';
+import { getOpenAiChatCompletionsEndpoint } from '@/lib/llm/openai-chat';
 import { recordLlmCallEnd, recordLlmCallStart } from '@/lib/llm-observability/log-service';
 import { randomUUID } from 'node:crypto';
 
-const DEFAULT_MODEL = 'gpt-4o-mini';
-
-function createModel(): ChatOpenAI {
-  if (!env.OPENAI_API_KEY) {
-    throw new Error('Missing OPENAI_API_KEY for chat streaming');
-  }
-  return new ChatOpenAI({
-    apiKey: env.OPENAI_API_KEY,
-    model: env.OPENAI_MODEL || DEFAULT_MODEL,
-    configuration: {
-      baseURL: env.OPENAI_BASE_URL,
-    },
-    temperature: 0.7,
+function createStreamingModel() {
+  return createLangChainChatModel({
+    temperature: chatAssistantPromptDefinition.options.temperature,
     streaming: true,
   });
 }
@@ -31,7 +27,7 @@ export function buildChatChain() {
     new MessagesPlaceholder('history'),
     ['human', '{input}'],
   ]);
-  const chain = prompt.pipe(createModel());
+  const chain = prompt.pipe(createStreamingModel());
   return new RunnableWithMessageHistory({
     runnable: chain,
     getMessageHistory: async (sessionId: string) => {
@@ -57,14 +53,19 @@ export async function streamChatReply(
     callId: randomUUID(),
     traceId: randomUUID(),
     requestId: randomUUID(),
-    endpoint: `${env.OPENAI_BASE_URL.replace(/\/$/, '')}/chat/completions`,
+    endpoint: getOpenAiChatCompletionsEndpoint(),
     provider: 'openai',
-    model: env.OPENAI_MODEL || DEFAULT_MODEL,
+    model: getConfiguredLlmModel(),
     requestHeaders: {
       'Content-Type': 'application/json',
       Authorization: env.OPENAI_API_KEY ? 'Bearer ***' : 'Bearer <missing>',
     },
     requestPayload: {
+      operation: CHAT_ASSISTANT_PROMPT_ID,
+      prompt: {
+        id: CHAT_ASSISTANT_PROMPT_ID,
+        version: CHAT_ASSISTANT_PROMPT_VERSION,
+      },
       conversationId,
       streaming: true,
       messages: [

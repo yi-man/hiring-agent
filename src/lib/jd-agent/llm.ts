@@ -1,16 +1,16 @@
 import { env } from '@/lib/env';
-import { recordLlmCallEnd, recordLlmCallStart } from '@/lib/llm-observability/log-service';
+import { invokeLlmChat } from '@/lib/llm/openai-chat';
+import { renderManagedPrompt } from '@/lib/prompt-management/registry';
 import type { EvaluationResult, JD, JobSchema } from '@/types';
-import { randomUUID } from 'node:crypto';
 import { mockEvaluateJD, mockGenerateJD, mockImproveJD } from './llm.mock';
-import { openaiEvaluateJD, openaiGenerateJD, openaiImproveJD } from './openai-adapter';
+import { evaluationJsonSchema, extractJsonObject, jdJsonSchema } from './json-schemas';
 import {
-  buildEvaluateUserPrompt,
-  buildGenerateUserPrompt,
-  buildImproveUserPrompt,
-  EVALUATE_SYSTEM_PROMPT,
-  GENERATE_SYSTEM_PROMPT,
-  IMPROVE_SYSTEM_PROMPT,
+  buildEvaluatePromptVariables,
+  buildGeneratePromptVariables,
+  buildImprovePromptVariables,
+  JD_EVALUATE_PROMPT_ID,
+  JD_GENERATE_PROMPT_ID,
+  JD_IMPROVE_PROMPT_ID,
 } from './prompts';
 
 export type LLMCallInput =
@@ -34,29 +34,7 @@ export type LLMCallResult = {
   };
 };
 
-type OpenAiCallResult<T> = {
-  output: T;
-  usage: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  };
-  meta: {
-    request: { url: string; headers: Record<string, string>; payload: object };
-    response: { status: number; body: unknown };
-  };
-};
-
-type OpenAiMeta = OpenAiCallResult<unknown>['meta'];
-
-type ErrorWithMeta = {
-  status?: number;
-  response?: { status?: number; body?: unknown; data?: unknown };
-  body?: unknown;
-  data?: unknown;
-  meta?: OpenAiMeta;
-  llmMeta?: OpenAiMeta;
-};
+const MAX_JSON_ATTEMPTS = 2;
 
 export function shouldUseMockLlm(): boolean {
   return process.env.NODE_ENV === 'test';
@@ -68,106 +46,62 @@ function assertOpenAiConfigured(): void {
   }
 }
 
-async function safeRecordLlmCallEnd(
-  start: ReturnType<typeof recordLlmCallStart>,
-  payload: Parameters<typeof recordLlmCallEnd>[1],
-): Promise<void> {
-  try {
-    await recordLlmCallEnd(start, payload);
-  } catch {
-    // Observability is best-effort and cannot block business flow.
-  }
-}
-
-function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
-  const sanitized = { ...headers };
-  const authKey = Object.keys(sanitized).find((key) => key.toLowerCase() === 'authorization');
-  if (authKey) {
-    sanitized[authKey] = 'Bearer ***';
-  }
-  return sanitized;
-}
-
-function getErrorMeta(error: unknown): {
-  httpStatus?: number;
-  responsePayload?: unknown;
-  meta?: OpenAiMeta;
-} {
-  if (!error || typeof error !== 'object') {
-    return {};
-  }
-  const e = error as ErrorWithMeta;
-  const meta = e.meta ?? e.llmMeta;
-  if (meta) {
-    return {
-      httpStatus: meta.response.status,
-      responsePayload: meta.response.body,
-      meta,
-    };
-  }
+function addUsage(a: LLMCallResult['usage'], b: LLMCallResult['usage']): LLMCallResult['usage'] {
   return {
-    httpStatus: e.response?.status ?? e.status,
-    responsePayload: e.response?.body ?? e.response?.data ?? e.body ?? e.data,
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
   };
 }
 
-async function runLoggedOpenAiCall<T>(
-  stage: LLMCallInput['stage'],
-  requestPayload: object,
-  invoke: () => Promise<OpenAiCallResult<T>>,
-): Promise<OpenAiCallResult<T>> {
-  const start = recordLlmCallStart({
-    callId: randomUUID(),
-    traceId: randomUUID(),
-    requestId: randomUUID(),
-    endpoint: `${env.OPENAI_BASE_URL.replace(/\/$/, '')}/chat/completions`,
-    provider: 'openai',
-    model: env.OPENAI_MODEL,
-    requestHeaders: {
-      'Content-Type': 'application/json',
-      Authorization: env.OPENAI_API_KEY ? 'Bearer ***' : 'Bearer <missing>',
-    },
-    requestPayload: { stage, ...requestPayload },
-    timestamp: new Date(),
-  });
+async function runManagedJsonPrompt<T>(input: {
+  promptId: string;
+  variables: Record<string, unknown>;
+  parse: (value: unknown) => T;
+}): Promise<{ model: string; output: T; usage: LLMCallResult['usage'] }> {
+  const rendered = await renderManagedPrompt(input.promptId, input.variables);
+  let lastError: Error | null = null;
+  let model = env.OPENAI_MODEL;
+  let usage: LLMCallResult['usage'] = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+  };
 
-  try {
-    const result = await invoke();
-    const contextForEnd = {
-      ...start,
-      endpoint: result.meta.request.url || start.endpoint,
-      requestHeaders: sanitizeHeaders(result.meta.request.headers),
-      requestPayload: result.meta.request.payload,
-    };
-    await safeRecordLlmCallEnd(contextForEnd, {
-      timestamp: new Date(),
-      responsePayload: result.meta.response.body,
-      httpStatus: result.meta.response.status,
-      inputTokens: result.usage.promptTokens,
-      outputTokens: result.usage.completionTokens,
-      totalTokens: result.usage.totalTokens,
-      finalOutcome: 'success',
-    });
-    return result;
-  } catch (error) {
-    const metaFromError = getErrorMeta(error);
-    const contextForEnd = metaFromError.meta
-      ? {
-          ...start,
-          endpoint: metaFromError.meta.request.url || start.endpoint,
-          requestHeaders: sanitizeHeaders(metaFromError.meta.request.headers),
-          requestPayload: metaFromError.meta.request.payload,
-        }
-      : start;
-    await safeRecordLlmCallEnd(contextForEnd, {
-      timestamp: new Date(),
-      error,
-      httpStatus: metaFromError.httpStatus,
-      responsePayload: metaFromError.responsePayload,
-      finalOutcome: 'error',
-    });
-    throw error;
+  for (let attempt = 1; attempt <= MAX_JSON_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await invokeLlmChat({
+        operation: input.promptId,
+        prompt: {
+          id: rendered.definition.id,
+          version: rendered.definition.version,
+        },
+        messages: rendered.messages,
+        temperature: rendered.options.temperature,
+        responseFormat: rendered.options.responseFormat,
+        metadata: { attempt },
+      });
+      model = result.model;
+      usage = addUsage(usage, result.usage);
+      const parsed = JSON.parse(extractJsonObject(result.content)) as unknown;
+      return {
+        model,
+        output: input.parse(parsed),
+        usage,
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (
+        error &&
+        typeof error === 'object' &&
+        ('status' in error || 'response' in error || 'llmMeta' in error)
+      ) {
+        throw error;
+      }
+    }
   }
+
+  throw lastError ?? new Error('LLM JSON parse failed');
 }
 
 export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
@@ -177,55 +111,31 @@ export async function runLLM(input: LLMCallInput): Promise<LLMCallResult> {
   assertOpenAiConfigured();
 
   if (input.stage === 'generate') {
-    const user = await buildGenerateUserPrompt(input.schema, input.companyContext);
-    const result = await runLoggedOpenAiCall(
-      input.stage,
-      {
-        model: env.OPENAI_MODEL,
-        messages: [
-          { role: 'system', content: GENERATE_SYSTEM_PROMPT },
-          { role: 'user', content: user },
-        ],
-      },
-      () => openaiGenerateJD(GENERATE_SYSTEM_PROMPT, user),
-    );
-    return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
+    return runManagedJsonPrompt({
+      promptId: JD_GENERATE_PROMPT_ID,
+      variables: buildGeneratePromptVariables(input.schema, input.companyContext),
+      parse: (value) => jdJsonSchema.parse(value),
+    });
   }
 
   if (input.stage === 'evaluate') {
-    const user = await buildEvaluateUserPrompt(input.jd, input.companyContext);
-    const result = await runLoggedOpenAiCall(
-      input.stage,
-      {
-        model: env.OPENAI_MODEL,
-        messages: [
-          { role: 'system', content: EVALUATE_SYSTEM_PROMPT },
-          { role: 'user', content: user },
-        ],
-      },
-      () => openaiEvaluateJD(EVALUATE_SYSTEM_PROMPT, user),
-    );
-    return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
+    return runManagedJsonPrompt({
+      promptId: JD_EVALUATE_PROMPT_ID,
+      variables: buildEvaluatePromptVariables(input.jd, input.companyContext),
+      parse: (value) => evaluationJsonSchema.parse(value),
+    });
   }
 
-  const user = await buildImproveUserPrompt(
-    input.jd,
-    input.evaluation,
-    input.extraInstruction,
-    input.companyContext,
-  );
-  const result = await runLoggedOpenAiCall(
-    input.stage,
-    {
-      model: env.OPENAI_MODEL,
-      messages: [
-        { role: 'system', content: IMPROVE_SYSTEM_PROMPT },
-        { role: 'user', content: user },
-      ],
-    },
-    () => openaiImproveJD(IMPROVE_SYSTEM_PROMPT, user),
-  );
-  return { model: env.OPENAI_MODEL, output: result.output, usage: result.usage };
+  return runManagedJsonPrompt({
+    promptId: JD_IMPROVE_PROMPT_ID,
+    variables: buildImprovePromptVariables(
+      input.jd,
+      input.evaluation,
+      input.extraInstruction,
+      input.companyContext,
+    ),
+    parse: (value) => jdJsonSchema.parse(value),
+  });
 }
 
 async function runMockLlm(input: LLMCallInput): Promise<LLMCallResult> {

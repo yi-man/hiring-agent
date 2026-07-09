@@ -11,12 +11,20 @@ jest.mock('@/lib/env', () => ({
   },
 }));
 
+jest.mock('@/lib/llm/openai-chat', () => ({
+  invokeLlmChat: jest.fn(),
+}));
+
 const mockEnv = jest.requireMock('@/lib/env').env as {
   OPENAI_API_KEY?: string;
   OPENAI_BASE_URL: string;
   OPENAI_MODEL: string;
   OPENAI_JSON_MODE: boolean;
   JD_LLM_TIMEOUT_MS: number;
+};
+
+const { invokeLlmChat } = jest.requireMock('@/lib/llm/openai-chat') as {
+  invokeLlmChat: jest.Mock;
 };
 
 const evaluationSchema: EvaluationSchema = {
@@ -40,11 +48,8 @@ const validContent = JSON.stringify({
 });
 
 describe('runCandidateEvaluationLLM', () => {
-  let fetchMock: jest.MockedFunction<typeof fetch>;
-
   beforeEach(() => {
-    fetchMock = jest.fn();
-    global.fetch = fetchMock;
+    invokeLlmChat.mockReset();
     mockEnv.OPENAI_API_KEY = 'test-key';
     mockEnv.OPENAI_BASE_URL = 'https://api.example.com/v1/';
     mockEnv.OPENAI_MODEL = 'gpt-test';
@@ -52,12 +57,12 @@ describe('runCandidateEvaluationLLM', () => {
     mockEnv.JD_LLM_TIMEOUT_MS = 1000;
   });
 
-  it('sends a JSON-mode chat request and parses valid response', async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ choices: [{ message: { content: validContent } }] }),
-    } as Response);
+  it('renders the managed prompt, calls the centralized gateway, and parses valid response', async () => {
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validContent,
+      model: 'gpt-test',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+    });
 
     const result = await runCandidateEvaluationLLM({
       jobTitle: '高级后端工程师',
@@ -66,28 +71,20 @@ describe('runCandidateEvaluationLLM', () => {
       candidateName: '王小明',
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.example.com/v1/chat/completions',
+    expect(invokeLlmChat).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer test-key',
+        operation: 'candidate-screening.evaluation',
+        prompt: {
+          id: 'candidate-screening.evaluation',
+          version: 'candidate-evaluation-zh-rubric-v2',
         },
-        signal: expect.any(AbortSignal),
+        temperature: 0.2,
+        responseFormat: 'json_object',
       }),
     );
-    const request = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
-      model: string;
-      temperature?: number;
-      response_format?: { type: string };
+    const request = invokeLlmChat.mock.calls[0][0] as {
       messages: Array<{ role: string; content: string }>;
     };
-    expect(request).toMatchObject({
-      model: 'gpt-test',
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-    });
     expect(request.messages[0]).toMatchObject({ role: 'system' });
     expect(request.messages[0].content).toEqual(expect.stringContaining('不可信'));
     expect(request.messages[0].content).toEqual(expect.stringContaining('resumeText'));
@@ -104,11 +101,11 @@ describe('runCandidateEvaluationLLM', () => {
   });
 
   it('instructs the model with a Chinese evidence-based rubric and output contract', async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ choices: [{ message: { content: validContent } }] }),
-    } as Response);
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validContent,
+      model: 'gpt-test',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+    });
 
     await runCandidateEvaluationLLM({
       jobTitle: '高级后端工程师',
@@ -117,7 +114,7 @@ describe('runCandidateEvaluationLLM', () => {
       candidateName: '王小明',
     });
 
-    const request = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
+    const request = invokeLlmChat.mock.calls[0][0] as {
       messages: Array<{ role: string; content: string }>;
     };
     const systemPrompt = request.messages[0].content;
@@ -147,15 +144,11 @@ describe('runCandidateEvaluationLLM', () => {
         candidateName: '王小明',
       }),
     ).rejects.toThrow('OPENAI_API_KEY is not configured');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(invokeLlmChat).not.toHaveBeenCalled();
   });
 
   it('throws when provider response is not ok or content is empty', async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: false,
-      status: 429,
-      json: async () => ({ error: { message: 'rate limited' } }),
-    } as Response);
+    invokeLlmChat.mockRejectedValueOnce(Object.assign(new Error('rate limited'), { status: 429 }));
 
     await expect(
       runCandidateEvaluationLLM({
@@ -166,11 +159,11 @@ describe('runCandidateEvaluationLLM', () => {
       }),
     ).rejects.toThrow('rate limited');
 
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ choices: [{ message: { content: '' } }] }),
-    } as Response);
+    invokeLlmChat.mockResolvedValueOnce({
+      content: '',
+      model: 'gpt-test',
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    });
 
     await expect(
       runCandidateEvaluationLLM({
@@ -180,69 +173,6 @@ describe('runCandidateEvaluationLLM', () => {
         candidateName: '王小明',
       }),
     ).rejects.toThrow('Candidate evaluation returned empty content');
-  });
-
-  it('retries without response_format when JSON mode is unsupported', async () => {
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        json: async () => ({ error: { message: 'response_format json_object unsupported' } }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ choices: [{ message: { content: validContent } }] }),
-      } as Response);
-
-    const result = await runCandidateEvaluationLLM({
-      jobTitle: '高级后端工程师',
-      evaluationSchema,
-      resumeText: 'Java',
-      candidateName: '王小明',
-    });
-
-    expect(result.tags.skills).toEqual(['Java']);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    const firstRequest = JSON.parse(fetchMock.mock.calls[0][1]?.body as string) as {
-      response_format?: { type: string };
-    };
-    const secondRequest = JSON.parse(fetchMock.mock.calls[1][1]?.body as string) as {
-      response_format?: { type: string };
-    };
-
-    expect(firstRequest.response_format).toEqual({ type: 'json_object' });
-    expect(secondRequest.response_format).toBeUndefined();
-  });
-
-  it('retries without response_format when unsupported JSON mode error body is plain text', async () => {
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        text: async () => 'response_format json_object unsupported',
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ choices: [{ message: { content: validContent } }] }),
-      } as Response);
-
-    const result = await runCandidateEvaluationLLM({
-      jobTitle: '高级后端工程师',
-      evaluationSchema,
-      resumeText: 'Java',
-      candidateName: '王小明',
-    });
-
-    expect(result.tags.skills).toEqual(['Java']);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    const secondRequest = JSON.parse(fetchMock.mock.calls[1][1]?.body as string) as {
-      response_format?: { type: string };
-    };
-    expect(secondRequest.response_format).toBeUndefined();
   });
 
   it('normalizes missing tag arrays and parses the first JSON object from provider content', async () => {
@@ -256,13 +186,11 @@ describe('runCandidateEvaluationLLM', () => {
       score: { skill: 90, domain: 70, ability: 80, risk: 10, llmBonus: 5 },
       reason: 'Java 和高并发匹配',
     });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        choices: [{ message: { content: `${partialContent}\n补充说明：已完成简历评估。` } }],
-      }),
-    } as Response);
+    invokeLlmChat.mockResolvedValueOnce({
+      content: `${partialContent}\n补充说明：已完成简历评估。`,
+      model: 'gpt-test',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+    });
 
     const result = await runCandidateEvaluationLLM({
       jobTitle: '高级后端工程师',
@@ -306,11 +234,11 @@ describe('runCandidateEvaluationLLM', () => {
   });
 
   it('validates bad JSON and schema errors', async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ choices: [{ message: { content: '{not json' } }] }),
-    } as Response);
+    invokeLlmChat.mockResolvedValueOnce({
+      content: '{not json',
+      model: 'gpt-test',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+    });
 
     await expect(
       runCandidateEvaluationLLM({

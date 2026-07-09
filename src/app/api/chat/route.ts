@@ -1,18 +1,13 @@
-import { ChatOpenAI } from '@langchain/openai';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { DEPENDENCY_OUTAGE_MESSAGE, isDependencyOutageError } from '@/lib/errors/dependency-outage';
-
-const DEFAULT_MODEL = 'gpt-4o-mini';
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
+import {
+  buildSystemPrompt,
+  CHAT_ASSISTANT_PROMPT_ID,
+  CHAT_ASSISTANT_PROMPT_VERSION,
+  chatAssistantPromptDefinition,
+} from '@/lib/chat/prompts';
+import { invokeLlmChat } from '@/lib/llm/openai-chat';
 
 export async function POST(request: Request) {
   try {
@@ -23,23 +18,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 });
     }
 
-    const model = new ChatOpenAI({
-      apiKey: requireEnv('OPENAI_API_KEY'),
-      model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
-      configuration: {
-        baseURL: process.env.OPENAI_BASE_URL,
+    const response = await invokeLlmChat({
+      operation: CHAT_ASSISTANT_PROMPT_ID,
+      prompt: {
+        id: CHAT_ASSISTANT_PROMPT_ID,
+        version: CHAT_ASSISTANT_PROMPT_VERSION,
       },
-      temperature: 0.7,
+      messages: [
+        { role: 'system', content: buildSystemPrompt() },
+        { role: 'user', content: message.trim() },
+      ],
+      temperature: chatAssistantPromptDefinition.options.temperature,
+      responseFormat: chatAssistantPromptDefinition.options.responseFormat,
     });
 
-    const response = await model.invoke([
-      new SystemMessage('你是一个招聘 AI 助手，回答时简洁、专业、可执行。'),
-      new HumanMessage(message.trim()),
-    ]);
-
     return NextResponse.json({
-      reply: response.text,
-      model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
+      reply: response.content,
+      model: response.model,
     });
   } catch (error) {
     if (

@@ -10,6 +10,14 @@ jest.mock('@/lib/env', () => ({
   },
 }));
 
+jest.mock('@/lib/llm/openai-chat', () => ({
+  invokeLlmChat: jest.fn(),
+}));
+
+const { invokeLlmChat } = jest.requireMock('@/lib/llm/openai-chat') as {
+  invokeLlmChat: jest.Mock;
+};
+
 const baseInput = {
   currentStage: 'new' as const,
   ruleIntent: 'contact_shared' as const,
@@ -32,10 +40,10 @@ const baseInput = {
 describe('candidate communication LLM runner', () => {
   afterEach(() => {
     jest.restoreAllMocks();
-    delete (globalThis as { fetch?: unknown }).fetch;
+    invokeLlmChat.mockReset();
   });
 
-  it('parses the first complete JSON object when the provider appends text', async () => {
+  it('renders the managed prompt, calls the centralized gateway, and parses appended JSON text', async () => {
     const decision = {
       intent: 'contact_shared',
       intentLevel: 'high',
@@ -45,23 +53,32 @@ describe('candidate communication LLM runner', () => {
       actions: ['reply', 'capture_contact', 'close'],
       rationale: 'candidate shared private contact information',
     };
-    (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = jest
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        status: 200,
-        text: async () =>
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: `${JSON.stringify(decision)}\n补充说明：已按招聘沟通规则处理。`,
-                },
-              },
-            ],
-          }),
-      } as Response);
+    invokeLlmChat.mockResolvedValueOnce({
+      content: `${JSON.stringify(decision)}\n补充说明：已按招聘沟通规则处理。`,
+      model: 'test-model',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+    });
 
     await expect(runCandidateCommunicationLLM(baseInput)).resolves.toEqual(decision);
+    expect(invokeLlmChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'candidate-communication.decision',
+        prompt: {
+          id: 'candidate-communication.decision',
+          version: 'candidate-communication-decision-v1',
+        },
+        temperature: 0.2,
+        responseFormat: 'json_object',
+      }),
+    );
+    const request = invokeLlmChat.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(request.messages[0].content).toContain('recruiting communication agent');
+    expect(JSON.parse(request.messages[1].content)).toMatchObject({
+      currentStage: 'new',
+      ruleIntent: 'contact_shared',
+      message: '可以，加我微信 wxid_backend_2026',
+    });
   });
 });
