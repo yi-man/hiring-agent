@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { env } from '@/lib/env';
 import { invokeLlmChat } from '@/lib/llm/openai-chat';
-import { renderManagedPrompt } from '@/lib/prompt-management/registry';
+import { renderManagedPrompt } from '@/lib/prompt-management/app-registry';
 import {
   CANDIDATE_EVALUATION_PROMPT_VERSION,
   CANDIDATE_SCREENING_CALIBRATION_VERSION,

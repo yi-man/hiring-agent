@@ -1,4 +1,4 @@
-import { getManagedPrompt, listManagedPrompts, renderManagedPrompt } from './registry';
+import { getManagedPrompt, listManagedPrompts, renderManagedPrompt } from './app-registry';
 import { CANDIDATE_SCREENING_EVALUATION_PROMPT_ID } from '@/lib/candidate-screening/prompts';
 import { CANDIDATE_EVALUATION_PROMPT_VERSION } from '@/lib/candidate-screening/constants';
 import {

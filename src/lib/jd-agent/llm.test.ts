@@ -20,7 +20,7 @@ jest.mock('@/lib/jd-agent/prompts', () => ({
   })),
 }));
 
-jest.mock('@/lib/prompt-management/registry', () => ({
+jest.mock('@/lib/prompt-management/app-registry', () => ({
   renderManagedPrompt: jest.fn(),
 }));
 
@@ -35,7 +35,7 @@ const mockEnv = jest.requireMock('@/lib/env').env as {
   OPENAI_MODEL: string;
 };
 
-const { renderManagedPrompt } = jest.requireMock('@/lib/prompt-management/registry') as {
+const { renderManagedPrompt } = jest.requireMock('@/lib/prompt-management/app-registry') as {
   renderManagedPrompt: jest.Mock;
 };
 

@@ -14,7 +14,7 @@
 现在统一为两层入口：
 
 - LLM 调用入口：`src/lib/llm/openai-chat.ts` 与 `src/lib/llm/langchain.ts`
-- Prompt 管理入口：`src/lib/prompt-management/registry.ts`
+- Prompt 管理入口：`src/lib/prompt-management/app-registry.ts`
 
 业务模块不再直接关心 provider HTTP 细节，也不再把 prompt 文案散落在调用文件里。非 streaming / 非 agent 的 chat completion 通过统一网关调用：
 
@@ -85,7 +85,8 @@ flowchart LR
 | ----------------------------- | -------------------------------------------- |
 | 统一 LLM chat completion 网关 | `src/lib/llm/openai-chat.ts`                 |
 | LangChain 模型工厂            | `src/lib/llm/langchain.ts`                   |
-| 统一 prompt registry          | `src/lib/prompt-management/registry.ts`      |
+| Prompt registry core          | `src/lib/prompt-management/registry.ts`      |
+| 应用级 prompt 装配入口        | `src/lib/prompt-management/app-registry.ts`  |
 | 通用 prompt 类型              | `src/lib/prompt-management/types.ts`         |
 | JD prompt 定义                | `src/lib/jd-agent/prompts.ts`                |
 | Chat prompt 定义              | `src/lib/chat/prompts.ts`                    |
@@ -106,7 +107,7 @@ flowchart LR
    - `tags`
    - `chatPrompt`
    - `options`
-4. 在 `src/lib/prompt-management/registry.ts` 的 `MANAGED_PROMPTS` 中注册。
+4. 在 `src/lib/prompt-management/app-registry.ts` 的 `MANAGED_PROMPTS` 中注册。
 5. 业务代码通过 `renderManagedPrompt(id, variables)` 使用。
 6. 非 streaming / 非 LangGraph agent 调用通过 `invokeLlmChat` 发送请求。
 7. Streaming 或 LangGraph agent 需要模型实例时，通过 `createLangChainChatModel` 创建。

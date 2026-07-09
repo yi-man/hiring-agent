@@ -1,6 +1,6 @@
 import { env } from '@/lib/env';
 import { invokeLlmChat } from '@/lib/llm/openai-chat';
-import { renderManagedPrompt } from '@/lib/prompt-management/registry';
+import { renderManagedPrompt } from '@/lib/prompt-management/app-registry';
 import { CANDIDATE_COMMUNICATION_PROMPT_ID } from './prompts';
 import type { CandidateCommunicationLlmInput } from './decision';
 import type { CandidateCommunicationDecision } from './types';

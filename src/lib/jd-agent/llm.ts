@@ -1,6 +1,6 @@
 import { env } from '@/lib/env';
 import { invokeLlmChat } from '@/lib/llm/openai-chat';
-import { renderManagedPrompt } from '@/lib/prompt-management/registry';
+import { renderManagedPrompt } from '@/lib/prompt-management/app-registry';
 import type { EvaluationResult, JD, JobSchema } from '@/types';
 import { mockEvaluateJD, mockGenerateJD, mockImproveJD } from './llm.mock';
 import { evaluationJsonSchema, extractJsonObject, jdJsonSchema } from './json-schemas';
