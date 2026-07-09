@@ -53,4 +53,17 @@ describe('classifyLlmError', () => {
       providerStatus: null,
     });
   });
+
+  it('maps Bun ConnectionRefused errors to transport domain', () => {
+    const result = classifyLlmError({
+      code: 'ConnectionRefused',
+      message: 'Unable to connect. Is the computer able to access the url?',
+    });
+
+    expect(result).toEqual({
+      errorDomain: 'transport',
+      errorCode: 'ConnectionRefused',
+      providerStatus: null,
+    });
+  });
 });

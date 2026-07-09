@@ -343,6 +343,52 @@ describe('invokeLlmChat', () => {
     );
   });
 
+  it('falls back when the primary provider fails with Bun ConnectionRefused transport errors', async () => {
+    mockEnv.LLM_PROVIDER_ORDER = 'deepseek,openai';
+    mockEnv.LLM_MAX_RETRIES = 0;
+    mockEnv.DEEPSEEK_API_KEY = 'deepseek-key';
+    mockEnv.DEEPSEEK_BASE_URL = 'http://127.0.0.1:9/v1';
+    mockEnv.DEEPSEEK_MODEL = 'deepseek-chat';
+
+    fetchMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Unable to connect. Is the computer able to access the url?'), {
+          code: 'ConnectionRefused',
+        }),
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { content: 'fallback after transport error' } }],
+          }),
+      } as Response);
+
+    const result = await invokeLlmChat({
+      operation: 'chat.reply',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result).toMatchObject({
+      content: 'fallback after transport error',
+      provider: 'openai',
+    });
+    expect(result.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: 'deepseek',
+          outcome: 'error',
+          error: 'Unable to connect. Is the computer able to access the url?',
+        }),
+        expect.objectContaining({
+          provider: 'openai',
+          outcome: 'success',
+        }),
+      ]),
+    );
+  });
+
   it('opens the provider circuit after repeated retryable failures and skips it until cooldown', async () => {
     mockEnv.LLM_PROVIDER_ORDER = 'deepseek,doubao';
     mockEnv.LLM_MAX_RETRIES = 0;

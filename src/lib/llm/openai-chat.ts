@@ -358,8 +358,10 @@ function isRetryableError(error: unknown): boolean {
     code === 'etimedout' ||
     code === 'econnreset' ||
     code === 'econnrefused' ||
+    code === 'connectionrefused' ||
     code === 'enotfound' ||
     code === 'eai_again' ||
+    message.includes('unable to connect') ||
     message.includes('timeout') ||
     message.includes('fetch failed') ||
     message.includes('socket hang up') ||
