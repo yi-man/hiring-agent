@@ -53,6 +53,11 @@ jest.mock('@/lib/env', () => ({
 
 jest.mock('@/lib/chat/prompts', () => ({
   buildSystemPrompt: jest.fn(() => 'SYSTEM_PROMPT_BASE'),
+  CHAT_ASSISTANT_PROMPT_ID: 'chat.assistant',
+  CHAT_ASSISTANT_PROMPT_VERSION: 'chat-assistant-v1',
+  chatAssistantPromptDefinition: {
+    options: { temperature: 0.7, responseFormat: 'text' },
+  },
 }));
 
 jest.mock('@/lib/chat/history/redis-chat-history', () => ({

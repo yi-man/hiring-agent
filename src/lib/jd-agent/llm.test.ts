@@ -9,23 +9,24 @@ jest.mock('@/lib/env', () => ({
 }));
 
 jest.mock('@/lib/jd-agent/prompts', () => ({
-  GENERATE_SYSTEM_PROMPT: 'generate-system',
-  EVALUATE_SYSTEM_PROMPT: 'evaluate-system',
-  IMPROVE_SYSTEM_PROMPT: 'improve-system',
-  buildGenerateUserPrompt: jest.fn().mockResolvedValue('generate-user'),
-  buildEvaluateUserPrompt: jest.fn().mockResolvedValue('evaluate-user'),
-  buildImproveUserPrompt: jest.fn().mockResolvedValue('improve-user'),
+  JD_GENERATE_PROMPT_ID: 'jd-agent.generate',
+  JD_EVALUATE_PROMPT_ID: 'jd-agent.evaluate',
+  JD_IMPROVE_PROMPT_ID: 'jd-agent.improve',
+  buildGeneratePromptVariables: jest.fn(() => ({ title: 'Engineer' })),
+  buildEvaluatePromptVariables: jest.fn(() => ({ jdJson: '{}' })),
+  buildImprovePromptVariables: jest.fn(() => ({
+    jdJson: '{}',
+    extraInstruction: 'make it concise',
+  })),
 }));
 
-jest.mock('@/lib/jd-agent/openai-adapter', () => ({
-  openaiGenerateJD: jest.fn(),
-  openaiEvaluateJD: jest.fn(),
-  openaiImproveJD: jest.fn(),
+jest.mock('@/lib/prompt-management/app-registry', () => ({
+  renderManagedPrompt: jest.fn(),
 }));
 
-jest.mock('@/lib/llm-observability/log-service', () => ({
-  recordLlmCallStart: jest.fn((ctx) => ctx),
-  recordLlmCallEnd: jest.fn().mockResolvedValue(undefined),
+jest.mock('@/lib/llm/openai-chat', () => ({
+  LLM_PROVIDER_CONFIGURATION_ERROR_CODE: 'LLM_PROVIDER_CONFIGURATION',
+  invokeLlmChat: jest.fn(),
 }));
 
 const mockEnv = jest.requireMock('@/lib/env').env as {
@@ -35,20 +36,30 @@ const mockEnv = jest.requireMock('@/lib/env').env as {
   OPENAI_MODEL: string;
 };
 
-const { openaiGenerateJD, openaiEvaluateJD, openaiImproveJD } = jest.requireMock(
-  '@/lib/jd-agent/openai-adapter',
-) as {
-  openaiGenerateJD: jest.Mock;
-  openaiEvaluateJD: jest.Mock;
-  openaiImproveJD: jest.Mock;
+const { renderManagedPrompt } = jest.requireMock('@/lib/prompt-management/app-registry') as {
+  renderManagedPrompt: jest.Mock;
 };
 
-const { recordLlmCallStart, recordLlmCallEnd } = jest.requireMock(
-  '@/lib/llm-observability/log-service',
-) as {
-  recordLlmCallStart: jest.Mock;
-  recordLlmCallEnd: jest.Mock;
+const { invokeLlmChat } = jest.requireMock('@/lib/llm/openai-chat') as {
+  invokeLlmChat: jest.Mock;
 };
+
+const validJdJson = JSON.stringify({
+  title: 'JD',
+  summary: '负责核心系统',
+  responsibilities: ['负责服务端开发'],
+  requirements: ['熟悉 TypeScript'],
+  bonus: [],
+  highlights: ['AI 招聘产品'],
+});
+
+const validEvaluationJson = JSON.stringify({
+  scores: { clarity: 8, completeness: 8, attractiveness: 8, specificity: 8 },
+  issues: [],
+  evidence: [],
+  suggestions: [],
+  rewrite_required: false,
+});
 
 describe('shouldUseMockLlm', () => {
   let envReplacer: ReturnType<typeof jest.replaceProperty> | null = null;
@@ -58,6 +69,8 @@ describe('shouldUseMockLlm', () => {
     envReplacer = null;
     delete mockEnv.JD_LLM_MOCK;
     mockEnv.OPENAI_API_KEY = 'test-key';
+    invokeLlmChat.mockReset();
+    renderManagedPrompt.mockReset();
   });
 
   it('uses mock in test environment', () => {
@@ -85,7 +98,7 @@ describe('shouldUseMockLlm', () => {
   });
 });
 
-describe('runLLM observability wiring', () => {
+describe('runLLM managed prompt and gateway wiring', () => {
   let envReplacer: ReturnType<typeof jest.replaceProperty> | null = null;
 
   beforeEach(() => {
@@ -93,11 +106,16 @@ describe('runLLM observability wiring', () => {
       ...process.env,
       NODE_ENV: 'development',
     });
-    openaiGenerateJD.mockReset();
-    openaiEvaluateJD.mockReset();
-    openaiImproveJD.mockReset();
-    recordLlmCallStart.mockClear();
-    recordLlmCallEnd.mockClear();
+    renderManagedPrompt.mockReset();
+    renderManagedPrompt.mockResolvedValue({
+      definition: { id: 'jd-agent.generate', version: 'jd_v3.3' },
+      messages: [
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'user' },
+      ],
+      options: { temperature: 0.4, responseFormat: 'json_object' },
+    });
+    invokeLlmChat.mockReset();
   });
 
   afterEach(() => {
@@ -107,92 +125,98 @@ describe('runLLM observability wiring', () => {
     delete mockEnv.JD_LLM_MOCK;
   });
 
-  it('fails fast with a clear configuration error when api key is missing', async () => {
+  it('lets the centralized gateway own provider configuration errors', async () => {
     mockEnv.OPENAI_API_KEY = '';
+    invokeLlmChat.mockRejectedValueOnce(
+      Object.assign(new Error('No configured LLM providers in LLM_PROVIDER_ORDER'), {
+        code: 'LLM_PROVIDER_CONFIGURATION',
+      }),
+    );
 
     await expect(
       runLLM({ stage: 'generate', schema: { title: 'Engineer' } as never }),
-    ).rejects.toThrow('OPENAI_API_KEY is not configured');
-    expect(openaiGenerateJD).not.toHaveBeenCalled();
+    ).rejects.toThrow('No configured LLM providers in LLM_PROVIDER_ORDER');
+    expect(invokeLlmChat).toHaveBeenCalled();
   });
 
-  it('records call start/end with request and response metadata on success', async () => {
-    openaiGenerateJD.mockResolvedValueOnce({
-      output: { title: 'JD' },
+  it('does not require OPENAI_API_KEY when another provider is configured in the gateway', async () => {
+    mockEnv.OPENAI_API_KEY = '';
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validJdJson,
+      model: 'doubao-model',
       usage: { promptTokens: 11, completionTokens: 13, totalTokens: 24 },
-      meta: {
-        request: {
-          url: 'https://api.openai.com/v1/chat/completions',
-          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
-          payload: { model: 'gpt-4o-mini' },
-        },
-        response: {
-          status: 200,
-          body: { id: 'resp_1', choices: [{ message: { content: '{}' } }] },
-        },
-      },
     });
 
-    await runLLM({ stage: 'generate', schema: { title: 'Engineer' } as never });
-
-    expect(recordLlmCallStart).toHaveBeenCalledTimes(1);
-    expect(recordLlmCallEnd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        endpoint: 'https://api.openai.com/v1/chat/completions',
-        requestHeaders: expect.objectContaining({ Authorization: 'Bearer ***' }),
-        requestPayload: expect.objectContaining({ model: 'gpt-4o-mini' }),
-      }),
-      expect.objectContaining({
-        httpStatus: 200,
-        inputTokens: 11,
-        outputTokens: 13,
-        totalTokens: 24,
-      }),
-    );
-    const startArg = recordLlmCallStart.mock.calls[0][0];
-    const endArg = recordLlmCallEnd.mock.calls[0][1];
-    expect(startArg.timestamp).toBeInstanceOf(Date);
-    expect(endArg.timestamp).toBeInstanceOf(Date);
-    expect(endArg.timestamp.getTime()).toBeGreaterThanOrEqual(startArg.timestamp.getTime());
+    await expect(
+      runLLM({ stage: 'generate', schema: { title: 'Engineer' } as never }),
+    ).resolves.toMatchObject({
+      model: 'doubao-model',
+      output: { title: 'JD' },
+    });
+    expect(invokeLlmChat).toHaveBeenCalled();
   });
 
-  it('records error with classification inputs and rethrows when provider fails', async () => {
+  it('renders the generation prompt and invokes the centralized LLM gateway', async () => {
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validJdJson,
+      model: 'gpt-4o-mini',
+      usage: { promptTokens: 11, completionTokens: 13, totalTokens: 24 },
+    });
+
+    const result = await runLLM({ stage: 'generate', schema: { title: 'Engineer' } as never });
+
+    expect(renderManagedPrompt).toHaveBeenCalledWith('jd-agent.generate', { title: 'Engineer' });
+    expect(invokeLlmChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'jd-agent.generate',
+        prompt: { id: 'jd-agent.generate', version: 'jd_v3.3' },
+        messages: [
+          { role: 'system', content: 'system' },
+          { role: 'user', content: 'user' },
+        ],
+        temperature: 0.4,
+        responseFormat: 'json_object',
+      }),
+    );
+    expect(result).toMatchObject({
+      model: 'gpt-4o-mini',
+      output: { title: 'JD' },
+      usage: { totalTokens: 24 },
+    });
+  });
+
+  it('rethrows centralized gateway errors', async () => {
     const providerError = Object.assign(new Error('rate limit exceeded'), {
       status: 429,
       response: { status: 429, body: { error: { code: 'rate_limit' } } },
     });
-    openaiEvaluateJD.mockRejectedValueOnce(providerError);
+    renderManagedPrompt.mockResolvedValueOnce({
+      definition: { id: 'jd-agent.evaluate', version: 'jd_v3.3' },
+      messages: [
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'user' },
+      ],
+      options: { temperature: 0.4, responseFormat: 'json_object' },
+    });
+    invokeLlmChat.mockRejectedValueOnce(providerError);
 
     await expect(runLLM({ stage: 'evaluate', jd: { title: 'A' } as never })).rejects.toThrow(
       'rate limit exceeded',
     );
 
-    expect(recordLlmCallEnd).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(invokeLlmChat).toHaveBeenCalledWith(
       expect.objectContaining({
-        error: providerError,
-        httpStatus: 429,
-        responsePayload: { error: { code: 'rate_limit' } },
-        finalOutcome: 'error',
+        operation: 'jd-agent.evaluate',
+        prompt: { id: 'jd-agent.evaluate', version: 'jd_v3.3' },
       }),
     );
-    const endArg = recordLlmCallEnd.mock.calls[0][1];
-    expect(endArg.error).toBe(providerError);
   });
 
-  it('does not break business flow when log write fails', async () => {
-    recordLlmCallEnd.mockRejectedValueOnce(new Error('log unavailable'));
-    openaiGenerateJD.mockResolvedValueOnce({
-      output: { title: 'JD' },
+  it('parses fenced JSON returned by the gateway', async () => {
+    invokeLlmChat.mockResolvedValueOnce({
+      content: `\`\`\`json\n${validJdJson}\n\`\`\``,
+      model: 'gpt-4o-mini',
       usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
-      meta: {
-        request: {
-          url: 'https://api.openai.com/v1/chat/completions',
-          headers: { 'Content-Type': 'application/json' },
-          payload: {},
-        },
-        response: { status: 200, body: {} },
-      },
     });
 
     await expect(
@@ -202,18 +226,19 @@ describe('runLLM observability wiring', () => {
     });
   });
 
-  it('records improve branch with full observability path', async () => {
-    openaiImproveJD.mockResolvedValueOnce({
-      output: { title: 'Improved JD' },
+  it('invokes the improve prompt branch', async () => {
+    renderManagedPrompt.mockResolvedValueOnce({
+      definition: { id: 'jd-agent.improve', version: 'jd_v3.3' },
+      messages: [
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'user' },
+      ],
+      options: { temperature: 0.4, responseFormat: 'json_object' },
+    });
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validJdJson.replace('"JD"', '"Improved JD"'),
+      model: 'gpt-4o-mini',
       usage: { promptTokens: 7, completionTokens: 8, totalTokens: 15 },
-      meta: {
-        request: {
-          url: 'https://api.openai.com/v1/chat/completions',
-          headers: { 'Content-Type': 'application/json' },
-          payload: {},
-        },
-        response: { status: 200, body: { id: 'resp_improve' } },
-      },
     });
 
     await runLLM({
@@ -223,14 +248,37 @@ describe('runLLM observability wiring', () => {
       extraInstruction: 'make it concise',
     });
 
-    expect(openaiImproveJD).toHaveBeenCalledTimes(1);
-    expect(recordLlmCallStart).toHaveBeenCalledTimes(1);
-    expect(recordLlmCallEnd).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(invokeLlmChat).toHaveBeenCalledWith(
       expect.objectContaining({
-        finalOutcome: 'success',
-        totalTokens: 15,
+        operation: 'jd-agent.improve',
+        prompt: { id: 'jd-agent.improve', version: 'jd_v3.3' },
       }),
+    );
+  });
+
+  it('invokes the evaluate prompt branch and parses evaluation JSON', async () => {
+    renderManagedPrompt.mockResolvedValueOnce({
+      definition: { id: 'jd-agent.evaluate', version: 'jd_v3.3' },
+      messages: [
+        { role: 'system', content: 'system' },
+        { role: 'user', content: 'user' },
+      ],
+      options: { temperature: 0.4, responseFormat: 'json_object' },
+    });
+    invokeLlmChat.mockResolvedValueOnce({
+      content: validEvaluationJson,
+      model: 'gpt-4o-mini',
+      usage: { promptTokens: 4, completionTokens: 5, totalTokens: 9 },
+    });
+
+    await expect(runLLM({ stage: 'evaluate', jd: { title: 'A' } as never })).resolves.toMatchObject(
+      {
+        output: {
+          scores: { clarity: 8 },
+          rewrite_required: false,
+        },
+        usage: { totalTokens: 9 },
+      },
     );
   });
 });

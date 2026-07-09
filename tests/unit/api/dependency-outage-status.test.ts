@@ -4,7 +4,7 @@ import { GET as getMessages } from '@/app/api/conversations/[id]/messages/route'
 import { POST as postStreamMessage } from '@/app/api/conversations/[id]/messages/stream/route';
 
 const requireAuthMock = jest.fn();
-const invokeMock = jest.fn();
+const invokeLlmChatMock = jest.fn();
 const createConversationMock = jest.fn();
 const listConversationsPaginatedMock = jest.fn();
 const countConversationsMock = jest.fn();
@@ -30,25 +30,8 @@ jest.mock('@/lib/auth/session', () => ({
   },
 }));
 
-jest.mock('@langchain/core/messages', () => ({
-  HumanMessage: class {
-    content: string;
-    constructor(content: string) {
-      this.content = content;
-    }
-  },
-  SystemMessage: class {
-    content: string;
-    constructor(content: string) {
-      this.content = content;
-    }
-  },
-}));
-
-jest.mock('@langchain/openai', () => ({
-  ChatOpenAI: class {
-    invoke = (...args: unknown[]) => invokeMock(...args);
-  },
+jest.mock('@/lib/llm/openai-chat', () => ({
+  invokeLlmChat: (...args: unknown[]) => invokeLlmChatMock(...args),
 }));
 
 jest.mock('@/lib/chat/repositories/conversation-repo', () => ({
@@ -84,7 +67,7 @@ describe('dependency outage status mapping', () => {
 
   beforeEach(() => {
     requireAuthMock.mockReset();
-    invokeMock.mockReset();
+    invokeLlmChatMock.mockReset();
     createConversationMock.mockReset();
     listConversationsPaginatedMock.mockReset();
     countConversationsMock.mockReset();

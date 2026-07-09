@@ -1,4 +1,5 @@
 import type { EvaluationResult, JD, JobSchema } from '@/types';
+import type { ManagedPromptDefinition } from '@/lib/prompt-management/types';
 import {
   ChatPromptTemplate,
   HumanMessagePromptTemplate,
@@ -21,6 +22,9 @@ function messageContentToString(content: unknown): string {
 }
 
 export const PROMPT_VERSION = 'jd_v3.3';
+export const JD_GENERATE_PROMPT_ID = 'jd-agent.generate';
+export const JD_EVALUATE_PROMPT_ID = 'jd-agent.evaluate';
+export const JD_IMPROVE_PROMPT_ID = 'jd-agent.improve';
 
 function buildCompanyContextSection(companyContext?: string): string {
   const trimmed = companyContext?.trim();
@@ -120,11 +124,34 @@ const GENERATE_CHAT_PROMPT = ChatPromptTemplate.fromMessages([
   }),
 ]);
 
-export async function buildGenerateUserPrompt(
+export const jdGeneratePromptDefinition: ManagedPromptDefinition = {
+  id: JD_GENERATE_PROMPT_ID,
+  version: PROMPT_VERSION,
+  owner: 'jd-agent',
+  description: 'JD 生成：基于岗位结构化输入和公司上下文生成结构化高转化率 JD。',
+  format: 'langchain-chat',
+  inputVariables: [
+    'title',
+    'seniority',
+    'skills',
+    'responsibilities',
+    'companyHighlights',
+    'tone',
+    'companyContextSection',
+  ],
+  tags: ['jd-agent', 'generate', 'job-description'],
+  chatPrompt: GENERATE_CHAT_PROMPT,
+  options: {
+    temperature: 0.4,
+    responseFormat: 'json_object',
+  },
+};
+
+export function buildGeneratePromptVariables(
   schema: JobSchema,
   companyContext?: string,
-): Promise<string> {
-  const messages = await GENERATE_CHAT_PROMPT.formatMessages({
+): Record<string, string> {
+  return {
     title: schema.title,
     seniority: schema.seniority,
     skills: schema.skills.join('、'),
@@ -132,7 +159,16 @@ export async function buildGenerateUserPrompt(
     companyHighlights: (schema.companyHighlights ?? []).join('、'),
     tone: schema.tone ?? 'tech',
     companyContextSection: buildCompanyContextSection(companyContext),
-  });
+  };
+}
+
+export async function buildGenerateUserPrompt(
+  schema: JobSchema,
+  companyContext?: string,
+): Promise<string> {
+  const messages = await GENERATE_CHAT_PROMPT.formatMessages(
+    buildGeneratePromptVariables(schema, companyContext),
+  );
 
   // [0] is system, [1] is human.
   const humanMessage = messages[1];
@@ -222,11 +258,35 @@ const EVALUATE_CHAT_PROMPT = ChatPromptTemplate.fromMessages([
   }),
 ]);
 
-export async function buildEvaluateUserPrompt(jd: JD, companyContext?: string): Promise<string> {
-  const messages = await EVALUATE_CHAT_PROMPT.formatMessages({
+export const jdEvaluatePromptDefinition: ManagedPromptDefinition = {
+  id: JD_EVALUATE_PROMPT_ID,
+  version: PROMPT_VERSION,
+  owner: 'jd-agent',
+  description: 'JD 评估：按招聘质量标准和公司上下文检查结构化 JD。',
+  format: 'langchain-chat',
+  inputVariables: ['jdJson', 'companyContextSection'],
+  tags: ['jd-agent', 'evaluate', 'quality-review'],
+  chatPrompt: EVALUATE_CHAT_PROMPT,
+  options: {
+    temperature: 0.4,
+    responseFormat: 'json_object',
+  },
+};
+
+export function buildEvaluatePromptVariables(
+  jd: JD,
+  companyContext?: string,
+): Record<string, string> {
+  return {
     jdJson: JSON.stringify(jd, null, 2),
     companyContextSection: buildCompanyContextSection(companyContext),
-  });
+  };
+}
+
+export async function buildEvaluateUserPrompt(jd: JD, companyContext?: string): Promise<string> {
+  const messages = await EVALUATE_CHAT_PROMPT.formatMessages(
+    buildEvaluatePromptVariables(jd, companyContext),
+  );
 
   // [0] is system, [1] is human.
   const humanMessage = messages[1];
@@ -297,19 +357,51 @@ const IMPROVE_CHAT_PROMPT = ChatPromptTemplate.fromMessages([
   }),
 ]);
 
+export const jdImprovePromptDefinition: ManagedPromptDefinition = {
+  id: JD_IMPROVE_PROMPT_ID,
+  version: PROMPT_VERSION,
+  owner: 'jd-agent',
+  description: 'JD 优化：结合评估问题、建议和用户追加要求改写结构化 JD。',
+  format: 'langchain-chat',
+  inputVariables: [
+    'issuesText',
+    'suggestionsText',
+    'jdJson',
+    'extraInstruction',
+    'companyContextSection',
+  ],
+  tags: ['jd-agent', 'improve', 'job-description'],
+  chatPrompt: IMPROVE_CHAT_PROMPT,
+  options: {
+    temperature: 0.4,
+    responseFormat: 'json_object',
+  },
+};
+
+export function buildImprovePromptVariables(
+  jd: JD,
+  evaluation: EvaluationResult,
+  extraInstruction: string,
+  companyContext?: string,
+): Record<string, string> {
+  return {
+    issuesText: evaluation.issues.join('\n'),
+    suggestionsText: evaluation.suggestions.join('\n'),
+    jdJson: JSON.stringify(jd, null, 2),
+    extraInstruction: extraInstruction || '(无)',
+    companyContextSection: buildCompanyContextSection(companyContext),
+  };
+}
+
 export async function buildImproveUserPrompt(
   jd: JD,
   evaluation: EvaluationResult,
   extraInstruction: string,
   companyContext?: string,
 ): Promise<string> {
-  const messages = await IMPROVE_CHAT_PROMPT.formatMessages({
-    issuesText: evaluation.issues.join('\n'),
-    suggestionsText: evaluation.suggestions.join('\n'),
-    jdJson: JSON.stringify(jd, null, 2),
-    extraInstruction: extraInstruction || '(无)',
-    companyContextSection: buildCompanyContextSection(companyContext),
-  });
+  const messages = await IMPROVE_CHAT_PROMPT.formatMessages(
+    buildImprovePromptVariables(jd, evaluation, extraInstruction, companyContext),
+  );
 
   // [0] is system, [1] is human.
   const humanMessage = messages[1];

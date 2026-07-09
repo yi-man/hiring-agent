@@ -1,4 +1,3 @@
-import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage } from '@langchain/core/messages';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import type { StreamEvent } from '@langchain/core/tracers/log_stream';
@@ -8,26 +7,11 @@ import {
 } from '@/lib/workflow-learning/constants';
 import { createBrowserSnapshotTool } from '@/lib/workflow-learning/tools/browser-snapshot-tool';
 import type { WorkflowSseEvent } from '@/lib/workflow-learning/types';
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-function buildModel(): ChatOpenAI {
-  const DEFAULT_MODEL = 'gpt-4o-mini';
-  return new ChatOpenAI({
-    apiKey: requireEnv('OPENAI_API_KEY'),
-    model: process.env.OPENAI_MODEL || DEFAULT_MODEL,
-    configuration: {
-      baseURL: process.env.OPENAI_BASE_URL,
-    },
-    temperature: 0.2,
-  });
-}
+import { createLangChainChatModel } from '@/lib/llm/langchain';
+import {
+  WORKFLOW_LEARNING_SYSTEM_PROMPT,
+  workflowLearningAgentPromptDefinition,
+} from '@/lib/workflow-learning/prompts';
 
 /** Exported for unit tests — extracts assistant-visible text from LangChain message objects. */
 export function extractTextFromMessageContent(msg: unknown): string {
@@ -71,8 +55,6 @@ function resultPreviewFromToolOutput(output: unknown): string {
     : text;
 }
 
-const WORKFLOW_SYSTEM_PROMPT = `You are a workflow learning assistant. When the user asks to open, fetch, or inspect a web page, you MUST call the browser_snapshot tool with a full URL (include http(s)://). In allowlisted mode, the URL must target localhost/127.0.0.1 or the app origin. Summarize tool results clearly.`;
-
 /**
  * Streams LangGraph ReAct execution as workflow SSE events (run_start … run_end).
  * `thought` events are not emitted here — LangGraph stream does not expose chain-of-thought reliably; see design spec §5.3.
@@ -86,12 +68,14 @@ export async function* runWorkflowAgentWithEvents(options: {
 
   yield { type: 'run_start', runId, timestamp: ts() };
 
-  const model = buildModel();
+  const model = createLangChainChatModel({
+    temperature: workflowLearningAgentPromptDefinition.options.temperature,
+  });
   const tools = [createBrowserSnapshotTool()];
   const agent = createReactAgent({
     llm: model,
     tools,
-    prompt: WORKFLOW_SYSTEM_PROMPT,
+    prompt: WORKFLOW_LEARNING_SYSTEM_PROMPT,
   });
 
   const toolStartMs = new Map<string, number>();

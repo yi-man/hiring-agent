@@ -71,8 +71,10 @@ export function classifyLlmError(error: unknown): ClassifiedLlmError {
   if (
     code === 'econnreset' ||
     code === 'econnrefused' ||
+    code === 'connectionrefused' ||
     code === 'enotfound' ||
     code === 'eai_again' ||
+    message.includes('unable to connect') ||
     message.includes('network') ||
     message.includes('fetch failed') ||
     message.includes('socket hang up')

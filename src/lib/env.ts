@@ -71,6 +71,18 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  /** Comma-separated provider order for OpenAI-compatible chat completions. */
+  LLM_PROVIDER_ORDER: z.string().default('openai'),
+  LLM_MAX_RETRIES: z.coerce.number().int().min(0).default(1),
+  LLM_RETRY_BACKOFF_MS: z.coerce.number().int().nonnegative().default(200),
+  LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
+  LLM_CIRCUIT_BREAKER_COOLDOWN_MS: z.coerce.number().int().nonnegative().default(60_000),
+  DEEPSEEK_API_KEY: optionalNonEmptyString(),
+  DEEPSEEK_BASE_URL: z.string().url().default('https://api.deepseek.com/v1'),
+  DEEPSEEK_MODEL: optionalNonEmptyString(),
+  DOUBAO_API_KEY: optionalNonEmptyString(),
+  DOUBAO_BASE_URL: z.string().url().default('https://ark.cn-beijing.volces.com/api/v3'),
+  DOUBAO_MODEL: optionalNonEmptyString(),
   /** Embedding 专用 OpenAI-compatible 配置；未设置时回退到 OPENAI_*，兼容旧部署。 */
   EMBEDDING_API_KEY: optionalNonEmptyString(),
   EMBEDDING_BASE_URL: optionalUrl(),
