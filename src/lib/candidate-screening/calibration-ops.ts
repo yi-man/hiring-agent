@@ -3,10 +3,15 @@ import {
   CANDIDATE_CALIBRATION_CATEGORIES,
   inferCalibrationCategoryFromText,
 } from './calibration';
+import {
+  CANDIDATE_SCORING_DATASET_DESCRIPTION,
+  CANDIDATE_SCORING_DATASET_VERSION,
+  listCandidateScoringDatasetSamples,
+} from './scoring-dataset';
 import type { CandidateCalibrationCategory } from './types';
 
 export type CalibrationOpResult = {
-  operation: 'list' | 'show' | 'doctor' | 'export' | 'usage';
+  operation: 'list' | 'show' | 'doctor' | 'export' | 'dataset' | 'usage';
   detail: string;
   exitCode: 0 | 1;
 };
@@ -27,7 +32,16 @@ Commands:
     根据一段 JD 文本推断会使用哪个校准类型。
 
   export <category>
-    以 JSON 导出某个岗位类型的完整校准 profile，方便评审和回归留档。`;
+    以 JSON 导出某个岗位类型的完整校准 profile，方便评审和回归留档。
+
+  dataset
+    查看内置简历评分 golden sample 数据集概览。
+
+  dataset show <category>
+    查看某个岗位类型的简历评分样本。
+
+  dataset export <category>
+    以 JSON 导出某个岗位类型的简历评分样本，用于小样本真实回归。`;
 }
 
 function isCalibrationCategory(value: string): value is CandidateCalibrationCategory {
@@ -56,6 +70,113 @@ ${anchors}
 
 抽样复盘:
 ${profile.reviewSampling.map((item) => `- ${item}`).join('\n')}`;
+}
+
+function formatDatasetSummary(): string {
+  const lines = [
+    `评分数据集: ${CANDIDATE_SCORING_DATASET_VERSION}`,
+    CANDIDATE_SCORING_DATASET_DESCRIPTION,
+    '',
+  ];
+
+  for (const item of CANDIDATE_CALIBRATION_CATEGORIES) {
+    const category = item.category;
+    const samples = listCandidateScoringDatasetSamples({ category });
+    if (samples.length === 0) continue;
+
+    const anchors = samples
+      .map(
+        (sample) =>
+          `${sample.anchor} ${sample.expected.action} ${sample.expected.scoreRange[0]}-${sample.expected.scoreRange[1]}`,
+      )
+      .join(' · ');
+    lines.push(`${category}\t${item.label}\t${samples.length} samples\t${anchors}`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatDatasetSamples(category: CandidateCalibrationCategory): string {
+  const profile = buildCalibrationProfileForCategory(category);
+  const samples = listCandidateScoringDatasetSamples({ category });
+  const formattedSamples = samples
+    .map(
+      (sample) => `- ${sample.id} ${sample.anchor}
+  expected: ${sample.expected.action} ${sample.expected.scoreRange[0]}-${sample.expected.scoreRange[1]} ${sample.expected.priority}
+  JD: ${sample.jobTitle}｜${sample.jdText}
+  candidate: ${sample.candidateName}
+  resume: ${sample.resumeText}
+  rationale: ${sample.rationale}`,
+    )
+    .join('\n');
+
+  return `${profile.category} / ${profile.categoryLabel}
+dataset: ${CANDIDATE_SCORING_DATASET_VERSION}
+samples: ${samples.length}
+
+${formattedSamples}`;
+}
+
+function exportDatasetSamples(category: CandidateCalibrationCategory): string {
+  return JSON.stringify(
+    {
+      version: CANDIDATE_SCORING_DATASET_VERSION,
+      category,
+      samples: listCandidateScoringDatasetSamples({ category }),
+    },
+    null,
+    2,
+  );
+}
+
+function runDatasetOp(args: string[]): CalibrationOpResult {
+  const [command, categoryArg] = args;
+
+  if (!command) {
+    return {
+      operation: 'dataset',
+      detail: formatDatasetSummary(),
+      exitCode: 0,
+    };
+  }
+
+  if (command === 'show') {
+    const category = resolveCategory(categoryArg);
+    if (!category) {
+      return {
+        operation: 'usage',
+        detail: `Unknown calibration category: ${categoryArg ?? '<missing>'}\n\n${getCalibrationOpsUsage()}`,
+        exitCode: 1,
+      };
+    }
+    return {
+      operation: 'dataset',
+      detail: formatDatasetSamples(category),
+      exitCode: 0,
+    };
+  }
+
+  if (command === 'export') {
+    const category = resolveCategory(categoryArg);
+    if (!category) {
+      return {
+        operation: 'usage',
+        detail: `Unknown calibration category: ${categoryArg ?? '<missing>'}\n\n${getCalibrationOpsUsage()}`,
+        exitCode: 1,
+      };
+    }
+    return {
+      operation: 'dataset',
+      detail: exportDatasetSamples(category),
+      exitCode: 0,
+    };
+  }
+
+  return {
+    operation: 'usage',
+    detail: `Unknown dataset command: ${command}\n\n${getCalibrationOpsUsage()}`,
+    exitCode: 1,
+  };
 }
 
 export function runCalibrationOp(args: string[]): CalibrationOpResult {
@@ -119,6 +240,10 @@ export function runCalibrationOp(args: string[]): CalibrationOpResult {
       detail: JSON.stringify(buildCalibrationProfileForCategory(category), null, 2),
       exitCode: 0,
     };
+  }
+
+  if (command === 'dataset') {
+    return runDatasetOp([categoryArg, ...rest].filter(Boolean));
   }
 
   return {

@@ -9,7 +9,7 @@ Prompt 的统一注册和 LangChain 渲染方式见 [`prompt-management.md`](./p
 评分质量由四层共同保证：
 
 1. 中文证据型 prompt：要求 LLM 只根据 JD 维度和简历事实打分。
-2. 岗位类型校准集：根据 JD 自动选择技术、产品、销售等岗位的评分锚点。
+2. 岗位类型校准集：根据 JD 自动选择技术、产品、销售等岗位的评分锚点，并维护可回归的简历评分样本。
 3. 版本化复用：历史分数只有在简历、JD 和评分质量版本都一致时才复用。
 4. 低成本迭代：默认用回放和单测，不每次真实调 LLM；只有 prompt、模型或校准集变化时跑小样本真实回归。
 
@@ -74,6 +74,35 @@ flowchart TD
 
 这些锚点会进入 `evaluationSchema.calibrationProfile`，LLM 评分时必须先判断候选人更接近哪个锚点，再给出分项分数。
 
+## 简历评分数据集
+
+初始 golden sample 数据集已经落在仓库里：
+
+```text
+src/lib/candidate-screening/datasets/scoring-golden-samples.v1.json
+```
+
+数据集按岗位类型维护，每类 4 条样本：
+
+- 强匹配：预期 `chat`，分数 85-100；
+- 合格匹配：预期 `chat`，分数 70-84；
+- 边界匹配：预期 `collect`，分数 61-69；
+- 弱匹配：预期 `skip`，分数 0-60。
+
+每条样本包含：
+
+| 字段         | 含义                                         |
+| ------------ | -------------------------------------------- |
+| `category`   | 岗位类型，如 `technical`、`data_ai`、`sales` |
+| `anchor`     | 强匹配、合格匹配、边界匹配、弱匹配           |
+| `jobTitle`   | 样本 JD 标题                                 |
+| `jdText`     | 样本 JD 要点                                 |
+| `resumeText` | 样本简历事实                                 |
+| `expected`   | 预期动作、分数区间和优先级                   |
+| `rationale`  | 为什么这个样本应该落在对应锚点，用于人工复盘 |
+
+这份数据集的定位是“初始校准集 + 小样本真实回归集”。后续真实招聘中发现误判时，不建议直接改 prompt；优先把误判样本沉淀进这个数据集或调整对应岗位类型的锚点。
+
 ## 校准集命令
 
 本地提供了一个校准集查看和诊断命令：
@@ -83,16 +112,22 @@ bun run candidate-screening:calibration -- list
 bun run candidate-screening:calibration -- show technical
 bun run candidate-screening:calibration -- doctor 高级后端工程师 Java Spring Boot 高并发
 bun run candidate-screening:calibration -- export sales
+bun run candidate-screening:calibration -- dataset
+bun run candidate-screening:calibration -- dataset show technical
+bun run candidate-screening:calibration -- dataset export data_ai
 ```
 
 命令用途：
 
-| 命令                  | 用途                                                    |
-| --------------------- | ------------------------------------------------------- |
-| `list`                | 查看所有内置岗位类型                                    |
-| `show <category>`     | 查看某个岗位类型的强匹配、合格、边界、弱匹配锚点        |
-| `doctor <jd text...>` | 输入一段 JD 文本，诊断系统会自动选哪个岗位校准类型      |
-| `export <category>`   | 导出完整 JSON profile，方便评审、留档或做 golden sample |
+| 命令                        | 用途                                                |
+| --------------------------- | --------------------------------------------------- |
+| `list`                      | 查看所有内置岗位类型                                |
+| `show <category>`           | 查看某个岗位类型的强匹配、合格、边界、弱匹配锚点    |
+| `doctor <jd text...>`       | 输入一段 JD 文本，诊断系统会自动选哪个岗位校准类型  |
+| `export <category>`         | 导出完整 JSON profile，方便评审和留档               |
+| `dataset`                   | 查看简历评分 golden sample 数据集概览               |
+| `dataset show <category>`   | 查看某个岗位类型的评分样本                          |
+| `dataset export <category>` | 导出某个岗位类型的评分样本 JSON，用于真实小样本回归 |
 
 推荐使用方式：
 
@@ -100,7 +135,9 @@ bun run candidate-screening:calibration -- export sales
 2. 如果归类不符合预期，优先调整 `src/lib/candidate-screening/calibration.ts` 的类型识别规则。
 3. 如果归类正确但评分偏差高，调整对应岗位类型的锚点和 guidance。
 4. 锚点或分类变化后，升级 `CANDIDATE_SCREENING_CALIBRATION_VERSION`。
-5. 用 `export` 保存当时的 profile，作为回归和评审材料。
+5. 用 `dataset show <category>` 找到最接近的强匹配、边界或弱匹配样本。
+6. 如果真实误判无法被现有样本覆盖，把匿名化后的 JD + 简历 + 人工预期动作加入数据集。
+7. 用 `dataset export <category>` 作为 prompt、模型或校准集变化后的真实小样本回归输入。
 
 ## 低成本迭代机制
 
@@ -124,13 +161,14 @@ bun run candidate-screening:calibration -- export sales
 
 常见修改对应文件：
 
-| 想调整什么                          | 文件                                         |
-| ----------------------------------- | -------------------------------------------- |
-| 岗位类型识别、默认校准锚点          | `src/lib/candidate-screening/calibration.ts` |
-| prompt 文案和输出约束               | `src/lib/candidate-screening/prompts.ts`     |
-| 评分公式、`llmBonus` 范围、版本写入 | `src/lib/candidate-screening/scoring.ts`     |
-| 历史评分复用判断                    | `src/lib/candidate-screening/runner.ts`      |
-| 质量版本常量                        | `src/lib/candidate-screening/constants.ts`   |
+| 想调整什么                          | 文件                                                                  |
+| ----------------------------------- | --------------------------------------------------------------------- |
+| 岗位类型识别、默认校准锚点          | `src/lib/candidate-screening/calibration.ts`                          |
+| 简历评分 golden sample 数据集       | `src/lib/candidate-screening/datasets/scoring-golden-samples.v1.json` |
+| prompt 文案和输出约束               | `src/lib/candidate-screening/prompts.ts`                              |
+| 评分公式、`llmBonus` 范围、版本写入 | `src/lib/candidate-screening/scoring.ts`                              |
+| 历史评分复用判断                    | `src/lib/candidate-screening/runner.ts`                               |
+| 质量版本常量                        | `src/lib/candidate-screening/constants.ts`                            |
 
 版本升级规则：
 
