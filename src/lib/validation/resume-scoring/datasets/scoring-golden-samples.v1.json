@@ -1,0 +1,486 @@
+{
+  "version": "candidate-score-golden-dataset-v1",
+  "description": "Seeded resume scoring golden samples for candidate screening calibration and low-cost regression.",
+  "samples": [
+    {
+      "id": "technical-strong-backend-platform",
+      "category": "technical",
+      "anchor": "强匹配",
+      "jobTitle": "高级后端工程师",
+      "jdText": "负责 Java、Spring Boot、Redis、PostgreSQL 微服务平台建设，需要高并发、可观测性和线上稳定性治理经验。",
+      "candidateName": "陈启明",
+      "resumeText": "8 年后端工程经验，主导订单中台从单体拆分为 Spring Boot 微服务，核心链路峰值 8 万 QPS。负责 Redis 缓存治理、PostgreSQL 分库分表、Prometheus 告警和线上故障复盘，连续两年承担平台稳定性 owner。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "核心技术栈、系统复杂度、交付结果和稳定性证据都直接命中。"
+    },
+    {
+      "id": "technical-qualified-fullstack",
+      "category": "technical",
+      "anchor": "合格匹配",
+      "jobTitle": "全栈工程师",
+      "jdText": "需要 TypeScript、React、Node.js、PostgreSQL，负责 B 端业务模块从前端到接口交付。",
+      "candidateName": "林若彤",
+      "resumeText": "5 年全栈开发经验，使用 React、TypeScript、Node.js 和 PostgreSQL 交付多个 CRM 模块。熟悉接口设计、权限模型和前后端联调，主要缺口是复杂架构和性能治理经验较少。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "多数核心技能匹配，可进入沟通，但系统深度需要面试确认。"
+    },
+    {
+      "id": "technical-borderline-java-transfer",
+      "category": "technical",
+      "anchor": "边界匹配",
+      "jobTitle": "后端工程师",
+      "jdText": "负责 Java 微服务开发，要求 Spring Boot、Redis、消息队列和 PostgreSQL。",
+      "candidateName": "赵一鸣",
+      "resumeText": "3 年 PHP 后端开发，负责内部运营系统接口和 MySQL 查询优化。了解 Java 基础，自学 Spring Boot，有 Redis 缓存使用经验，但缺少生产级 Java 微服务项目。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "有可迁移后端经验，但核心 Java 微服务证据不足，适合先补充信息。"
+    },
+    {
+      "id": "technical-weak-marketing",
+      "category": "technical",
+      "anchor": "弱匹配",
+      "jobTitle": "前端工程师",
+      "jdText": "需要 React、TypeScript、工程化、组件库和复杂交互开发经验。",
+      "candidateName": "周佳宁",
+      "resumeText": "4 年市场运营经验，负责活动策划、渠道投放和数据报表。会使用低代码工具搭建落地页，无 React、TypeScript 或前端工程项目经历。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "核心技术和岗位方向缺失，不应被低代码关键词误判为前端匹配。"
+    },
+    {
+      "id": "data-ai-strong-rag-platform",
+      "category": "data_ai",
+      "anchor": "强匹配",
+      "jobTitle": "LLM 应用工程师",
+      "jdText": "负责 RAG、Agent、评估集、Prompt 管理和 LLM 应用上线，需要 Python、LangChain、向量检索和效果评估经验。",
+      "candidateName": "王语舟",
+      "resumeText": "6 年 AI 应用经验，主导企业知识库 RAG 平台上线，使用 Python、LangChain、Qdrant 和 rerank 模型，建设 180 条 golden QA 评估集，将答案可用率从 62% 提升到 86%。负责 prompt 版本管理、离线回归和线上反馈闭环。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "模型应用、工程上线、评估闭环和指标结果都直接命中。"
+    },
+    {
+      "id": "data-ai-qualified-ml-engineer",
+      "category": "data_ai",
+      "anchor": "合格匹配",
+      "jobTitle": "数据算法工程师",
+      "jdText": "需要机器学习、特征工程、模型评估和业务落地经验。",
+      "candidateName": "孙芷晴",
+      "resumeText": "4 年推荐算法经验，负责用户画像特征、召回策略和 A/B 实验。熟悉 Python、SQL、LightGBM 和模型评估，参与过线上策略迭代，但 LLM/RAG 经验较少。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "AI/数据能力扎实，有落地和评估证据，但目标 LLM 场景深度待确认。"
+    },
+    {
+      "id": "data-ai-borderline-analyst",
+      "category": "data_ai",
+      "anchor": "边界匹配",
+      "jobTitle": "AI 产品数据分析师",
+      "jdText": "需要数据分析、LLM 产品指标设计、实验分析和业务洞察。",
+      "candidateName": "刘沛然",
+      "resumeText": "3 年 BI 分析经验，熟悉 SQL、Python 和仪表盘建设。做过用户留存、漏斗和活动效果分析，最近参与过 AI 助手埋点，但没有模型评估和 AI 系统建设经验。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "数据能力可迁移，但 AI 评估和产品指标证据不足。"
+    },
+    {
+      "id": "data-ai-weak-general-backend",
+      "category": "data_ai",
+      "anchor": "弱匹配",
+      "jobTitle": "RAG 工程师",
+      "jdText": "负责向量检索、文本切分、评估集和 LLM 应用质量优化。",
+      "candidateName": "吴承远",
+      "resumeText": "5 年 Java 后端开发，负责 OA 系统审批流和权限接口。简历只提到调用过一次 ChatGPT API，没有向量检索、RAG、模型评估或数据治理经验。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "普通后端经验不能等同于 AI 系统建设经验。"
+    },
+    {
+      "id": "product-strong-b2b-owner",
+      "category": "product",
+      "anchor": "强匹配",
+      "jobTitle": "B 端产品经理",
+      "jdText": "负责招聘 SaaS 产品规划、需求分析、数据指标和跨团队交付。",
+      "candidateName": "何书瑶",
+      "resumeText": "7 年 B 端产品经验，曾作为招聘 ATS 模块 owner，从客户访谈、PRD、排期到上线复盘完整负责。通过漏斗分析将简历处理效率提升 35%，推动销售、设计、研发和客服协作。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "用户场景、产品闭环、指标结果和跨团队推进证据完整。"
+    },
+    {
+      "id": "product-qualified-crm",
+      "category": "product",
+      "anchor": "合格匹配",
+      "jobTitle": "业务产品经理",
+      "jdText": "负责 CRM 线索管理、客户画像和销售流程效率。",
+      "candidateName": "蒋思远",
+      "resumeText": "4 年 CRM 产品经验，独立负责线索池、客户标签和销售跟进提醒模块。能完成需求调研、原型、验收和数据看板，但对招聘行业理解有限。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "产品方法和业务系统经验匹配，行业深度需确认。"
+    },
+    {
+      "id": "product-borderline-project-assistant",
+      "category": "product",
+      "anchor": "边界匹配",
+      "jobTitle": "产品经理",
+      "jdText": "需要独立负责需求分析、路线图、上线和数据复盘。",
+      "candidateName": "宋可",
+      "resumeText": "2 年项目助理经验，协助产品经理整理会议纪要、跟进 Jira 任务和验收反馈。参与过原型评审，但没有独立负责需求或指标复盘经历。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "有项目参与和协作经验，但 owner 证据不足。"
+    },
+    {
+      "id": "product-weak-customer-service",
+      "category": "product",
+      "anchor": "弱匹配",
+      "jobTitle": "增长产品经理",
+      "jdText": "需要增长实验、用户转化、产品策略和数据复盘。",
+      "candidateName": "李安琪",
+      "resumeText": "3 年客服经验，负责处理用户工单和满意度回访。能够收集用户反馈，但没有产品规划、实验设计、PRD 或上线复盘经验。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "用户沟通经历不能直接等同产品能力。"
+    },
+    {
+      "id": "sales-strong-enterprise-saas",
+      "category": "sales",
+      "anchor": "强匹配",
+      "jobTitle": "企业销售经理",
+      "jdText": "负责大客户开发、招聘 SaaS 销售、商机推进和续费扩张。",
+      "candidateName": "郑骁",
+      "resumeText": "6 年企业 SaaS 销售经验，服务 2000 人以上客户，平均客单 80 万。独立推进线索挖掘、方案演示、商务谈判和续费扩张，上一年度完成 135% quota，熟悉 HR 和招聘系统采购流程。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "客户类型、产品形态、销售闭环和业绩口径都清晰。"
+    },
+    {
+      "id": "sales-qualified-bd",
+      "category": "sales",
+      "anchor": "合格匹配",
+      "jobTitle": "商务拓展",
+      "jdText": "需要企业客户开发、渠道合作和商机转化。",
+      "candidateName": "邱嘉树",
+      "resumeText": "4 年 ToB BD 经验，负责教育行业渠道合作和企业客户开发。能独立完成陌拜、需求沟通和合同推进，过往客单和招聘行业资源需要进一步确认。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "销售流程经验匹配，但客群和规模还需确认。"
+    },
+    {
+      "id": "sales-borderline-customer-success",
+      "category": "sales",
+      "anchor": "边界匹配",
+      "jobTitle": "销售顾问",
+      "jdText": "负责主动获客、销售转化和客户关系维护。",
+      "candidateName": "唐玥",
+      "resumeText": "3 年客户成功经验，负责客户培训、续费提醒和问题协调。熟悉客户关系维护，但主动获客、商机推进和成交闭环证据不足。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "客情能力可迁移，但销售闭环不足。"
+    },
+    {
+      "id": "sales-weak-admin",
+      "category": "sales",
+      "anchor": "弱匹配",
+      "jobTitle": "大客户销售",
+      "jdText": "需要主动开发企业客户、完成销售额和维护关键决策人。",
+      "candidateName": "冯乐",
+      "resumeText": "5 年行政支持经验，负责会议安排、合同归档和供应商付款流程。没有销售指标、客户开发或商务谈判经历。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "支持性工作不能等同主动销售能力。"
+    },
+    {
+      "id": "operations-strong-growth",
+      "category": "operations",
+      "anchor": "强匹配",
+      "jobTitle": "增长运营",
+      "jdText": "负责用户增长、活动运营、转化漏斗和数据复盘。",
+      "candidateName": "许知夏",
+      "resumeText": "6 年增长运营经验，负责从策略、投放、活动机制到复盘的完整增长项目。通过 A/B 实验优化注册转化，3 个月提升新增有效线索 42%，熟悉用户分层、内容触达和数据看板。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "运营类型匹配，动作和指标结果都清晰。"
+    },
+    {
+      "id": "operations-qualified-content",
+      "category": "operations",
+      "anchor": "合格匹配",
+      "jobTitle": "内容运营",
+      "jdText": "负责内容选题、发布节奏、用户互动和效果复盘。",
+      "candidateName": "高雨桐",
+      "resumeText": "4 年内容运营经验，独立负责公众号、社群和直播内容排期。能基于阅读率和转化数据调整选题，但对招聘行业内容理解较少。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "方向和方法匹配，行业场景需确认。"
+    },
+    {
+      "id": "operations-borderline-executor",
+      "category": "operations",
+      "anchor": "边界匹配",
+      "jobTitle": "活动运营",
+      "jdText": "负责活动策划、执行、转化目标和复盘。",
+      "candidateName": "罗晨",
+      "resumeText": "2 年运营执行经验，负责物料准备、报名名单整理和活动现场协调。参与过活动复盘会议，但没有独立策略、目标拆解或指标归因经验。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "执行经验相关，但策略和 owner 证据不足。"
+    },
+    {
+      "id": "operations-weak-finance",
+      "category": "operations",
+      "anchor": "弱匹配",
+      "jobTitle": "用户运营",
+      "jdText": "需要用户分层、触达策略、社群运营和留存提升。",
+      "candidateName": "蔡文",
+      "resumeText": "4 年财务会计经验，负责报销审核、月结和税务资料。没有用户运营、社群、活动或增长指标经验。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "目标运营类型经验缺失。"
+    },
+    {
+      "id": "design-strong-saas-ux",
+      "category": "design",
+      "anchor": "强匹配",
+      "jobTitle": "高级 UX 设计师",
+      "jdText": "负责 B 端 SaaS 复杂流程体验、设计系统和跨团队落地。",
+      "candidateName": "尹芮",
+      "resumeText": "7 年 UX 设计经验，主导 HR SaaS 招聘流程重构，沉淀设计系统组件 60+。通过可用性测试和数据复盘将任务完成时间降低 28%，能从用户问题、交互方案到研发验收全流程推进。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "设计方向、作品、用户问题和落地效果均匹配。"
+    },
+    {
+      "id": "design-qualified-ui",
+      "category": "design",
+      "anchor": "合格匹配",
+      "jobTitle": "产品设计师",
+      "jdText": "需要 Web 产品 UI、交互规范、组件协作和设计交付。",
+      "candidateName": "孟琪",
+      "resumeText": "4 年 UI/交互设计经验，负责后台管理系统、移动端活动页和组件规范。能与产品、前端协作完成交付，但复杂 B 端业务流程经验有限。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "设计技能和协作匹配，业务复杂度待确认。"
+    },
+    {
+      "id": "design-borderline-visual",
+      "category": "design",
+      "anchor": "边界匹配",
+      "jobTitle": "交互设计师",
+      "jdText": "负责复杂业务流程、原型、可用性测试和设计系统。",
+      "candidateName": "杜明澈",
+      "resumeText": "3 年视觉设计经验，擅长品牌海报、活动专题和营销页面。会使用 Figma 出低保真原型，但缺少复杂业务流程和可用性测试案例。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "工具和部分设计能力相关，但目标交互深度不足。"
+    },
+    {
+      "id": "design-weak-copywriter",
+      "category": "design",
+      "anchor": "弱匹配",
+      "jobTitle": "UI 设计师",
+      "jdText": "需要界面设计、组件规范、设计工具和作品集。",
+      "candidateName": "韩笑",
+      "resumeText": "5 年文案策划经验，负责品牌 slogan、公众号文章和活动脚本。没有界面设计、Figma、设计系统或作品集经历。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "创意内容经历不能替代 UI/UX 设计证据。"
+    },
+    {
+      "id": "management-strong-engineering-leader",
+      "category": "management",
+      "anchor": "强匹配",
+      "jobTitle": "研发负责人",
+      "jdText": "负责 20 人研发团队、技术规划、交付质量、人才培养和跨部门协作。",
+      "candidateName": "马承泽",
+      "resumeText": "10 年研发经验，4 年团队管理，管理 24 人后端和前端团队。负责年度技术路线、绩效反馈、招聘培养和跨部门交付，将版本延期率从 31% 降到 9%。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "管理范围、团队规模、业务结果和组织能力证据充分。"
+    },
+    {
+      "id": "management-qualified-team-lead",
+      "category": "management",
+      "anchor": "合格匹配",
+      "jobTitle": "技术主管",
+      "jdText": "需要带领小团队完成业务交付，负责计划拆解、代码质量和人员辅导。",
+      "candidateName": "沈砚",
+      "resumeText": "8 年开发经验，近 2 年担任 6 人小组 team lead，负责需求拆解、Code Review、迭代排期和新人辅导。正式绩效管理和预算经验较少。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "带团队和交付经验匹配，管理半径需确认。"
+    },
+    {
+      "id": "management-borderline-project-owner",
+      "category": "management",
+      "anchor": "边界匹配",
+      "jobTitle": "运营经理",
+      "jdText": "需要团队管理、目标拆解、复盘和跨部门资源协调。",
+      "candidateName": "白若川",
+      "resumeText": "5 年运营经验，曾作为重点项目 owner 协调设计、销售和客服完成活动上线。没有直接下属，目标拆解和复盘主要围绕项目而非团队。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "项目管理可迁移，但正式团队管理证据不足。"
+    },
+    {
+      "id": "management-weak-senior-ic",
+      "category": "management",
+      "anchor": "弱匹配",
+      "jobTitle": "研发经理",
+      "jdText": "需要团队管理、绩效反馈、招聘培养和跨团队目标推进。",
+      "candidateName": "陆知行",
+      "resumeText": "9 年资深后端工程师，个人技术能力强，负责核心模块设计和疑难问题排查。没有带人、绩效、招聘或团队目标管理经历。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "高级个人贡献者不能直接等同管理岗匹配。"
+    },
+    {
+      "id": "general-strong-hrbp",
+      "category": "general",
+      "anchor": "强匹配",
+      "jobTitle": "HRBP",
+      "jdText": "负责业务团队招聘、组织诊断、绩效协同和员工关系处理。",
+      "candidateName": "曾依然",
+      "resumeText": "7 年 HRBP 经验，支持 300 人研发团队，负责年度招聘计划、组织诊断、绩效校准和员工关系。推动关键岗位招聘周期缩短 22%，沉淀管理者访谈和人才盘点机制。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [85, 100],
+        "priority": "high"
+      },
+      "rationale": "核心职责、业务场景和结果都匹配。"
+    },
+    {
+      "id": "general-qualified-recruiter",
+      "category": "general",
+      "anchor": "合格匹配",
+      "jobTitle": "招聘专员",
+      "jdText": "负责岗位需求沟通、候选人寻访、面试推进和 offer 跟进。",
+      "candidateName": "余可欣",
+      "resumeText": "3 年招聘经验，负责互联网技术岗位寻访、电话沟通、面试安排和 offer 跟进。熟悉 boss、猎聘和内推渠道，复杂岗位画像和数据复盘经验一般。",
+      "expected": {
+        "action": "chat",
+        "scoreRange": [70, 84],
+        "priority": "medium"
+      },
+      "rationale": "多数职责匹配，复杂岗位经验可面试确认。"
+    },
+    {
+      "id": "general-borderline-coordinator",
+      "category": "general",
+      "anchor": "边界匹配",
+      "jobTitle": "招聘运营",
+      "jdText": "负责招聘流程运营、数据报表、候选人体验和跨部门协同。",
+      "candidateName": "钱嘉禾",
+      "resumeText": "2 年行政和项目协调经验，负责会议安排、流程提醒和 Excel 报表。参与过校招面试安排，但没有独立招聘运营或候选人体验优化项目。",
+      "expected": {
+        "action": "collect",
+        "scoreRange": [61, 69],
+        "priority": "low"
+      },
+      "rationale": "流程协调能力可迁移，但核心招聘运营证据不足。"
+    },
+    {
+      "id": "general-weak-unrelated",
+      "category": "general",
+      "anchor": "弱匹配",
+      "jobTitle": "员工关系专员",
+      "jdText": "需要劳动法规、员工关系处理、沟通调解和风险记录。",
+      "candidateName": "施雨",
+      "resumeText": "4 年门店销售经验，负责顾客接待、收银和货品陈列。没有 HR、劳动法规、员工关系或组织沟通相关经历。",
+      "expected": {
+        "action": "skip",
+        "scoreRange": [0, 60],
+        "priority": "low"
+      },
+      "rationale": "核心职责缺失且行业经验不相关。"
+    }
+  ]
+}

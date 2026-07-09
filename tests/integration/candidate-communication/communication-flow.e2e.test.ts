@@ -36,6 +36,8 @@ const sampleJd: JD = {
   highlights: ['AI 招聘产品', '核心团队'],
 };
 
+const bossLikeResumeId = '303';
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -75,8 +77,8 @@ function renderResumeListPage(): string {
     <main>
       <h1>候选人库</h1>
       <p>简历</p>
-      <a href="/employer/resumes/boss-cand-1">
-        <article data-candidate-id="boss-cand-1" data-profile-url="/employer/resumes/boss-cand-1">
+      <a href="/employer/resumes/${bossLikeResumeId}">
+        <article data-candidate-id="${bossLikeResumeId}" data-profile-url="/employer/resumes/${bossLikeResumeId}">
           <h2>Ada Lovelace</h2>
           <p data-field="title">Senior Backend Engineer</p>
           <p data-field="company">Analytical Engines</p>
@@ -162,7 +164,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
 
       const detailMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)$/);
       if (detailMatch) {
-        response.end(renderResumeDetailPage(detailMatch[1] ?? 'boss-cand-1'));
+        response.end(renderResumeDetailPage(detailMatch[1] ?? bossLikeResumeId));
         return;
       }
 
@@ -233,10 +235,10 @@ async function createPublishedJobDescription(userId: string): Promise<JobDescrip
 }
 
 async function createCandidate(userId: string, baseUrl: string): Promise<string> {
-  const profileUrl = `${baseUrl}/employer/resumes/boss-cand-1`;
+  const profileUrl = `${baseUrl}/employer/resumes/${bossLikeResumeId}`;
   const identity = createCandidateIdentity({
     sourcePlatform: 'boss-like',
-    platformCandidateId: 'boss-cand-1',
+    platformCandidateId: bossLikeResumeId,
     profileUrl,
     name: 'Ada Lovelace',
     company: 'Analytical Engines',
@@ -249,7 +251,7 @@ async function createCandidate(userId: string, baseUrl: string): Promise<string>
       currentTitle: 'Senior Backend Engineer',
       currentCompany: 'Analytical Engines',
       sourcePlatform: 'boss-like',
-      platformCandidateId: 'boss-cand-1',
+      platformCandidateId: bossLikeResumeId,
       profileUrl,
       identityKey: identity.identityKey,
       identityHash: identity.identityHash,
@@ -348,8 +350,8 @@ describe('candidate communication integration flow with real postgres, LLM, and 
       expect(messages[1]).toMatchObject({ role: 'agent', deliveryStatus: 'sent' });
       expect(memory.outcomeResult).toBe('contact_exchanged');
       expect(candidate.replied).toBe(true);
-      expect(bossLike.requests).toContain('GET /employer/resumes/boss-cand-1');
-      expect(bossLike.requests).toContain('POST /employer/resumes/boss-cand-1/messages');
+      expect(bossLike.requests).toContain(`GET /employer/resumes/${bossLikeResumeId}`);
+      expect(bossLike.requests).toContain(`POST /employer/resumes/${bossLikeResumeId}/messages`);
       expect(bossLike.postedMessages.join('\n')).toContain('message=');
       expectNoDirectPlatformApiRequests(bossLike.requests);
     } finally {

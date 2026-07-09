@@ -4,6 +4,8 @@ const embedDocumentsMock = jest.fn();
 const splitMarkdownToChunksMock = jest.fn();
 const upsertCandidateWithIdentityMock = jest.fn();
 const createOrReuseCandidateResumeMock = jest.fn();
+const findCandidateByIdentityMock = jest.fn();
+const findCandidateResumeByHashMock = jest.fn();
 const replaceCandidateResumeChunksMock = jest.fn();
 
 jest.mock('@/lib/env', () => ({
@@ -25,6 +27,8 @@ jest.mock('@/lib/rag/markdown', () => ({
 jest.mock('./repo', () => ({
   upsertCandidateWithIdentity: (...args: unknown[]) => upsertCandidateWithIdentityMock(...args),
   createOrReuseCandidateResume: (...args: unknown[]) => createOrReuseCandidateResumeMock(...args),
+  findCandidateByIdentity: (...args: unknown[]) => findCandidateByIdentityMock(...args),
+  findCandidateResumeByHash: (...args: unknown[]) => findCandidateResumeByHashMock(...args),
   replaceCandidateResumeChunks: (...args: unknown[]) => replaceCandidateResumeChunksMock(...args),
 }));
 
@@ -64,11 +68,17 @@ describe('ingestRawCandidate', () => {
     splitMarkdownToChunksMock.mockReset();
     upsertCandidateWithIdentityMock.mockReset();
     createOrReuseCandidateResumeMock.mockReset();
+    findCandidateByIdentityMock.mockReset();
+    findCandidateResumeByHashMock.mockReset();
     replaceCandidateResumeChunksMock.mockReset();
 
+    findCandidateByIdentityMock.mockResolvedValue(null);
+    findCandidateResumeByHashMock.mockResolvedValue(null);
     upsertCandidateWithIdentityMock.mockResolvedValue({
       id: 'candidate-1',
       identityHash: 'identity-hash-1',
+      displayName: '王小明',
+      contacted: false,
     });
     createOrReuseCandidateResumeMock.mockResolvedValue({
       id: 'resume-1',
@@ -122,6 +132,12 @@ describe('ingestRawCandidate', () => {
       resumeId: 'resume-1',
       identityHash: expect.any(String),
       chunkCount: 1,
+      candidateContacted: false,
+      candidateWasExisting: false,
+      resumeWasExisting: false,
+      existingCandidateId: null,
+      existingCandidateName: null,
+      existingResumeId: null,
     });
   });
 
@@ -232,6 +248,61 @@ describe('ingestRawCandidate', () => {
     expect(replaceCandidateResumeChunksMock).toHaveBeenCalledWith(
       expect.objectContaining({
         resumeId: 'resume-existing',
+      }),
+    );
+  });
+
+  it('reports when candidate and resume were already present in the library', async () => {
+    findCandidateByIdentityMock.mockResolvedValueOnce({
+      id: 'candidate-existing',
+      displayName: '王小明',
+    });
+    upsertCandidateWithIdentityMock.mockResolvedValueOnce({
+      id: 'candidate-existing',
+      identityHash: 'identity-hash-existing',
+      displayName: '王小明',
+      contacted: true,
+    });
+    findCandidateResumeByHashMock.mockResolvedValueOnce({
+      id: 'resume-existing',
+      resumeHash: 'same-hash',
+    });
+    createOrReuseCandidateResumeMock.mockResolvedValueOnce({
+      id: 'resume-existing',
+      resumeHash: 'same-hash',
+    });
+    const { ingestRawCandidate } = await import('./ingest');
+
+    const result = await ingestRawCandidate({
+      userId: 'u1',
+      sourcePlatform: 'boss-like',
+      rawCandidate,
+    });
+
+    expect(findCandidateByIdentityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        sourcePlatform: 'boss-like',
+        identityHash: expect.any(String),
+      }),
+    );
+    expect(findCandidateResumeByHashMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        candidateId: 'candidate-existing',
+        resumeHash: expect.any(String),
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        candidateId: 'candidate-existing',
+        resumeId: 'resume-existing',
+        candidateContacted: true,
+        candidateWasExisting: true,
+        resumeWasExisting: true,
+        existingCandidateId: 'candidate-existing',
+        existingCandidateName: '王小明',
+        existingResumeId: 'resume-existing',
       }),
     );
   });

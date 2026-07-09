@@ -23,7 +23,7 @@ const createBrowserExecutorFromEnvMock = createBrowserExecutorFromEnv as jest.Mo
 >;
 
 const resumeListFixture = `
-<article data-candidate-id="boss-1" data-profile-url="/employer/resumes/boss-1">
+<article data-candidate-id="1" data-profile-url="/employer/resumes/1">
   <h2>王小明</h2>
   <p data-field="title">高级后端工程师</p>
   <p data-field="company">星河智能</p>
@@ -35,7 +35,7 @@ const resumeListFixture = `
 `;
 
 const shortResumeListFixture = `
-<article data-candidate-id="boss-1" data-profile-url="/employer/resumes/boss-1">
+<article data-candidate-id="1" data-profile-url="/employer/resumes/1">
   <h2>王小明</h2>
   <p data-field="title">高级后端工程师</p>
   <p data-field="company">星河智能</p>
@@ -47,7 +47,7 @@ const shortResumeListFixture = `
 `;
 
 const detailFixture = `
-<article data-candidate-id="boss-1" data-profile-url="/employer/resumes/boss-1">
+<article data-candidate-id="1" data-profile-url="/employer/resumes/1">
   <h2>王小明</h2>
   <p data-field="title">高级后端工程师</p>
   <p data-field="company">星河智能</p>
@@ -57,7 +57,7 @@ const detailFixture = `
 `;
 
 const secondResumeListFixture = `
-<article data-candidate-id="boss-2" data-profile-url="/employer/resumes/boss-2">
+<article data-candidate-id="2" data-profile-url="/employer/resumes/2">
   <h2>李小红</h2>
   <p data-field="title">Node.js 后端工程师</p>
   <p data-field="company">云帆科技</p>
@@ -84,10 +84,11 @@ const chatPlan: CandidateActionPlan = {
 
 const unsafeProfileUrls = [
   'http://[',
-  'https://evil.example.com/employer/resumes/boss-1',
+  'https://evil.example.com/employer/resumes/1',
   'javascript:alert(1)',
   '/employer/resumes',
   '/employer/resumes/',
+  '/employer/resumes/boss-visible-flow-5381d7473713-ada',
   '/employer/jobs/new',
 ];
 
@@ -321,8 +322,8 @@ describe('BossLikeCandidateSourceAdapter', () => {
   it('extracts candidate cards from a structured resume list snapshot', () => {
     expect(extractBossLikeCandidatesFromHtml(resumeListFixture)).toEqual([
       {
-        platformCandidateId: 'boss-1',
-        profileUrl: '/employer/resumes/boss-1',
+        platformCandidateId: '1',
+        profileUrl: '/employer/resumes/1',
         name: '王小明',
         title: '高级后端工程师',
         company: '星河智能',
@@ -333,32 +334,40 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('opens detail pages when list cards have short resume text', async () => {
-    const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
-      shortResumeListFixture,
-      detailFixture,
-    ]);
+    const executor = new FakeBrowserExecutor([shortResumeListFixture, detailFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     const batches = await collectAsyncBatches(
       adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }),
     );
 
-    expect(executor.calls).toContain('navigate:http://localhost:6183/employer/resumes/boss-1');
+    expect(executor.calls).toContain('navigate:http://localhost:6183/employer/resumes/1');
     expect(batches).toHaveLength(1);
     expect(batches[0]?.candidates).toEqual([
       expect.objectContaining({
-        platformCandidateId: 'boss-1',
+        platformCandidateId: '1',
         resumeText: 'Java Spring Boot 高并发 微服务 分布式 系统设计',
       }),
     ]);
   });
 
+  it('uses the caller-authenticated session without performing a second login check while searching', async () => {
+    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', resumeListFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await adapter.loginIfNeeded();
+    executor.clearCalls();
+
+    const batches = await collectAsyncBatches(
+      adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }),
+    );
+
+    expect(executor.calls.filter((call) => call === 'snapshot')).toHaveLength(1);
+    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('1');
+  });
+
   it('waits for candidate cards instead of ambiguous resume text before reading snapshots', async () => {
-    const executor = new AmbiguousResumeTextExecutor([
-      '<main>候选人列表</main>',
-      resumeListFixture,
-    ]);
+    const executor = new AmbiguousResumeTextExecutor([resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     const batches = await collectAsyncBatches(
@@ -367,15 +376,11 @@ describe('BossLikeCandidateSourceAdapter', () => {
 
     expect(executor.calls).toContain('check:article[data-candidate-id]');
     expect(executor.calls).not.toContain('waitForText:简历');
-    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('boss-1');
+    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('1');
   });
 
   it('submits each keyword search and continues after an empty result page', async () => {
-    const executor = new EmptyThenResultExecutor([
-      '<main>候选人列表</main>',
-      '<main>暂无简历数据</main>',
-      resumeListFixture,
-    ]);
+    const executor = new EmptyThenResultExecutor(['<main>暂无简历数据</main>', resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     const batches = await collectAsyncBatches(
@@ -386,7 +391,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
     );
 
     expect(executor.calls.filter((call) => call === 'click:搜索')).toHaveLength(2);
-    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('boss-1');
+    expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('1');
   });
 
   it('requires raw browser snapshots for candidate search', async () => {
@@ -399,7 +404,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('rejects blank browser snapshots during candidate search', async () => {
-    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', '   ']);
+    const executor = new FakeBrowserExecutor(['   ']);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     await expect(
@@ -408,11 +413,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('rejects blank browser snapshots during detail enrichment', async () => {
-    const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
-      shortResumeListFixture,
-      '\n\t ',
-    ]);
+    const executor = new FakeBrowserExecutor([shortResumeListFixture, '\n\t ']);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     await expect(
@@ -422,7 +423,6 @@ describe('BossLikeCandidateSourceAdapter', () => {
 
   it('restores the resume list before continuing keyword search after detail enrichment', async () => {
     const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
       shortResumeListFixture,
       detailFixture,
       secondResumeListFixture,
@@ -438,7 +438,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
     );
 
     const detailNavigationIndex = executor.calls.indexOf(
-      'navigate:http://localhost:6183/employer/resumes/boss-1',
+      'navigate:http://localhost:6183/employer/resumes/1',
     );
     const secondKeywordFillIndex = executor.calls.indexOf('fill:搜索候选人:Node');
     const restoredListIndex = executor.calls.findIndex(
@@ -447,19 +447,15 @@ describe('BossLikeCandidateSourceAdapter', () => {
     );
 
     expect(batches[0]?.candidates.map((candidate) => candidate.platformCandidateId)).toEqual([
-      'boss-1',
-      'boss-2',
+      '1',
+      '2',
     ]);
     expect(restoredListIndex).toBeGreaterThan(detailNavigationIndex);
     expect(restoredListIndex).toBeLessThan(secondKeywordFillIndex);
   });
 
   it('trims and deduplicates keywords before searching', async () => {
-    const executor = new FakeBrowserExecutor([
-      '<main>候选人列表</main>',
-      resumeListFixture,
-      secondResumeListFixture,
-    ]);
+    const executor = new FakeBrowserExecutor([resumeListFixture, secondResumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
     const noisyKeywordPlan: SearchPlan = {
       ...searchPlan,
@@ -477,7 +473,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('falls back to retrieval query when keywords normalize to empty', async () => {
-    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', resumeListFixture]);
+    const executor = new FakeBrowserExecutor([resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
     const blankKeywordPlan: SearchPlan = {
       ...searchPlan,
@@ -495,7 +491,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
   });
 
   it('executes collect and chat only through explicit adapter methods', async () => {
-    const executor = new FakeBrowserExecutor(['<main>候选人列表</main>', resumeListFixture]);
+    const executor = new FakeBrowserExecutor([resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
     await collectAsyncBatches(
@@ -509,11 +505,11 @@ describe('BossLikeCandidateSourceAdapter', () => {
     await adapter.collectCandidate({
       candidateId: 'candidate-1',
       displayName: '王小明',
-      profileUrl: '/employer/resumes/boss-1',
+      profileUrl: '/employer/resumes/1',
     });
 
     expect(executor.calls).toEqual([
-      'navigate:http://localhost:6183/employer/resumes/boss-1',
+      'navigate:http://localhost:6183/employer/resumes/1',
       'click:收藏',
     ]);
 
@@ -522,13 +518,13 @@ describe('BossLikeCandidateSourceAdapter', () => {
       {
         candidateId: 'candidate-1',
         displayName: '王小明',
-        profileUrl: '/employer/resumes/boss-1',
+        profileUrl: '/employer/resumes/1',
       },
       chatPlan,
     );
 
     expect(executor.calls).toEqual([
-      'navigate:http://localhost:6183/employer/resumes/boss-1',
+      'navigate:http://localhost:6183/employer/resumes/1',
       'click:打招呼',
       `fill:消息:${chatPlan.message}`,
       'click:发送',

@@ -4,6 +4,7 @@ import type {
   CandidateInterviewRecordDto,
   CandidateResumeLibraryItemDto,
   CandidateScreeningDetailDto,
+  CandidateScreeningRunEventDto,
   CandidateScreeningResultDto,
   CandidateScreeningResultListItem,
   CandidateScreeningRunDto,
@@ -78,6 +79,24 @@ export async function fetchCandidateScreeningRun(runId: string): Promise<Candida
     throw new Error(data.error || '加载候选人筛选进度失败');
   }
   return data.run;
+}
+
+export async function fetchCandidateScreeningRunWithEvents(runId: string): Promise<{
+  run: CandidateScreeningRunDto;
+  events: CandidateScreeningRunEventDto[];
+}> {
+  const response = await fetch(`/api/candidate-screening/runs/${runId}`);
+  const data = await readJson<{
+    run?: CandidateScreeningRunDto;
+    events?: CandidateScreeningRunEventDto[];
+  }>(response);
+  if (!response.ok || !data.run) {
+    throw new Error(data.error || '加载候选人筛选进度失败');
+  }
+  return {
+    run: data.run,
+    events: Array.isArray(data.events) ? data.events : [],
+  };
 }
 
 export async function fetchCandidateTrackingOverview(
