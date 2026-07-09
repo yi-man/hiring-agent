@@ -2,6 +2,7 @@ const DEFAULT_SERVER_BASE_URL = 'http://localhost:3000';
 const SOCKET_PATH = '/api/browser-automation/socket';
 const SESSION_COOKIE_NAME = 'hiring-agent.session';
 const RECONNECT_DELAY_MS = 1000;
+const SOCKET_HANDSHAKE_TIMEOUT_MS = 10000;
 const CONTENT_SCRIPT_FILE = 'content-script.js';
 
 let connectInFlight = false;
@@ -293,6 +294,39 @@ function sendSocketMessage(socket, message) {
   }
 }
 
+function waitForSocketHandshake(socket) {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(finish, SOCKET_HANDSHAKE_TIMEOUT_MS);
+
+    function cleanup() {
+      clearTimeout(timeout);
+      socket.removeEventListener('message', onMessage);
+      socket.removeEventListener('error', finish);
+      socket.removeEventListener('close', finish);
+    }
+
+    function finish() {
+      cleanup();
+      resolve();
+    }
+
+    function onMessage(event) {
+      try {
+        const message = JSON.parse(event.data);
+        if (message?.type === 'ready') {
+          finish();
+        }
+      } catch {
+        finish();
+      }
+    }
+
+    socket.addEventListener('message', onMessage);
+    socket.addEventListener('error', finish, { once: true });
+    socket.addEventListener('close', finish, { once: true });
+  });
+}
+
 async function handleSocketMessage(socket, config, event) {
   let message;
   try {
@@ -402,6 +436,8 @@ async function startConnection() {
       });
       scheduleReconnect();
     });
+
+    await waitForSocketHandshake(socket);
   } catch (error) {
     const config = await getConfig().catch(() => ({
       serverBaseUrl: DEFAULT_SERVER_BASE_URL,
