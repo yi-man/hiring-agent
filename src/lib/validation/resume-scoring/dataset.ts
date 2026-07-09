@@ -3,7 +3,7 @@ import type {
   CandidateCalibrationCategory,
   CandidateDecisionAction,
   CandidateDecisionPriority,
-} from './types';
+} from '@/lib/candidate-screening/types';
 
 export type CandidateScoringDatasetSample = {
   id: string;

@@ -32,6 +32,7 @@
     "obs:realtime": "bun run obs:run -- realtime",
     "obs:retention": "bun run obs:run -- retention",
     "candidate-screening:calibration": "bunx tsx src/scripts/candidate-screening-calibration.ts",
+    "validation:resume-scoring": "bunx tsx src/scripts/validation-resume-scoring.ts",
     "test:integration:auth": "bunx jest tests/integration/auth/real-deps-auth.e2e.test.ts --runInBand --coverage=false",
     "prepare": "husky",
     "clean": "rm -rf .next node_modules coverage",

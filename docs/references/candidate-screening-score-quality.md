@@ -79,7 +79,20 @@ flowchart TD
 初始 golden sample 数据集已经落在仓库里：
 
 ```text
-src/lib/candidate-screening/datasets/scoring-golden-samples.v1.json
+src/lib/validation/resume-scoring/datasets/scoring-golden-samples.v1.json
+```
+
+它属于通用验证模块 `src/lib/validation/`：
+
+```text
+src/lib/validation/
+└── resume-scoring/
+    ├── dataset.ts
+    ├── datasets/
+    │   └── scoring-golden-samples.v1.json
+    └── scripts/
+        ├── dataset-ops.ts
+        └── ops.ts
 ```
 
 数据集按岗位类型维护，每类 4 条样本：
@@ -103,18 +116,22 @@ src/lib/candidate-screening/datasets/scoring-golden-samples.v1.json
 
 这份数据集的定位是“初始校准集 + 小样本真实回归集”。后续真实招聘中发现误判时，不建议直接改 prompt；优先把误判样本沉淀进这个数据集或调整对应岗位类型的锚点。
 
-## 校准集命令
+## 校准集与验证命令
 
-本地提供了一个校准集查看和诊断命令：
+本地提供了两个命令入口：
+
+- `candidate-screening:calibration`：查看岗位校准锚点、诊断 JD 会落到哪个岗位类型。
+- `validation:resume-scoring`：查看和导出简历评分 golden sample 数据集，作为小样本回归输入。
 
 ```bash
 bun run candidate-screening:calibration -- list
 bun run candidate-screening:calibration -- show technical
 bun run candidate-screening:calibration -- doctor 高级后端工程师 Java Spring Boot 高并发
 bun run candidate-screening:calibration -- export sales
-bun run candidate-screening:calibration -- dataset
-bun run candidate-screening:calibration -- dataset show technical
-bun run candidate-screening:calibration -- dataset export data_ai
+
+bun run validation:resume-scoring -- dataset
+bun run validation:resume-scoring -- dataset show technical
+bun run validation:resume-scoring -- dataset export data_ai
 ```
 
 命令用途：
@@ -135,9 +152,9 @@ bun run candidate-screening:calibration -- dataset export data_ai
 2. 如果归类不符合预期，优先调整 `src/lib/candidate-screening/calibration.ts` 的类型识别规则。
 3. 如果归类正确但评分偏差高，调整对应岗位类型的锚点和 guidance。
 4. 锚点或分类变化后，升级 `CANDIDATE_SCREENING_CALIBRATION_VERSION`。
-5. 用 `dataset show <category>` 找到最接近的强匹配、边界或弱匹配样本。
+5. 用 `bun run validation:resume-scoring -- dataset show <category>` 找到最接近的强匹配、边界或弱匹配样本。
 6. 如果真实误判无法被现有样本覆盖，把匿名化后的 JD + 简历 + 人工预期动作加入数据集。
-7. 用 `dataset export <category>` 作为 prompt、模型或校准集变化后的真实小样本回归输入。
+7. 用 `bun run validation:resume-scoring -- dataset export <category>` 作为 prompt、模型或校准集变化后的真实小样本回归输入。
 
 ## 低成本迭代机制
 
@@ -161,14 +178,14 @@ bun run candidate-screening:calibration -- dataset export data_ai
 
 常见修改对应文件：
 
-| 想调整什么                          | 文件                                                                  |
-| ----------------------------------- | --------------------------------------------------------------------- |
-| 岗位类型识别、默认校准锚点          | `src/lib/candidate-screening/calibration.ts`                          |
-| 简历评分 golden sample 数据集       | `src/lib/candidate-screening/datasets/scoring-golden-samples.v1.json` |
-| prompt 文案和输出约束               | `src/lib/candidate-screening/prompts.ts`                              |
-| 评分公式、`llmBonus` 范围、版本写入 | `src/lib/candidate-screening/scoring.ts`                              |
-| 历史评分复用判断                    | `src/lib/candidate-screening/runner.ts`                               |
-| 质量版本常量                        | `src/lib/candidate-screening/constants.ts`                            |
+| 想调整什么                          | 文件                                         |
+| ----------------------------------- | -------------------------------------------- |
+| 岗位类型识别、默认校准锚点          | `src/lib/candidate-screening/calibration.ts` |
+| 简历评分验证模块与数据集            | `src/lib/validation/resume-scoring/`         |
+| prompt 文案和输出约束               | `src/lib/candidate-screening/prompts.ts`     |
+| 评分公式、`llmBonus` 范围、版本写入 | `src/lib/candidate-screening/scoring.ts`     |
+| 历史评分复用判断                    | `src/lib/candidate-screening/runner.ts`      |
+| 质量版本常量                        | `src/lib/candidate-screening/constants.ts`   |
 
 版本升级规则：
 
