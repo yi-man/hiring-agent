@@ -1,4 +1,4 @@
-import { invokeLlmChat } from './openai-chat';
+import { invokeLlmChat, resetLlmProviderCircuitBreakers } from './openai-chat';
 
 jest.mock('@/lib/env', () => ({
   env: {
@@ -7,6 +7,17 @@ jest.mock('@/lib/env', () => ({
     OPENAI_MODEL: 'test-model',
     OPENAI_JSON_MODE: true,
     JD_LLM_TIMEOUT_MS: 1000,
+    LLM_PROVIDER_ORDER: 'openai',
+    LLM_MAX_RETRIES: 0,
+    LLM_RETRY_BACKOFF_MS: 0,
+    LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD: 3,
+    LLM_CIRCUIT_BREAKER_COOLDOWN_MS: 60000,
+    DEEPSEEK_API_KEY: undefined,
+    DEEPSEEK_BASE_URL: 'https://api.deepseek.com/v1',
+    DEEPSEEK_MODEL: undefined,
+    DOUBAO_API_KEY: undefined,
+    DOUBAO_BASE_URL: 'https://ark.cn-beijing.volces.com/api/v3',
+    DOUBAO_MODEL: undefined,
   },
 }));
 
@@ -21,6 +32,17 @@ const mockEnv = jest.requireMock('@/lib/env').env as {
   OPENAI_MODEL: string;
   OPENAI_JSON_MODE: boolean;
   JD_LLM_TIMEOUT_MS: number;
+  LLM_PROVIDER_ORDER: string;
+  LLM_MAX_RETRIES: number;
+  LLM_RETRY_BACKOFF_MS: number;
+  LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD: number;
+  LLM_CIRCUIT_BREAKER_COOLDOWN_MS: number;
+  DEEPSEEK_API_KEY?: string;
+  DEEPSEEK_BASE_URL: string;
+  DEEPSEEK_MODEL?: string;
+  DOUBAO_API_KEY?: string;
+  DOUBAO_BASE_URL: string;
+  DOUBAO_MODEL?: string;
 };
 
 const { recordLlmCallStart, recordLlmCallEnd } = jest.requireMock(
@@ -41,8 +63,20 @@ describe('invokeLlmChat', () => {
     mockEnv.OPENAI_MODEL = 'test-model';
     mockEnv.OPENAI_JSON_MODE = true;
     mockEnv.JD_LLM_TIMEOUT_MS = 1000;
+    mockEnv.LLM_PROVIDER_ORDER = 'openai';
+    mockEnv.LLM_MAX_RETRIES = 0;
+    mockEnv.LLM_RETRY_BACKOFF_MS = 0;
+    mockEnv.LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+    mockEnv.LLM_CIRCUIT_BREAKER_COOLDOWN_MS = 60000;
+    mockEnv.DEEPSEEK_API_KEY = undefined;
+    mockEnv.DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
+    mockEnv.DEEPSEEK_MODEL = undefined;
+    mockEnv.DOUBAO_API_KEY = undefined;
+    mockEnv.DOUBAO_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
+    mockEnv.DOUBAO_MODEL = undefined;
     recordLlmCallStart.mockClear();
     recordLlmCallEnd.mockClear();
+    resetLlmProviderCircuitBreakers();
   });
 
   afterEach(() => {
@@ -98,6 +132,12 @@ describe('invokeLlmChat', () => {
       usage: { promptTokens: 7, completionTokens: 5, totalTokens: 12 },
     });
     expect(result.meta.request.headers.Authorization).toBe('Bearer ***');
+    expect(result.meta.request.payload).toMatchObject({
+      messages: [
+        { role: 'system', content: '[redacted:6 chars]' },
+        { role: 'user', content: '[redacted:4 chars]' },
+      ],
+    });
     expect(recordLlmCallStart).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: 'https://llm.example/v1/chat/completions',
@@ -110,6 +150,10 @@ describe('invokeLlmChat', () => {
           providerRequest: expect.objectContaining({
             model: 'test-model',
             response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: '[redacted:6 chars]' },
+              { role: 'user', content: '[redacted:4 chars]' },
+            ],
           }),
         }),
       }),
@@ -122,6 +166,9 @@ describe('invokeLlmChat', () => {
         outputTokens: 5,
         totalTokens: 12,
         finalOutcome: 'success',
+        responsePayload: expect.objectContaining({
+          choices: [{ message: { content: '[redacted:11 chars]' } }],
+        }),
       }),
     );
   });
@@ -200,5 +247,143 @@ describe('invokeLlmChat', () => {
         finalOutcome: 'error',
       }),
     );
+  });
+
+  it('retries transient provider errors before returning success from the same provider', async () => {
+    mockEnv.LLM_MAX_RETRIES = 1;
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => JSON.stringify({ error: { message: 'upstream overloaded' } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { content: 'ok after retry' } }],
+            usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+          }),
+      } as Response);
+
+    const result = await invokeLlmChat({
+      operation: 'chat.reply',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result).toMatchObject({ content: 'ok after retry', provider: 'openai' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(recordLlmCallEnd).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        finalOutcome: 'success',
+        httpStatus: 200,
+      }),
+    );
+    expect(recordLlmCallStart).toHaveBeenCalledWith(expect.objectContaining({ retryCount: 1 }));
+  });
+
+  it('falls back to the next configured provider after retryable primary provider failure', async () => {
+    mockEnv.LLM_PROVIDER_ORDER = 'deepseek,doubao';
+    mockEnv.LLM_MAX_RETRIES = 0;
+    mockEnv.DEEPSEEK_API_KEY = 'deepseek-key';
+    mockEnv.DEEPSEEK_BASE_URL = 'https://deepseek.example/v1';
+    mockEnv.DEEPSEEK_MODEL = 'deepseek-chat';
+    mockEnv.DOUBAO_API_KEY = 'doubao-key';
+    mockEnv.DOUBAO_BASE_URL = 'https://doubao.example/api/v3';
+    mockEnv.DOUBAO_MODEL = 'doubao-chat';
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ error: { message: 'deepseek unavailable' } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { content: 'doubao result' } }],
+            usage: { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 },
+          }),
+      } as Response);
+
+    const result = await invokeLlmChat({
+      operation: 'jd-agent.generate',
+      messages: [{ role: 'user', content: 'write jd' }],
+    });
+
+    expect(result).toMatchObject({
+      content: 'doubao result',
+      provider: 'doubao',
+      model: 'doubao-chat',
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://deepseek.example/v1/chat/completions',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer deepseek-key' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://doubao.example/api/v3/chat/completions',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer doubao-key' }),
+      }),
+    );
+    expect(recordLlmCallStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'doubao',
+        model: 'doubao-chat',
+        retryCount: 1,
+      }),
+    );
+  });
+
+  it('opens the provider circuit after repeated retryable failures and skips it until cooldown', async () => {
+    mockEnv.LLM_PROVIDER_ORDER = 'deepseek,doubao';
+    mockEnv.LLM_MAX_RETRIES = 0;
+    mockEnv.LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 1;
+    mockEnv.LLM_CIRCUIT_BREAKER_COOLDOWN_MS = 60000;
+    mockEnv.DEEPSEEK_API_KEY = 'deepseek-key';
+    mockEnv.DEEPSEEK_BASE_URL = 'https://deepseek.example/v1';
+    mockEnv.DEEPSEEK_MODEL = 'deepseek-chat';
+    mockEnv.DOUBAO_API_KEY = 'doubao-key';
+    mockEnv.DOUBAO_BASE_URL = 'https://doubao.example/api/v3';
+    mockEnv.DOUBAO_MODEL = 'doubao-chat';
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ error: { message: 'deepseek unavailable' } }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ choices: [{ message: { content: 'first fallback' } }] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ choices: [{ message: { content: 'second fallback' } }] }),
+      } as Response);
+
+    await invokeLlmChat({
+      operation: 'chat.reply',
+      messages: [{ role: 'user', content: 'first' }],
+    });
+    const second = await invokeLlmChat({
+      operation: 'chat.reply',
+      messages: [{ role: 'user', content: 'second' }],
+    });
+
+    expect(second).toMatchObject({ content: 'second fallback', provider: 'doubao' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[2][0]).toBe('https://doubao.example/api/v3/chat/completions');
   });
 });

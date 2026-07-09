@@ -115,6 +115,59 @@ flowchart LR
 
 注意：包含 JSON 示例的 prompt 要用 `templateFormat: 'mustache'`，避免 LangChain 默认 f-string 把 `{}` 当变量解析。
 
+## Prompt 测试与回滚
+
+当前 registry 是代码内静态注册，所以 prompt 变化的质量保证走代码交付链路：
+
+1. 每个 prompt 定义必须有稳定 `id` 和显式 `version`。
+2. `src/lib/prompt-management/registry.test.ts` 覆盖应用级注册清单和关键渲染结果，防止 prompt 漏注册、版本缺失或变量渲染坏掉。
+3. `src/lib/prompt-management/registry-core.test.ts` 覆盖 core registry 的依赖边界，防止核心 registry 重新 import 业务 prompt。
+4. 业务模块测试验证 LLM 调用时会把 `prompt.id`、`prompt.version`、`messages` 和模型选项传给统一网关。
+5. 对评分、动作决策这类高风险 prompt，继续使用 golden sample / calibration 流程比较分数、动作和标签漂移。
+
+回滚也按代码版本处理：
+
+- 如果 prompt 文案或变量协议出错，优先 `git revert` 对应 prompt commit，重新部署即可恢复旧 prompt。
+- 如果一个业务 prompt 需要保留新旧两版并行灰度，可以在业务 `prompts.ts` 中保留两个 `ManagedPromptDefinition`，在 `app-registry.ts` 注册两个不同 id 或版本化 id，再由业务入口选择版本。
+- 业务结果和 LLM observability 都记录 `promptVersion`，所以回滚后可以按版本对比线上效果。
+
+短期不把 prompt 放进数据库热改，是为了保证 prompt 变化都能 code review、测试、随部署回滚。后续如果接 LangSmith Prompt Hub 或数据库 registry，本地 registry 仍应作为 fallback，并保留版本、审批和回归测试门禁。
+
+## LLM 网关策略
+
+`invokeLlmChat` 负责 provider 层的通用治理：
+
+- 统一 OpenAI-compatible `/chat/completions` 请求；
+- timeout：默认 `JD_LLM_TIMEOUT_MS`，调用方可传 `timeoutMs` 覆盖；
+- JSON mode fallback：provider 明确不支持 `response_format: json_object` 时，自动去掉该参数重发一次；
+- transient retry：仅对 `408/409/425/429/5xx`、timeout、网络错误、空响应重试；
+- provider fallback：按 `LLM_PROVIDER_ORDER` 在已配置 key 的 provider 间切换，例如 `deepseek,doubao,openai`；
+- circuit breaker：某 provider 连续失败达到阈值后，在冷却窗口内跳过它；
+- observability：记录最终 provider/model、retryCount、usage、HTTP status 和 providerAttempts；
+- 脱敏：Authorization 始终写为 `Bearer ***`，prompt messages 和 assistant content 只记录长度标记，不直接落原文。
+
+配置示例：
+
+```env
+LLM_PROVIDER_ORDER=deepseek,doubao,openai
+LLM_MAX_RETRIES=1
+LLM_RETRY_BACKOFF_MS=200
+LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3
+LLM_CIRCUIT_BREAKER_COOLDOWN_MS=60000
+DEEPSEEK_API_KEY=...
+DEEPSEEK_MODEL=deepseek-chat
+DOUBAO_API_KEY=...
+DOUBAO_MODEL=...
+```
+
+不放在网关里的逻辑：
+
+- 业务 JSON schema 解析失败后的“再问一次”；
+- 分数、动作、候选人状态等业务语义错误；
+- 可能产生重复副作用的操作重试。
+
+这些必须由业务层判断，因为只有业务知道某次重试是否幂等、是否应该换 prompt、是否应该进入人工复核。
+
 ## 与 LangGraph 的关系
 
 LangGraph 管流程状态和节点，PromptRegistry 管 prompt 资产。推荐模式是：

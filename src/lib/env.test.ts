@@ -46,6 +46,30 @@ describe('env.ts - 环境变量解析', () => {
       expect(parseEnv({ JD_LLM_MOCK: 'true' })).not.toHaveProperty('JD_LLM_MOCK');
     });
 
+    it('解析 LLM provider fallback 与熔断配置', () => {
+      const result = parseEnv({
+        LLM_PROVIDER_ORDER: 'deepseek,doubao,openai',
+        LLM_MAX_RETRIES: '2',
+        LLM_RETRY_BACKOFF_MS: '50',
+        LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD: '4',
+        LLM_CIRCUIT_BREAKER_COOLDOWN_MS: '30000',
+        DEEPSEEK_API_KEY: 'deepseek-key',
+        DEEPSEEK_MODEL: 'deepseek-chat',
+        DOUBAO_API_KEY: 'doubao-key',
+        DOUBAO_MODEL: 'doubao-model',
+      });
+
+      expect(result.LLM_PROVIDER_ORDER).toBe('deepseek,doubao,openai');
+      expect(result.LLM_MAX_RETRIES).toBe(2);
+      expect(result.LLM_RETRY_BACKOFF_MS).toBe(50);
+      expect(result.LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD).toBe(4);
+      expect(result.LLM_CIRCUIT_BREAKER_COOLDOWN_MS).toBe(30000);
+      expect(result.DEEPSEEK_API_KEY).toBe('deepseek-key');
+      expect(result.DEEPSEEK_MODEL).toBe('deepseek-chat');
+      expect(result.DOUBAO_API_KEY).toBe('doubao-key');
+      expect(result.DOUBAO_MODEL).toBe('doubao-model');
+    });
+
     it('正确处理无效环境变量（ZodError）', () => {
       // 捕获 console.error 输出
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();

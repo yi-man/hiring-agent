@@ -34,9 +34,20 @@ export type LlmProviderCallMeta = {
   response: LlmProviderResponseMeta;
 };
 
+export type LlmProviderAttemptMeta = {
+  provider: string;
+  model: string;
+  endpoint: string;
+  status?: number;
+  outcome: 'success' | 'error' | 'skipped';
+  error?: string;
+};
+
 export type LlmChatResult = {
   content: string;
+  provider: string;
   model: string;
   usage: LlmTokenUsage;
   meta: LlmProviderCallMeta;
+  attempts?: LlmProviderAttemptMeta[];
 };
