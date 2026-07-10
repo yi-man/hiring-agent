@@ -66,6 +66,10 @@ function isInternalLlmRuntimeImport(fromFile: string, specifier: string): boolea
   );
 }
 
+function isDirectLlmRuntimeImport(specifier: string): boolean {
+  return specifier === '@langchain/openai' || specifier.startsWith('@langchain/core/runnables');
+}
+
 describe('llm package boundary', () => {
   it('keeps LLM runtime wrappers inside src/lib/llm', () => {
     const chatFiles = productionFilesUnder(path.join(srcRoot, 'lib/chat'));
@@ -79,8 +83,7 @@ describe('llm package boundary', () => {
           specifier === '@/lib/llm' ||
           isInternalLlmRuntimeImport(file, specifier) ||
           (resolvedPath ? isInsidePath(resolvedPath, llmObservabilityRoot) : false) ||
-          specifier === '@langchain/openai' ||
-          specifier.startsWith('@langchain/core/runnables')
+          isDirectLlmRuntimeImport(specifier)
         );
       });
 
@@ -97,8 +100,9 @@ describe('llm package boundary', () => {
       }
 
       const source = readFileSync(file, 'utf8');
-      const disallowedInternalImports = moduleSpecifiersIn(source).filter((specifier) =>
-        isInternalLlmRuntimeImport(file, specifier),
+      const disallowedInternalImports = moduleSpecifiersIn(source).filter(
+        (specifier) =>
+          isInternalLlmRuntimeImport(file, specifier) || isDirectLlmRuntimeImport(specifier),
       );
       expect(disallowedInternalImports).toEqual([]);
     }

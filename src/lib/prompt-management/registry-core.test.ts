@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { createPromptRegistry } from './registry';
@@ -22,6 +22,24 @@ const testPromptDefinition: ManagedPromptDefinition = {
   },
 };
 
+function productionFilesUnder(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const fullPath = path.join(dir, entry);
+    const stat = statSync(fullPath);
+    if (stat.isDirectory()) {
+      return productionFilesUnder(fullPath);
+    }
+    if (
+      (!entry.endsWith('.ts') && !entry.endsWith('.tsx')) ||
+      entry.endsWith('.test.ts') ||
+      entry.endsWith('.test.tsx')
+    ) {
+      return [];
+    }
+    return [fullPath];
+  });
+}
+
 describe('prompt registry core', () => {
   it('creates an isolated registry from injected prompt definitions', async () => {
     const registry = createPromptRegistry([testPromptDefinition]);
@@ -40,12 +58,10 @@ describe('prompt registry core', () => {
   });
 
   it('keeps prompt-management independent from business prompt modules', () => {
-    const promptManagementFiles = readdirSync(__dirname).filter(
-      (file) => file.endsWith('.ts') && !file.endsWith('.test.ts'),
-    );
+    const promptManagementFiles = productionFilesUnder(__dirname);
 
     for (const file of promptManagementFiles) {
-      const source = readFileSync(path.join(__dirname, file), 'utf8');
+      const source = readFileSync(file, 'utf8');
       expect(source).not.toMatch(/@\/lib\/(jd-agent|chat|candidate-|workflow-learning)\//);
     }
   });
