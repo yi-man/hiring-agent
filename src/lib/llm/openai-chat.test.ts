@@ -194,16 +194,22 @@ describe('invokeLlmChat', () => {
           }),
       } as Response);
 
-    await expect(
-      invokeLlmChat({
-        operation: 'jd-agent.generate',
-        prompt: { id: 'jd-agent.generate', version: 'jd_v3.3' },
-        messages: [{ role: 'user', content: 'json please' }],
-        temperature: 0.4,
-        responseFormat: 'json_object',
-      }),
-    ).resolves.toMatchObject({ content: '{"ok":true}' });
+    const result = await invokeLlmChat({
+      operation: 'jd-agent.generate',
+      prompt: { id: 'jd-agent.generate', version: 'jd_v3.3' },
+      messages: [{ role: 'user', content: 'json please' }],
+      temperature: 0.4,
+      responseFormat: 'json_object',
+    });
 
+    expect(result).toMatchObject({ content: '{"ok":true}' });
+    expect(result.attempts).toEqual([
+      expect.objectContaining({
+        provider: 'openai',
+        outcome: 'success',
+        compatibilityFallback: 'json_object_unsupported',
+      }),
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string).response_format).toEqual({
       type: 'json_object',
@@ -212,6 +218,13 @@ describe('invokeLlmChat', () => {
     expect(recordLlmCallStart).toHaveBeenCalledWith(
       expect.objectContaining({
         retryCount: 1,
+        requestPayload: expect.objectContaining({
+          providerAttempts: [
+            expect.objectContaining({
+              compatibilityFallback: 'json_object_unsupported',
+            }),
+          ],
+        }),
       }),
     );
   });

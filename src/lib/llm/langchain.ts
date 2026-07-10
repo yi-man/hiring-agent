@@ -7,11 +7,24 @@ export type CreateLangChainChatModelOptions = {
   streaming?: boolean;
 };
 
-type LangChainChatModel = ChatOpenAI | ReturnType<ChatOpenAI['withFallbacks']>;
+type StructuredOutputArgs = Parameters<ChatOpenAI['withStructuredOutput']>;
+type ToolBindingArgs = Parameters<ChatOpenAI['bindTools']>;
+type LangChainFallbackModel = ReturnType<ChatOpenAI['withFallbacks']>;
+type LangChainStructuredOutput = ReturnType<ChatOpenAI['withStructuredOutput']>;
 
-type BindableFallbackModel = ReturnType<ChatOpenAI['withFallbacks']> & {
-  bindTools: ChatOpenAI['bindTools'];
+type PatchedFallbackModel = LangChainFallbackModel & {
+  bindTools(tools: ToolBindingArgs[0], kwargs?: ToolBindingArgs[1]): PatchedFallbackModel;
+  withStructuredOutput(
+    schema: StructuredOutputArgs[0],
+    config?: StructuredOutputArgs[1],
+  ): LangChainStructuredOutput;
   _modelType: ChatOpenAI['_modelType'];
+};
+
+type LangChainChatModel = ChatOpenAI | PatchedFallbackModel;
+
+type FallbackCapableRunnable = {
+  withFallbacks(input: { fallbacks: unknown[] }): unknown;
 };
 
 export function getConfiguredLlmProvider(model?: string): LlmProviderConfig {
@@ -67,15 +80,37 @@ function createChatOpenAiModel(
 function withToolBindingFallbacks(
   primary: ChatOpenAI,
   fallbacks: ChatOpenAI[],
-): BindableFallbackModel {
+): PatchedFallbackModel {
   const models = [primary, ...fallbacks];
-  const fallbackModel = primary.withFallbacks({ fallbacks }) as BindableFallbackModel;
+  const fallbackModel = primary.withFallbacks({ fallbacks });
 
-  fallbackModel.bindTools = ((tools, kwargs) => {
+  return patchFallbackModel(fallbackModel, primary, models);
+}
+
+function patchFallbackModel(
+  fallbackModel: LangChainFallbackModel,
+  primary: ChatOpenAI,
+  models: ChatOpenAI[],
+): PatchedFallbackModel {
+  const patchedFallbackModel = fallbackModel as PatchedFallbackModel;
+
+  patchedFallbackModel._modelType = primary._modelType.bind(primary) as ChatOpenAI['_modelType'];
+  patchedFallbackModel.withStructuredOutput = ((schema, config) => {
+    const [structuredPrimary, ...structuredFallbacks] = models.map((model) =>
+      model.withStructuredOutput(schema, config),
+    );
+    return (structuredPrimary as unknown as FallbackCapableRunnable).withFallbacks({
+      fallbacks: structuredFallbacks,
+    }) as LangChainStructuredOutput;
+  }) as PatchedFallbackModel['withStructuredOutput'];
+
+  patchedFallbackModel.bindTools = ((tools, kwargs) => {
     const [boundPrimary, ...boundFallbacks] = models.map((model) => model.bindTools(tools, kwargs));
-    return boundPrimary.withFallbacks({ fallbacks: boundFallbacks });
-  }) as ChatOpenAI['bindTools'];
-  fallbackModel._modelType = primary._modelType.bind(primary) as ChatOpenAI['_modelType'];
+    const boundFallbackModel = (boundPrimary as unknown as FallbackCapableRunnable).withFallbacks({
+      fallbacks: boundFallbacks,
+    }) as LangChainFallbackModel;
+    return patchFallbackModel(boundFallbackModel, primary, models);
+  }) as PatchedFallbackModel['bindTools'];
 
-  return fallbackModel;
+  return patchedFallbackModel;
 }

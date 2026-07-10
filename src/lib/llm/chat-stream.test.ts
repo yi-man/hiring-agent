@@ -37,7 +37,22 @@ jest.mock('@langchain/core/messages', () => ({
 }));
 
 jest.mock('@langchain/openai', () => ({
-  ChatOpenAI: jest.fn().mockImplementation(() => ({})),
+  ChatOpenAI: jest.fn().mockImplementation(() => {
+    const instance = {
+      withFallbacks: jest.fn(({ fallbacks }) => ({
+        type: 'fallback-chain',
+        fallbacks,
+      })),
+      bindTools: jest.fn(() => ({
+        withFallbacks: jest.fn(({ fallbacks }) => ({
+          type: 'bound-fallback-chain',
+          fallbacks,
+        })),
+      })),
+      _modelType: jest.fn(() => 'base_chat_model'),
+    };
+    return instance;
+  }),
 }));
 
 jest.mock('@/lib/env', () => ({
@@ -45,6 +60,13 @@ jest.mock('@/lib/env', () => ({
     OPENAI_API_KEY: 'test-key',
     OPENAI_BASE_URL: 'https://api.openai.com/v1',
     OPENAI_MODEL: 'gpt-4o-mini',
+    LLM_PROVIDER_ORDER: 'openai',
+    DEEPSEEK_API_KEY: undefined,
+    DEEPSEEK_BASE_URL: 'https://deepseek.example/v1',
+    DEEPSEEK_MODEL: undefined,
+    DOUBAO_API_KEY: undefined,
+    DOUBAO_BASE_URL: 'https://doubao.example/api/v3',
+    DOUBAO_MODEL: undefined,
   },
 }));
 
@@ -70,6 +92,18 @@ jest.mock('@/lib/llm-observability/log-service', () => ({
 
 describe('streamChatReply observability', () => {
   let chainModule: typeof import('@/lib/llm/chat-stream');
+  let mockEnv: {
+    OPENAI_API_KEY?: string;
+    OPENAI_BASE_URL: string;
+    OPENAI_MODEL: string;
+    LLM_PROVIDER_ORDER: string;
+    DEEPSEEK_API_KEY?: string;
+    DEEPSEEK_BASE_URL: string;
+    DEEPSEEK_MODEL?: string;
+    DOUBAO_API_KEY?: string;
+    DOUBAO_BASE_URL: string;
+    DOUBAO_MODEL?: string;
+  };
   let recordLlmCallStart: jest.Mock;
   let recordLlmCallEnd: jest.Mock;
 
@@ -77,6 +111,17 @@ describe('streamChatReply observability', () => {
     jest.resetModules();
     mockStream.mockReset();
     chainModule = await import('@/lib/llm/chat-stream');
+    mockEnv = jest.requireMock('@/lib/env').env;
+    mockEnv.OPENAI_API_KEY = 'test-key';
+    mockEnv.OPENAI_BASE_URL = 'https://api.openai.com/v1';
+    mockEnv.OPENAI_MODEL = 'gpt-4o-mini';
+    mockEnv.LLM_PROVIDER_ORDER = 'openai';
+    mockEnv.DEEPSEEK_API_KEY = undefined;
+    mockEnv.DEEPSEEK_BASE_URL = 'https://deepseek.example/v1';
+    mockEnv.DEEPSEEK_MODEL = undefined;
+    mockEnv.DOUBAO_API_KEY = undefined;
+    mockEnv.DOUBAO_BASE_URL = 'https://doubao.example/api/v3';
+    mockEnv.DOUBAO_MODEL = undefined;
     ({ recordLlmCallStart, recordLlmCallEnd } = jest.requireMock(
       '@/lib/llm-observability/log-service',
     ) as {
@@ -135,5 +180,46 @@ describe('streamChatReply observability', () => {
     const endPayload = JSON.stringify(recordLlmCallEnd.mock.calls[0][1].responsePayload);
     expect(endPayload).not.toContain('assistant secret');
     expect(endPayload).toContain('[redacted:');
+  });
+
+  it('records multi-provider streaming fallback as a fallback chain instead of the primary provider', async () => {
+    const { AIMessageChunk } = jest.requireMock('@langchain/core/messages') as {
+      AIMessageChunk: new (content: unknown) => unknown;
+    };
+    mockEnv.LLM_PROVIDER_ORDER = 'deepseek,openai';
+    mockEnv.DEEPSEEK_API_KEY = 'deepseek-key';
+    mockEnv.DEEPSEEK_MODEL = 'deepseek-chat';
+    mockStream.mockResolvedValueOnce(
+      (async function* () {
+        yield new AIMessageChunk('ok');
+      })(),
+    );
+
+    const { chunks } = await chainModule.streamChatReply('conv-1', 'hello');
+    for await (const chunk of chunks) {
+      expect(chunk).toBe('ok');
+    }
+
+    expect(recordLlmCallStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: 'langchain-fallback-chain',
+        provider: 'langchain-fallback-chain',
+        model: 'deepseek-chat,gpt-4o-mini',
+        requestPayload: expect.objectContaining({
+          providerChain: [
+            {
+              provider: 'deepseek',
+              model: 'deepseek-chat',
+              endpoint: 'https://deepseek.example/v1/chat/completions',
+            },
+            {
+              provider: 'openai',
+              model: 'gpt-4o-mini',
+              endpoint: 'https://api.openai.com/v1/chat/completions',
+            },
+          ],
+        }),
+      }),
+    );
   });
 });

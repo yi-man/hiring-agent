@@ -44,6 +44,22 @@ type ProviderAttemptResult = {
   meta: LlmProviderCallMeta;
 };
 
+type ProviderCallCompatibilityFallback = NonNullable<
+  LlmProviderAttemptMeta['compatibilityFallback']
+>;
+
+type ProviderCallResult =
+  | {
+      attempt: ProviderAttemptResult;
+      payload: object;
+      compatibilityFallback?: ProviderCallCompatibilityFallback;
+    }
+  | {
+      error: Error & { meta?: LlmProviderCallMeta; llmMeta?: LlmProviderCallMeta };
+      payload: object;
+      compatibilityFallback?: ProviderCallCompatibilityFallback;
+    };
+
 export type LlmProviderId = 'openai' | 'deepseek' | 'doubao';
 
 export type LlmProviderConfig = {
@@ -427,22 +443,10 @@ async function callProviderWithJsonFallback(params: {
   input: InvokeLlmChatInput;
   timeoutMs: number;
   onProviderCall(payload: object): void;
-}): Promise<
-  | { attempt: ProviderAttemptResult; payload: object }
-  | {
-      error: Error & { meta?: LlmProviderCallMeta; llmMeta?: LlmProviderCallMeta };
-      payload: object;
-    }
-> {
+}): Promise<ProviderCallResult> {
   const url = getChatCompletionsEndpoint(params.provider);
 
-  async function post(payload: object): Promise<
-    | { attempt: ProviderAttemptResult; payload: object }
-    | {
-        error: Error & { meta?: LlmProviderCallMeta; llmMeta?: LlmProviderCallMeta };
-        payload: object;
-      }
-  > {
+  async function post(payload: object): Promise<ProviderCallResult> {
     params.onProviderCall(payload);
     try {
       return {
@@ -475,7 +479,7 @@ async function callProviderWithJsonFallback(params: {
       first.attempt.parsed.payload.error?.message ?? first.attempt.parsed.rawText,
     )
   ) {
-    return post(
+    const fallbackResult = await post(
       buildProviderPayload({
         model: params.provider.model,
         messages: params.input.messages,
@@ -484,6 +488,10 @@ async function callProviderWithJsonFallback(params: {
         includeJsonObjectFormat: false,
       }),
     );
+    return {
+      ...fallbackResult,
+      compatibilityFallback: 'json_object_unsupported',
+    };
   }
 
   return first;
@@ -667,6 +675,9 @@ export async function invokeLlmChat(input: InvokeLlmChatInput): Promise<LlmChatR
             status: getErrorMeta(callResult.error)?.response.status,
             outcome: 'error',
             error: callResult.error.message,
+            ...(callResult.compatibilityFallback
+              ? { compatibilityFallback: callResult.compatibilityFallback }
+              : {}),
           });
           start.requestPayload = buildObservedRequestPayload(
             input,
@@ -698,6 +709,9 @@ export async function invokeLlmChat(input: InvokeLlmChatInput): Promise<LlmChatR
             status: attempt.status,
             outcome: 'error',
             error: error.message,
+            ...(callResult.compatibilityFallback
+              ? { compatibilityFallback: callResult.compatibilityFallback }
+              : {}),
           });
           start.requestPayload = buildObservedRequestPayload(
             input,
@@ -735,6 +749,9 @@ export async function invokeLlmChat(input: InvokeLlmChatInput): Promise<LlmChatR
             status: attempt.status,
             outcome: 'error',
             error: error.message,
+            ...(callResult.compatibilityFallback
+              ? { compatibilityFallback: callResult.compatibilityFallback }
+              : {}),
           });
           start.requestPayload = buildObservedRequestPayload(
             input,
@@ -757,6 +774,9 @@ export async function invokeLlmChat(input: InvokeLlmChatInput): Promise<LlmChatR
           endpoint,
           status: attempt.status,
           outcome: 'success',
+          ...(callResult.compatibilityFallback
+            ? { compatibilityFallback: callResult.compatibilityFallback }
+            : {}),
         });
         start.requestPayload = buildObservedRequestPayload(
           input,

@@ -2,6 +2,7 @@ type MockChatModelInstance = {
   options: unknown;
   withFallbacks: jest.Mock;
   bindTools: jest.Mock;
+  withStructuredOutput: jest.Mock;
   _modelType: jest.Mock;
 };
 
@@ -13,6 +14,7 @@ jest.mock('@langchain/openai', () => ({
       options,
       withFallbacks: jest.fn(),
       bindTools: jest.fn(),
+      withStructuredOutput: jest.fn(),
       _modelType: jest.fn(() => 'base_chat_model'),
     };
     instance.withFallbacks.mockImplementation(({ fallbacks }) => ({
@@ -25,6 +27,15 @@ jest.mock('@langchain/openai', () => ({
       source: instance,
       withFallbacks: jest.fn(({ fallbacks }) => ({
         type: 'bound-fallback-chain',
+        primary: instance,
+        fallbacks,
+      })),
+    }));
+    instance.withStructuredOutput.mockImplementation(() => ({
+      type: 'structured-output',
+      source: instance,
+      withFallbacks: jest.fn(({ fallbacks }) => ({
+        type: 'structured-fallback-chain',
         primary: instance,
         fallbacks,
       })),
@@ -189,6 +200,37 @@ describe('LangChain LLM factory', () => {
     expect(mockChatModelInstances[2]?.bindTools).toHaveBeenCalledWith(tools, undefined);
     expect(boundModel).toMatchObject({
       type: 'bound-fallback-chain',
+      primary: mockChatModelInstances[0],
+      fallbacks: [
+        expect.objectContaining({ source: mockChatModelInstances[1] }),
+        expect.objectContaining({ source: mockChatModelInstances[2] }),
+      ],
+    });
+    expect((boundModel as { _modelType?: () => string })._modelType?.()).toBe('base_chat_model');
+    expect((boundModel as { bindTools?: unknown }).bindTools).toEqual(expect.any(Function));
+  });
+
+  it('preserves structured output across every provider in the fallback chain', () => {
+    mockEnv.LLM_PROVIDER_ORDER = 'deepseek,doubao,openai';
+    mockEnv.DEEPSEEK_API_KEY = 'deepseek-key';
+    mockEnv.DEEPSEEK_MODEL = 'deepseek-chat';
+    mockEnv.DOUBAO_API_KEY = 'doubao-key';
+    mockEnv.DOUBAO_MODEL = 'doubao-chat';
+    const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+    const config = { name: 'Answer' };
+
+    const model = createLangChainChatModel();
+    const structuredModel = (
+      model as {
+        withStructuredOutput(schema: unknown, config?: unknown): unknown;
+      }
+    ).withStructuredOutput(schema, config);
+
+    expect(mockChatModelInstances[0]?.withStructuredOutput).toHaveBeenCalledWith(schema, config);
+    expect(mockChatModelInstances[1]?.withStructuredOutput).toHaveBeenCalledWith(schema, config);
+    expect(mockChatModelInstances[2]?.withStructuredOutput).toHaveBeenCalledWith(schema, config);
+    expect(structuredModel).toMatchObject({
+      type: 'structured-fallback-chain',
       primary: mockChatModelInstances[0],
       fallbacks: [
         expect.objectContaining({ source: mockChatModelInstances[1] }),

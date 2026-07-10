@@ -13,7 +13,8 @@
 
 现在统一为两层入口：
 
-- LLM 调用入口：`src/lib/llm/openai-chat.ts` 与 `src/lib/llm/langchain.ts`
+- LLM 对外调用入口：`src/lib/llm/index.ts`
+- LLM 内部 runtime：`src/lib/llm/openai-chat.ts`、`src/lib/llm/chat-stream.ts` 与 `src/lib/llm/langchain.ts`
 - Prompt core：`src/lib/prompt-management/registry.ts` 与 `src/lib/prompt-management/types.ts`
 - 应用级 Prompt 装配入口：`src/lib/prompts/app-registry.ts`
 
@@ -84,7 +85,9 @@ flowchart LR
 
 | 内容                          | 文件                                         |
 | ----------------------------- | -------------------------------------------- |
+| LLM 对外调用入口              | `src/lib/llm/index.ts`                       |
 | 统一 LLM chat completion 网关 | `src/lib/llm/openai-chat.ts`                 |
+| Chat streaming runtime        | `src/lib/llm/chat-stream.ts`                 |
 | LangChain 模型工厂            | `src/lib/llm/langchain.ts`                   |
 | Prompt registry core          | `src/lib/prompt-management/registry.ts`      |
 | 应用级 prompt 装配入口        | `src/lib/prompts/app-registry.ts`            |
