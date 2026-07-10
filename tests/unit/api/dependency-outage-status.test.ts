@@ -30,8 +30,9 @@ jest.mock('@/lib/auth/session', () => ({
   },
 }));
 
-jest.mock('@/lib/llm/openai-chat', () => ({
+jest.mock('@/lib/llm', () => ({
   invokeLlmChat: (...args: unknown[]) => invokeLlmChatMock(...args),
+  streamChatReply: jest.fn(),
 }));
 
 jest.mock('@/lib/chat/repositories/conversation-repo', () => ({
@@ -44,10 +45,6 @@ jest.mock('@/lib/chat/repositories/conversation-repo', () => ({
 jest.mock('@/lib/chat/repositories/message-repo', () => ({
   listMessages: (...args: unknown[]) => listMessagesMock(...args),
   createMessage: jest.fn(),
-}));
-
-jest.mock('@/lib/chat/chain', () => ({
-  streamChatReply: jest.fn(),
 }));
 
 jest.mock('@/lib/rag/retrieval', () => ({

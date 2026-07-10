@@ -10,11 +10,11 @@ jest.mock('@/lib/env', () => ({
   },
 }));
 
-jest.mock('@/lib/llm/openai-chat', () => ({
+jest.mock('@/lib/llm', () => ({
   invokeLlmChat: jest.fn(),
 }));
 
-const { invokeLlmChat } = jest.requireMock('@/lib/llm/openai-chat') as {
+const { invokeLlmChat } = jest.requireMock('@/lib/llm') as {
   invokeLlmChat: jest.Mock;
 };
 

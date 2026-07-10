@@ -1,4 +1,4 @@
-import { invokeLlmChat } from '@/lib/llm/openai-chat';
+import { invokeLlmChat } from '@/lib/llm';
 import { renderManagedPrompt } from '@/lib/prompts/app-registry';
 import { CANDIDATE_COMMUNICATION_PROMPT_ID } from './prompts';
 import type { CandidateCommunicationLlmInput } from './decision';

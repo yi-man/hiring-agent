@@ -12,7 +12,7 @@ import {
   createLangChainChatModel,
   getConfiguredLlmChatCompletionsEndpoint,
   getConfiguredLlmProvider,
-} from '@/lib/llm/langchain';
+} from './langchain';
 import { recordLlmCallEnd, recordLlmCallStart } from '@/lib/llm-observability/log-service';
 import { randomUUID } from 'node:crypto';
 

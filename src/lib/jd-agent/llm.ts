@@ -1,4 +1,4 @@
-import { LLM_PROVIDER_CONFIGURATION_ERROR_CODE, invokeLlmChat } from '@/lib/llm/openai-chat';
+import { LLM_PROVIDER_CONFIGURATION_ERROR_CODE, invokeLlmChat } from '@/lib/llm';
 import { renderManagedPrompt } from '@/lib/prompts/app-registry';
 import type { EvaluationResult, JD, JobSchema } from '@/types';
 import { mockEvaluateJD, mockGenerateJD, mockImproveJD } from './llm.mock';

@@ -7,7 +7,7 @@ import {
   CHAT_ASSISTANT_PROMPT_VERSION,
   chatAssistantPromptDefinition,
 } from '@/lib/chat/prompts';
-import { invokeLlmChat } from '@/lib/llm/openai-chat';
+import { invokeLlmChat } from '@/lib/llm';
 
 export async function POST(request: Request) {
   try {

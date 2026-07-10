@@ -19,7 +19,7 @@ jest.mock('next/server', () => ({
 
 const originalResponse = global.Response;
 
-jest.mock('@/lib/chat/chain', () => ({
+jest.mock('@/lib/llm', () => ({
   streamChatReply: (...args: unknown[]) => streamChatReplyMock(...args),
 }));
 

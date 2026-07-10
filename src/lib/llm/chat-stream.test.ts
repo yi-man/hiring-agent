@@ -69,13 +69,13 @@ jest.mock('@/lib/llm-observability/log-service', () => ({
 }));
 
 describe('streamChatReply observability', () => {
-  let chainModule: typeof import('@/lib/chat/chain');
+  let chainModule: typeof import('@/lib/llm/chat-stream');
   let recordLlmCallEnd: jest.Mock;
 
   beforeEach(async () => {
     jest.resetModules();
     mockStream.mockReset();
-    chainModule = await import('@/lib/chat/chain');
+    chainModule = await import('@/lib/llm/chat-stream');
     ({ recordLlmCallEnd } = jest.requireMock('@/lib/llm-observability/log-service') as {
       recordLlmCallEnd: jest.Mock;
     });

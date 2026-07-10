@@ -7,7 +7,7 @@ import {
 } from '@/lib/workflow-learning/constants';
 import { createBrowserSnapshotTool } from '@/lib/workflow-learning/tools/browser-snapshot-tool';
 import type { WorkflowSseEvent } from '@/lib/workflow-learning/types';
-import { createLangChainChatModel } from '@/lib/llm/langchain';
+import { createLangChainChatModel } from '@/lib/llm';
 import {
   WORKFLOW_LEARNING_SYSTEM_PROMPT,
   workflowLearningAgentPromptDefinition,
