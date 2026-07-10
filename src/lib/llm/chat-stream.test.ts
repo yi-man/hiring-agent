@@ -70,18 +70,23 @@ jest.mock('@/lib/llm-observability/log-service', () => ({
 
 describe('streamChatReply observability', () => {
   let chainModule: typeof import('@/lib/llm/chat-stream');
+  let recordLlmCallStart: jest.Mock;
   let recordLlmCallEnd: jest.Mock;
 
   beforeEach(async () => {
     jest.resetModules();
     mockStream.mockReset();
     chainModule = await import('@/lib/llm/chat-stream');
-    ({ recordLlmCallEnd } = jest.requireMock('@/lib/llm-observability/log-service') as {
+    ({ recordLlmCallStart, recordLlmCallEnd } = jest.requireMock(
+      '@/lib/llm-observability/log-service',
+    ) as {
+      recordLlmCallStart: jest.Mock;
       recordLlmCallEnd: jest.Mock;
     });
   });
 
   afterEach(() => {
+    recordLlmCallStart.mockClear();
     recordLlmCallEnd.mockClear();
   });
 
@@ -102,5 +107,33 @@ describe('streamChatReply observability', () => {
         timestamp: expect.any(Date),
       }),
     );
+  });
+
+  it('redacts prompt, retrieved context, and streamed response content in logs', async () => {
+    const { AIMessageChunk } = jest.requireMock('@langchain/core/messages') as {
+      AIMessageChunk: new (content: unknown) => unknown;
+    };
+    mockStream.mockResolvedValueOnce(
+      (async function* () {
+        yield new AIMessageChunk('assistant secret');
+      })(),
+    );
+
+    const { chunks } = await chainModule.streamChatReply('conv-1', 'user secret', {
+      retrievedContext: 'retrieved secret',
+    });
+    for await (const chunk of chunks) {
+      expect(chunk).toBe('assistant secret');
+    }
+
+    const startPayload = JSON.stringify(recordLlmCallStart.mock.calls[0][0].requestPayload);
+    expect(startPayload).not.toContain('system-prompt');
+    expect(startPayload).not.toContain('user secret');
+    expect(startPayload).not.toContain('retrieved secret');
+    expect(startPayload).toContain('[redacted:');
+
+    const endPayload = JSON.stringify(recordLlmCallEnd.mock.calls[0][1].responsePayload);
+    expect(endPayload).not.toContain('assistant secret');
+    expect(endPayload).toContain('[redacted:');
   });
 });

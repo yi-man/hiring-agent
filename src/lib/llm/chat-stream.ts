@@ -23,6 +23,10 @@ function createStreamingModel() {
   });
 }
 
+function redactText(value: string): string {
+  return `[redacted:${value.length} chars]`;
+}
+
 export function buildChatChain() {
   const prompt = ChatPromptTemplate.fromMessages([
     ['system', '{systemPrompt}'],
@@ -72,8 +76,8 @@ export async function streamChatReply(
       conversationId,
       streaming: true,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userInput },
+        { role: 'system', content: redactText(systemPrompt) },
+        { role: 'user', content: redactText(userInput) },
       ],
     },
     timestamp: new Date(),
@@ -139,7 +143,7 @@ export async function streamChatReply(
       }
       await safeRecordEnd({
         timestamp: new Date(),
-        responsePayload: { content: full },
+        responsePayload: { content: redactText(full) },
         inputTokens,
         outputTokens,
         totalTokens: totalTokens || inputTokens + outputTokens,
@@ -151,7 +155,7 @@ export async function streamChatReply(
       await safeRecordEnd({
         timestamp: new Date(),
         error,
-        responsePayload: { content: full },
+        responsePayload: { content: redactText(full) },
         inputTokens,
         outputTokens,
         totalTokens: totalTokens || inputTokens + outputTokens,
@@ -162,7 +166,7 @@ export async function streamChatReply(
       if (!completed && !failed) {
         await safeRecordEnd({
           timestamp: new Date(),
-          responsePayload: { content: full },
+          responsePayload: { content: redactText(full) },
           inputTokens,
           outputTokens,
           totalTokens: totalTokens || inputTokens + outputTokens,

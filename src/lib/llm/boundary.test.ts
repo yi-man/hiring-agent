@@ -41,4 +41,12 @@ describe('llm package boundary', () => {
       expect(source).not.toMatch(disallowedInternalLlmImports);
     }
   });
+
+  it('keeps the package entrypoint focused on supported runtime APIs', () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/lib/llm/index.ts'), 'utf8');
+    const internalExports =
+      /(?:buildChatChain|buildStandaloneMessages|getConfiguredLlmProviders|getOpenAiChatCompletionsEndpoint|getConfiguredLlmChatCompletionsEndpoint|getConfiguredLlmModel|getConfiguredLlmProvider)/;
+
+    expect(source).not.toMatch(internalExports);
+  });
 });
