@@ -29,7 +29,7 @@ jest.mock('@/lib/rag/retrieval', () => ({
   retrieveConversationContext: (...args: unknown[]) => retrieveConversationContextMock(...args),
 }));
 
-jest.mock('@/lib/chat/chain', () => ({
+jest.mock('@/lib/llm', () => ({
   streamChatReply: (...args: unknown[]) => streamChatReplyMock(...args),
 }));
 

@@ -11,7 +11,7 @@ jest.mock('@/lib/env', () => ({
   },
 }));
 
-jest.mock('@/lib/llm/openai-chat', () => ({
+jest.mock('@/lib/llm', () => ({
   invokeLlmChat: jest.fn(),
 }));
 
@@ -23,7 +23,7 @@ const mockEnv = jest.requireMock('@/lib/env').env as {
   JD_LLM_TIMEOUT_MS: number;
 };
 
-const { invokeLlmChat } = jest.requireMock('@/lib/llm/openai-chat') as {
+const { invokeLlmChat } = jest.requireMock('@/lib/llm') as {
   invokeLlmChat: jest.Mock;
 };
 

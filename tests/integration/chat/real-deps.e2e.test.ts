@@ -13,7 +13,7 @@ import {
   listConversationsPaginated,
 } from '@/lib/chat/repositories/conversation-repo';
 import { createMessage, listMessages } from '@/lib/chat/repositories/message-repo';
-import { streamChatReply } from '@/lib/chat/chain';
+import { streamChatReply } from '@/lib/llm';
 import { closeRedisClient } from '@/lib/chat/redis';
 import { RedisChatMessageHistory } from '@/lib/chat/history/redis-chat-history';
 

@@ -22,7 +22,7 @@ jest.mock('@/lib/auth/session', () => ({
   },
 }));
 
-jest.mock('@/lib/llm/openai-chat', () => ({
+jest.mock('@/lib/llm', () => ({
   invokeLlmChat: (...args: unknown[]) => invokeLlmChatMock(...args),
 }));
 

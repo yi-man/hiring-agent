@@ -72,7 +72,7 @@ jest.mock('@/lib/llm-observability/log-service', () => ({
 }));
 
 import { AIMessageChunk } from '@langchain/core/messages';
-import { buildChatChain, buildStandaloneMessages, streamChatReply } from '@/lib/chat/chain';
+import { buildChatChain, buildStandaloneMessages, streamChatReply } from '@/lib/llm/chat-stream';
 
 describe('chat chain', () => {
   beforeEach(() => {

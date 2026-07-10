@@ -8,11 +8,8 @@ import {
   CHAT_ASSISTANT_PROMPT_VERSION,
   chatAssistantPromptDefinition,
 } from '@/lib/chat/prompts';
-import {
-  createLangChainChatModel,
-  getConfiguredLlmChatCompletionsEndpoint,
-  getConfiguredLlmProvider,
-} from '@/lib/llm/langchain';
+import { getConfiguredLlmProviders, type LlmProviderConfig } from './openai-chat';
+import { createLangChainChatModel } from './langchain';
 import { recordLlmCallEnd, recordLlmCallStart } from '@/lib/llm-observability/log-service';
 import { randomUUID } from 'node:crypto';
 
@@ -21,6 +18,44 @@ function createStreamingModel() {
     temperature: chatAssistantPromptDefinition.options.temperature,
     streaming: true,
   });
+}
+
+function redactText(value: string): string {
+  return `[redacted:${value.length} chars]`;
+}
+
+function getChatCompletionsEndpoint(provider: LlmProviderConfig): string {
+  return `${provider.baseUrl.replace(/\/$/, '')}/chat/completions`;
+}
+
+function buildStreamingObservationTarget(providers: LlmProviderConfig[]): {
+  endpoint: string;
+  provider: string;
+  model: string;
+  providerChain?: Array<{ provider: string; model: string; endpoint: string }>;
+} {
+  const [primary] = providers;
+  if (!primary) {
+    throw new Error('No configured LLM providers in LLM_PROVIDER_ORDER');
+  }
+  if (providers.length === 1) {
+    return {
+      endpoint: getChatCompletionsEndpoint(primary),
+      provider: primary.id,
+      model: primary.model,
+    };
+  }
+
+  return {
+    endpoint: 'langchain-fallback-chain',
+    provider: 'langchain-fallback-chain',
+    model: providers.map((provider) => provider.model).join(','),
+    providerChain: providers.map((provider) => ({
+      provider: provider.id,
+      model: provider.model,
+      endpoint: getChatCompletionsEndpoint(provider),
+    })),
+  };
 }
 
 export function buildChatChain() {
@@ -51,14 +86,14 @@ export async function streamChatReply(
   const systemPrompt = buildSystemPrompt();
   const retrievedContext = options?.retrievedContext?.trim();
   const userInput = buildUserInputWithRetrievedContext(input, retrievedContext);
-  const provider = getConfiguredLlmProvider();
+  const observationTarget = buildStreamingObservationTarget(getConfiguredLlmProviders());
   const start = recordLlmCallStart({
     callId: randomUUID(),
     traceId: randomUUID(),
     requestId: randomUUID(),
-    endpoint: getConfiguredLlmChatCompletionsEndpoint(),
-    provider: provider.id,
-    model: provider.model,
+    endpoint: observationTarget.endpoint,
+    provider: observationTarget.provider,
+    model: observationTarget.model,
     requestHeaders: {
       'Content-Type': 'application/json',
       Authorization: 'Bearer ***',
@@ -71,9 +106,12 @@ export async function streamChatReply(
       },
       conversationId,
       streaming: true,
+      ...(observationTarget.providerChain
+        ? { providerChain: observationTarget.providerChain }
+        : {}),
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userInput },
+        { role: 'system', content: redactText(systemPrompt) },
+        { role: 'user', content: redactText(userInput) },
       ],
     },
     timestamp: new Date(),
@@ -139,7 +177,7 @@ export async function streamChatReply(
       }
       await safeRecordEnd({
         timestamp: new Date(),
-        responsePayload: { content: full },
+        responsePayload: { content: redactText(full) },
         inputTokens,
         outputTokens,
         totalTokens: totalTokens || inputTokens + outputTokens,
@@ -151,7 +189,7 @@ export async function streamChatReply(
       await safeRecordEnd({
         timestamp: new Date(),
         error,
-        responsePayload: { content: full },
+        responsePayload: { content: redactText(full) },
         inputTokens,
         outputTokens,
         totalTokens: totalTokens || inputTokens + outputTokens,
@@ -162,7 +200,7 @@ export async function streamChatReply(
       if (!completed && !failed) {
         await safeRecordEnd({
           timestamp: new Date(),
-          responsePayload: { content: full },
+          responsePayload: { content: redactText(full) },
           inputTokens,
           outputTokens,
           totalTokens: totalTokens || inputTokens + outputTokens,

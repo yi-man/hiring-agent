@@ -20,11 +20,11 @@ jest.mock('@/lib/jd-agent/prompts', () => ({
   })),
 }));
 
-jest.mock('@/lib/prompt-management/app-registry', () => ({
+jest.mock('@/lib/prompts/app-registry', () => ({
   renderManagedPrompt: jest.fn(),
 }));
 
-jest.mock('@/lib/llm/openai-chat', () => ({
+jest.mock('@/lib/llm', () => ({
   LLM_PROVIDER_CONFIGURATION_ERROR_CODE: 'LLM_PROVIDER_CONFIGURATION',
   invokeLlmChat: jest.fn(),
 }));
@@ -36,11 +36,11 @@ const mockEnv = jest.requireMock('@/lib/env').env as {
   OPENAI_MODEL: string;
 };
 
-const { renderManagedPrompt } = jest.requireMock('@/lib/prompt-management/app-registry') as {
+const { renderManagedPrompt } = jest.requireMock('@/lib/prompts/app-registry') as {
   renderManagedPrompt: jest.Mock;
 };
 
-const { invokeLlmChat } = jest.requireMock('@/lib/llm/openai-chat') as {
+const { invokeLlmChat } = jest.requireMock('@/lib/llm') as {
   invokeLlmChat: jest.Mock;
 };
 

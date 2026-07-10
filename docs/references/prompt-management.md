@@ -13,8 +13,10 @@
 
 现在统一为两层入口：
 
-- LLM 调用入口：`src/lib/llm/openai-chat.ts` 与 `src/lib/llm/langchain.ts`
-- Prompt 管理入口：`src/lib/prompt-management/app-registry.ts`
+- LLM 对外调用入口：`src/lib/llm/index.ts`
+- LLM 内部 runtime：`src/lib/llm/openai-chat.ts`、`src/lib/llm/chat-stream.ts` 与 `src/lib/llm/langchain.ts`
+- Prompt core：`src/lib/prompt-management/registry.ts` 与 `src/lib/prompt-management/types.ts`
+- 应用级 Prompt 装配入口：`src/lib/prompts/app-registry.ts`
 
 业务模块不再直接关心 provider HTTP 细节，也不再把 prompt 文案散落在调用文件里。非 streaming / 非 agent 的 chat completion 通过统一网关调用：
 
@@ -83,10 +85,12 @@ flowchart LR
 
 | 内容                          | 文件                                         |
 | ----------------------------- | -------------------------------------------- |
+| LLM 对外调用入口              | `src/lib/llm/index.ts`                       |
 | 统一 LLM chat completion 网关 | `src/lib/llm/openai-chat.ts`                 |
+| Chat streaming runtime        | `src/lib/llm/chat-stream.ts`                 |
 | LangChain 模型工厂            | `src/lib/llm/langchain.ts`                   |
 | Prompt registry core          | `src/lib/prompt-management/registry.ts`      |
-| 应用级 prompt 装配入口        | `src/lib/prompt-management/app-registry.ts`  |
+| 应用级 prompt 装配入口        | `src/lib/prompts/app-registry.ts`            |
 | 通用 prompt 类型              | `src/lib/prompt-management/types.ts`         |
 | JD prompt 定义                | `src/lib/jd-agent/prompts.ts`                |
 | Chat prompt 定义              | `src/lib/chat/prompts.ts`                    |
@@ -107,7 +111,7 @@ flowchart LR
    - `tags`
    - `chatPrompt`
    - `options`
-4. 在 `src/lib/prompt-management/app-registry.ts` 的 `MANAGED_PROMPTS` 中注册。
+4. 在 `src/lib/prompts/app-registry.ts` 的 `MANAGED_PROMPTS` 中注册。
 5. 业务代码通过 `renderManagedPrompt(id, variables)` 使用。
 6. 非 streaming / 非 LangGraph agent 调用通过 `invokeLlmChat` 发送请求。
 7. Streaming 或 LangGraph agent 需要模型实例时，通过 `createLangChainChatModel` 创建。
@@ -120,7 +124,7 @@ flowchart LR
 当前 registry 是代码内静态注册，所以 prompt 变化的质量保证走代码交付链路：
 
 1. 每个 prompt 定义必须有稳定 `id` 和显式 `version`。
-2. `src/lib/prompt-management/registry.test.ts` 覆盖应用级注册清单和关键渲染结果，防止 prompt 漏注册、版本缺失或变量渲染坏掉。
+2. `src/lib/prompts/app-registry.test.ts` 覆盖应用级注册清单和关键渲染结果，防止 prompt 漏注册、版本缺失或变量渲染坏掉。
 3. `src/lib/prompt-management/registry-core.test.ts` 覆盖 core registry 的依赖边界，防止核心 registry 重新 import 业务 prompt。
 4. 业务模块测试验证 LLM 调用时会把 `prompt.id`、`prompt.version`、`messages` 和模型选项传给统一网关。
 5. 对评分、动作决策这类高风险 prompt，继续使用 golden sample / calibration 流程比较分数、动作和标签漂移。
@@ -128,7 +132,7 @@ flowchart LR
 回滚也按代码版本处理：
 
 - 如果 prompt 文案或变量协议出错，优先 `git revert` 对应 prompt commit，重新部署即可恢复旧 prompt。
-- 如果一个业务 prompt 需要保留新旧两版并行灰度，可以在业务 `prompts.ts` 中保留两个 `ManagedPromptDefinition`，在 `app-registry.ts` 注册两个不同 id 或版本化 id，再由业务入口选择版本。
+- 如果一个业务 prompt 需要保留新旧两版并行灰度，可以在业务 `prompts.ts` 中保留两个 `ManagedPromptDefinition`，在 `src/lib/prompts/app-registry.ts` 注册两个不同 id 或版本化 id，再由业务入口选择版本。
 - 业务结果和 LLM observability 都记录 `promptVersion`，所以回滚后可以按版本对比线上效果。
 
 短期不把 prompt 放进数据库热改，是为了保证 prompt 变化都能 code review、测试、随部署回滚。后续如果接 LangSmith Prompt Hub 或数据库 registry，本地 registry 仍应作为 fallback，并保留版本、审批和回归测试门禁。
@@ -142,6 +146,7 @@ flowchart LR
 - JSON mode fallback：provider 明确不支持 `response_format: json_object` 时，自动去掉该参数重发一次；
 - transient retry：仅对 `408/409/425/429/5xx`、timeout、网络错误、空响应重试；
 - provider fallback：按 `LLM_PROVIDER_ORDER` 在已配置 key 的 provider 间切换，例如 `deepseek,doubao,openai`；
+- LangChain model fallback：`createLangChainChatModel` 会为已配置 provider 建立 runtime fallback chain；tool-calling agent 绑定 tools 时会把同一组 tools 绑定到所有 provider；
 - circuit breaker：某 provider 连续失败达到阈值后，在冷却窗口内跳过它；
 - observability：记录最终 provider/model、retryCount、usage、HTTP status 和 providerAttempts；
 - 脱敏：Authorization 始终写为 `Bearer ***`，prompt messages 和 assistant content 只记录长度标记，不直接落原文。

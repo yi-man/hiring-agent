@@ -7,8 +7,8 @@ import {
   jdImprovePromptDefinition,
 } from '@/lib/jd-agent/prompts';
 import { workflowLearningAgentPromptDefinition } from '@/lib/workflow-learning/prompts';
-import type { ManagedPromptDefinition, RenderedManagedPrompt } from './types';
-import { createPromptRegistry } from './registry';
+import { createPromptRegistry } from '@/lib/prompt-management/registry';
+import type { ManagedPromptDefinition, RenderedManagedPrompt } from '@/lib/prompt-management/types';
 
 const MANAGED_PROMPTS = [
   candidateEvaluationPromptDefinition,

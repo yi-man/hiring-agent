@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamChatReply } from '@/lib/chat/chain';
+import { streamChatReply } from '@/lib/llm';
 import { touchConversation } from '@/lib/chat/repositories/conversation-repo';
 import { createMessage } from '@/lib/chat/repositories/message-repo';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';

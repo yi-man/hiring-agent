@@ -41,6 +41,7 @@ export type LlmProviderAttemptMeta = {
   status?: number;
   outcome: 'success' | 'error' | 'skipped';
   error?: string;
+  compatibilityFallback?: 'json_object_unsupported';
 };
 
 export type LlmChatResult = {
