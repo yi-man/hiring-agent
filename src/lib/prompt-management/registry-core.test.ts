@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { createPromptRegistry } from './registry';
@@ -39,9 +39,14 @@ describe('prompt registry core', () => {
     ]);
   });
 
-  it('keeps the core registry independent from business prompt modules', () => {
-    const source = readFileSync(path.join(__dirname, 'registry.ts'), 'utf8');
+  it('keeps prompt-management independent from business prompt modules', () => {
+    const promptManagementFiles = readdirSync(__dirname).filter(
+      (file) => file.endsWith('.ts') && !file.endsWith('.test.ts'),
+    );
 
-    expect(source).not.toMatch(/@\/lib\/(jd-agent|chat|candidate-|workflow-learning)\//);
+    for (const file of promptManagementFiles) {
+      const source = readFileSync(path.join(__dirname, file), 'utf8');
+      expect(source).not.toMatch(/@\/lib\/(jd-agent|chat|candidate-|workflow-learning)\//);
+    }
   });
 });
