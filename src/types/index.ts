@@ -151,6 +151,7 @@ export type {
   JDAgentAction,
   JDAgentContextMatch,
   JDAgentContextMeta,
+  JDAgentContextSelection,
   JDAgentDecision,
   JDAgentRequest,
   JDAgentResponse,

@@ -25,6 +25,7 @@ import type { JD, JobDescriptionDto } from '@/types';
 const fetchJobDescriptionsMock = jest.fn();
 const fetchJobDescriptionMock = jest.fn();
 const fetchJobDescriptionPublishTasksMock = jest.fn();
+const fetchJobDescriptionCreateRunsMock = jest.fn();
 const updateJobDescriptionResourceMock = jest.fn();
 const regenerateJobDescriptionMock = jest.fn();
 const publishJobDescriptionResourceMock = jest.fn();
@@ -53,6 +54,7 @@ jest.mock('next/navigation', () => ({
 jest.mock('@/lib/jd/client', () => ({
   createJobDescriptionFromInput: jest.fn(),
   fetchJobDescription: (...args: unknown[]) => fetchJobDescriptionMock(...args),
+  fetchJobDescriptionCreateRuns: (...args: unknown[]) => fetchJobDescriptionCreateRunsMock(...args),
   fetchJobDescriptionPublishTasks: (...args: unknown[]) =>
     fetchJobDescriptionPublishTasksMock(...args),
   fetchJobDescriptions: (...args: unknown[]) => fetchJobDescriptionsMock(...args),
@@ -606,6 +608,7 @@ describe('candidate screening UI', () => {
     mockSearchParams = new URLSearchParams();
     fetchJobDescriptionsMock.mockReset();
     fetchJobDescriptionMock.mockReset();
+    fetchJobDescriptionCreateRunsMock.mockReset();
     fetchJobDescriptionPublishTasksMock.mockReset();
     updateJobDescriptionResourceMock.mockReset();
     regenerateJobDescriptionMock.mockReset();
@@ -639,6 +642,7 @@ describe('candidate screening UI', () => {
     });
     fetchJobDescriptionsMock.mockResolvedValue([sampleJobDescription]);
     fetchJobDescriptionMock.mockResolvedValue(sampleJobDescription);
+    fetchJobDescriptionCreateRunsMock.mockResolvedValue([]);
     fetchJobDescriptionPublishTasksMock.mockResolvedValue([]);
     createCandidateScreeningRunMock.mockResolvedValue(sampleRun);
     fetchCandidateScreeningRunMock.mockResolvedValue({

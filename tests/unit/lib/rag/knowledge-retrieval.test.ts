@@ -5,6 +5,7 @@ const searchMock = jest.fn();
 
 jest.mock('@/lib/env', () => ({
   env: {
+    EMBEDDING_MODEL: 'text-embedding-3-small',
     OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
     RAG_TOP_K: 6,
     RAG_MIN_SCORE: 0.5,
@@ -14,6 +15,7 @@ jest.mock('@/lib/env', () => ({
 
 jest.mock('@/lib/rag/embed', () => ({
   embedQuery: (...args: unknown[]) => embedQueryMock(...args),
+  getConfiguredEmbeddingModel: () => 'text-embedding-3-small',
 }));
 
 jest.mock('@/lib/rag/knowledge-repo', () => ({
@@ -34,10 +36,12 @@ describe('retrieveUserKnowledgeContext', () => {
 
   it('returns empty context without embedding when query is blank', async () => {
     const { retrieveUserKnowledgeContext } = await import('@/lib/rag/knowledge-retrieval');
-    await expect(retrieveUserKnowledgeContext({ userId: 'u1', query: '  ' })).resolves.toEqual({
-      contextText: '',
-      matches: [],
-    });
+    await expect(retrieveUserKnowledgeContext({ userId: 'u1', query: '  ' })).resolves.toEqual(
+      expect.objectContaining({
+        contextText: '',
+        matches: [],
+      }),
+    );
     expect(embedQueryMock).not.toHaveBeenCalled();
   });
 
@@ -47,6 +51,7 @@ describe('retrieveUserKnowledgeContext', () => {
     const result = await retrieveUserKnowledgeContext({ userId: 'u1', query: '绩效要求' });
     expect(result.contextText).toBe('');
     expect(result.matches).toEqual([]);
+    expect(result.selection.selectedCount).toBe(0);
     expect(embedQueryMock).not.toHaveBeenCalled();
   });
 

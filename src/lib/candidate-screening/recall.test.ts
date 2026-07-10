@@ -1,5 +1,7 @@
 /** @jest-environment node */
 
+export {};
+
 const embedQueryMock = jest.fn();
 const searchCandidateResumeChunksMock = jest.fn();
 

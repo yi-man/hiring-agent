@@ -4,6 +4,7 @@ import { retrieveUserKnowledgeContext } from '@/lib/rag/knowledge-retrieval';
 import { buildJDSearchProfile } from '@/lib/jd/search-profile';
 import type {
   EvaluationResult,
+  JDAgentContextSelection,
   JDAgentContextMatch,
   JDAgentRequest,
   JDAgentResponse,
@@ -43,6 +44,7 @@ const JDAgentState = Annotation.Root({
   retrievalQuery: Annotation<string>(),
   companyContext: Annotation<string>(),
   contextMatches: Annotation<JDAgentContextMatch[]>(),
+  contextSelection: Annotation<JDAgentContextSelection | undefined>(),
   warnings: Annotation<string[]>(),
   stages: Annotation<JDAgentStageTiming[]>(),
   tokenStages: Annotation<JDAgentStageTokenUsage[]>(),
@@ -131,6 +133,7 @@ function buildMeta(
     query: string;
     companyContext: string;
     matches: JDAgentContextMatch[];
+    selection?: JDAgentContextSelection;
     warnings: string[];
   },
   searchProfile: JDSearchProfile,
@@ -161,7 +164,9 @@ function buildMeta(
       used: Boolean(context.companyContext.trim()),
       query: context.query,
       textLength: context.companyContext.length,
+      contextText: context.companyContext,
       matches: context.matches,
+      selection: context.selection,
       warnings: context.warnings,
     },
     searchProfile,
@@ -216,13 +221,14 @@ async function retrieveContextNode(state: JDAgentGraphState): Promise<JDAgentGra
     const result = await retrieveUserKnowledgeContext({
       userId: state.userId,
       query: state.retrievalQuery,
-      topK: env.RAG_TOP_K,
+      topK: Math.max(env.RAG_TOP_K, 12),
     });
     const companyContext = result.contextText.trim();
     const warnings = buildContextWarnings(companyContext);
     return {
       companyContext,
       contextMatches: result.matches,
+      contextSelection: result.selection,
       warnings: [...state.warnings, ...warnings],
       stages: addStage(state, 'retrieve_context', '检索公司上下文', mark),
     };
@@ -398,6 +404,7 @@ export async function runJDAgent(
     retrievalQuery: '',
     companyContext: '',
     contextMatches: [],
+    contextSelection: undefined,
     warnings: [],
     stages: [],
     tokenStages: [],
@@ -430,6 +437,7 @@ export async function runJDAgent(
         query: result.retrievalQuery,
         companyContext: result.companyContext,
         matches: result.contextMatches,
+        selection: result.contextSelection,
         warnings: result.warnings,
       },
       buildJDSearchProfile({ jd: result.finalJd, schema: result.schema }),

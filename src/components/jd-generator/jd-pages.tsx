@@ -7,6 +7,8 @@ import {
   ArrowLeft,
   BadgeCheck,
   Building2,
+  CheckCircle2,
+  Clock3,
   Eye,
   FileText,
   ListFilter,
@@ -23,14 +25,16 @@ import type { CandidateScreeningRunDto } from '@/lib/candidate-screening/repo';
 import { fetchCompanyProfile } from '@/lib/company-profile/client';
 import type { CompanyProfileDto } from '@/lib/company-profile/types';
 import {
-  createJobDescriptionFromInput,
+  fetchJobDescriptionCreateRuns,
   fetchJobDescription,
   fetchJobDescriptionPublishTasks,
   fetchJobDescriptions,
   publishJobDescriptionResource,
   regenerateJobDescription,
+  startJobDescriptionCreateRun,
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
+import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
 import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
 import { JD_STATUSES } from '@/types';
 import {
@@ -165,6 +169,30 @@ const screeningStatusMeta: Record<JDScreeningStatus, { label: string; className:
   },
 };
 
+const createRunStatusMeta: Record<
+  JobDescriptionCreateRunDto['status'],
+  { label: string; className: string }
+> = {
+  pending: {
+    label: '排队中',
+    className: 'border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60',
+  },
+  running: {
+    label: '生成中',
+    className:
+      'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40',
+  },
+  success: {
+    label: '已完成',
+    className:
+      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40',
+  },
+  failed: {
+    label: '失败',
+    className: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40',
+  },
+};
+
 type JDForm = {
   title: string;
   summary: string;
@@ -187,6 +215,15 @@ function formatUpdatedAt(value: string) {
 
 function StatusChip({ status }: { status: JDStatus }) {
   const meta = statusMeta[status] ?? statusMeta.created;
+  return (
+    <Chip className={`border text-xs ${meta.className}`} size="sm" variant="flat">
+      {meta.label}
+    </Chip>
+  );
+}
+
+function CreateRunStatusChip({ status }: { status: JobDescriptionCreateRunDto['status'] }) {
+  const meta = createRunStatusMeta[status];
   return (
     <Chip className={`border text-xs ${meta.className}`} size="sm" variant="flat">
       {meta.label}
@@ -273,6 +310,7 @@ export function JDListView() {
   const listReturnTarget = { href: '/jd-generator', label: '返回列表' };
   const workbenchReturnTarget = { href: '/jd-generator', label: '返回 JD 工作台' };
   const [items, setItems] = useState<JobDescriptionDto[]>([]);
+  const [createRuns, setCreateRuns] = useState<JobDescriptionCreateRunDto[]>([]);
   const [statusFilter, setStatusFilter] = useState<JDStatusFilter>('published');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -288,7 +326,12 @@ export function JDListView() {
     }
     setError('');
     try {
-      setItems(await fetchJobDescriptions(statusFilter));
+      const [nextItems, nextCreateRuns] = await Promise.all([
+        fetchJobDescriptions(statusFilter),
+        fetchJobDescriptionCreateRuns({ limit: 5 }).catch(() => []),
+      ]);
+      setItems(nextItems);
+      setCreateRuns(nextCreateRuns);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载 JD 列表失败');
     } finally {
@@ -507,6 +550,56 @@ export function JDListView() {
 
       {error ? <ErrorBanner message={error} /> : null}
 
+      {createRuns.length > 0 ? (
+        <section className="border-border overflow-hidden rounded-lg border">
+          <div className="border-border flex items-center justify-between gap-3 border-b px-4 py-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Clock3 className="text-muted-foreground h-4 w-4" aria-hidden />
+              最近创建执行
+            </div>
+            <span className="text-muted-foreground text-xs">{createRuns.length} 条</span>
+          </div>
+          <div className="divide-border divide-y">
+            {createRuns.map((run) => (
+              <article
+                key={run.id}
+                className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_104px_150px_120px] md:items-center"
+              >
+                <div className="min-w-0">
+                  <div className="text-foreground truncate text-sm font-medium">{run.position}</div>
+                  <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                    <span>{run.department}</span>
+                    <span>{run.currentStage ?? 'queued'}</span>
+                    {run.errorMessage ? (
+                      <span className="text-destructive min-w-0 truncate">{run.errorMessage}</span>
+                    ) : null}
+                  </div>
+                </div>
+                <CreateRunStatusChip status={run.status} />
+                <div className="text-muted-foreground text-xs">
+                  {formatUpdatedAt(run.updatedAt)}
+                </div>
+                <div className="flex justify-start md:justify-end">
+                  <Button
+                    as={Link}
+                    className="gap-2"
+                    disableRipple
+                    href={withReturnTarget(`/jd-generator/create-runs/${run.id}`, listReturnTarget)}
+                    size="sm"
+                    variant={
+                      run.status === 'running' || run.status === 'pending' ? 'bordered' : 'light'
+                    }
+                  >
+                    <Eye className="h-4 w-4" aria-hidden />
+                    执行页
+                  </Button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="border-border overflow-hidden rounded-lg border">
         <div className="border-border flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2 text-sm font-medium">
@@ -644,7 +737,7 @@ export function JDCreateView() {
     setIsSubmitting(true);
     setError('');
     try {
-      const jobDescription = await createJobDescriptionFromInput({
+      const run = await startJobDescriptionCreateRun({
         department,
         position,
         positionDescription: positionDescription.trim(),
@@ -652,7 +745,12 @@ export function JDCreateView() {
         workLocations: selectedWorkLocations,
         tone,
       });
-      router.push(`/jd-generator/${jobDescription.id}/runs/create`);
+      router.push(
+        withReturnTarget(`/jd-generator/create-runs/${run.id}`, {
+          href: '/jd-generator/new',
+          label: '返回新建 JD',
+        }),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '创建 JD 失败');
     } finally {
@@ -831,7 +929,7 @@ export function JDCreateView() {
             type="submit"
           >
             <Sparkles className="h-4 w-4" aria-hidden />
-            {isSubmitting ? '生成中' : '生成并创建'}
+            {isSubmitting ? '创建任务中' : '生成并创建'}
           </Button>
         </aside>
       </form>
@@ -868,22 +966,25 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [publishKeywords, setPublishKeywords] = useState('TypeScript, React');
   const [publishTasks, setPublishTasks] = useState<PublishTaskDto[]>([]);
   const [publishTrace, setPublishTrace] = useState<PublishTaskResult['trace'] | null>(null);
+  const [createRuns, setCreateRuns] = useState<JobDescriptionCreateRunDto[]>([]);
   const [error, setError] = useState('');
 
   async function loadJobDescription() {
     setIsLoading(true);
     setError('');
     try {
-      const [data, tasks, profile] = await Promise.all([
+      const [data, tasks, profile, creationRuns] = await Promise.all([
         fetchJobDescription(jobDescriptionId),
         fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
         fetchCompanyProfile().catch(() => null),
+        fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
       ]);
       setJobDescription(data);
       setForm(jdToForm(data.content));
       setStatus(data.status);
       setPublishTasks(tasks);
       setPublishTrace(tasks.find((task) => task.trace)?.trace ?? null);
+      setCreateRuns(creationRuns);
       setCompanyProfile(profile);
       setPublishCompany(profile?.name ?? '');
       setPublishSalary(data.salaryRange ?? '');
@@ -1027,6 +1128,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     : defaultScreeningSummary;
   const screeningActionLabel = getScreeningActionLabel(screeningSummary);
   const latestRunId = latestScreeningRun?.id ?? screeningSummary.latestRunId;
+  const latestCreateRun = createRuns[0] ?? null;
   const canPublishWithCompanyProfile = Boolean(
     companyProfile?.name.trim() && companyProfile.locations.length > 0,
   );
@@ -1225,6 +1327,38 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 ))}
               </select>
             </label>
+
+            {latestCreateRun ? (
+              <div className="border-border space-y-2 border-t pt-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="text-muted-foreground h-4 w-4" aria-hidden />
+                  <div className="text-foreground text-sm font-medium">创建记录</div>
+                </div>
+                <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-foreground font-medium">
+                      {formatUpdatedAt(latestCreateRun.updatedAt)}
+                    </span>
+                    <CreateRunStatusChip status={latestCreateRun.status} />
+                  </div>
+                  {latestCreateRun.errorMessage ? (
+                    <p className="text-destructive mt-1 break-words">
+                      {latestCreateRun.errorMessage}
+                    </p>
+                  ) : null}
+                  <Link
+                    className="text-primary mt-2 inline-flex items-center gap-1 font-medium hover:underline"
+                    href={withReturnTarget(
+                      `/jd-generator/create-runs/${latestCreateRun.id}`,
+                      detailReturnTarget,
+                    )}
+                  >
+                    <Eye className="h-3.5 w-3.5" aria-hidden />
+                    查看执行页
+                  </Link>
+                </div>
+              </div>
+            ) : null}
 
             <div className="border-border space-y-3 border-t pt-3">
               <div className="flex items-center gap-2">
@@ -1438,6 +1572,18 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 {context?.matches.length ?? 0} sources
               </span>
             </div>
+            {context?.used ? (
+              <Link
+                className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                href={withReturnTarget(
+                  `/jd-generator/${jobDescription.id}/context`,
+                  detailReturnTarget,
+                )}
+              >
+                <Eye className="h-3.5 w-3.5" aria-hidden />
+                查看本次上下文
+              </Link>
+            ) : null}
             {context?.query ? (
               <div className="text-muted-foreground rounded-md border px-3 py-2 font-mono text-xs break-words">
                 {context.query}
