@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import {
+  failStaleJobDescriptionCreateRuns,
   getJobDescriptionCreateRun,
   listJobDescriptionCreateRunEvents,
 } from '@/lib/jd/create-run-repo';
@@ -29,6 +30,7 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
       return badRequest('JD create run id is required');
     }
 
+    await failStaleJobDescriptionCreateRuns({ userId: auth.user.id });
     const run = await getJobDescriptionCreateRun({ userId: auth.user.id, runId });
     if (!run) {
       return NextResponse.json({ error: 'JD create run not found' }, { status: 404 });

@@ -113,4 +113,40 @@ describe('JD create run service', () => {
       runCreateRunMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
+
+  it('returns the run without waiting for generation to finish', async () => {
+    const run = makeRun();
+    let resolveRunner!: () => void;
+    createRunMock.mockResolvedValueOnce(run);
+    createEventMock.mockResolvedValueOnce({
+      id: 'event-1',
+      userId: 'u1',
+      runId: run.id,
+      stage: 'queued',
+      level: 'info',
+      message: 'JD 生成任务已创建',
+      detail: null,
+      createdAt: now,
+    });
+    runCreateRunMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveRunner = resolve;
+      }),
+    );
+
+    const resultPromise = createAndStartJobDescriptionCreateRun({
+      userId: 'u1',
+      request,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(Promise.race([resultPromise, Promise.resolve('still-waiting')])).resolves.toBe(
+      run,
+    );
+    expect(runCreateRunMock).toHaveBeenCalledWith({ userId: 'u1', runId: run.id });
+
+    resolveRunner();
+  });
 });

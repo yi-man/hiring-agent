@@ -230,13 +230,14 @@ export function JDCreateRunExecution({ runId }: { runId: string }) {
     void loadRun();
   }, [loadRun]);
 
+  const runStatus = run?.status;
   useEffect(() => {
-    if (!run || terminalStatuses.includes(run.status)) return;
+    if (!runStatus || terminalStatuses.includes(runStatus)) return;
     const timer = window.setInterval(() => {
       void loadRun({ silent: true });
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [loadRun, run]);
+  }, [loadRun, runStatus]);
 
   const detailHref = run?.jobDescriptionId
     ? withReturnTarget(`/jd-generator/${run.jobDescriptionId}`, {

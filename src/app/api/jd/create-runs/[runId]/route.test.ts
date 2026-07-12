@@ -3,6 +3,7 @@
  */
 import { GET } from './route';
 import {
+  failStaleJobDescriptionCreateRuns,
   getJobDescriptionCreateRun,
   listJobDescriptionCreateRunEvents,
   type JobDescriptionCreateRunDto,
@@ -34,6 +35,7 @@ jest.mock('@/lib/auth/session', () => ({
 jest.mock('@/lib/jd/create-run-repo', () => ({
   getJobDescriptionCreateRun: jest.fn(),
   listJobDescriptionCreateRunEvents: jest.fn(),
+  failStaleJobDescriptionCreateRuns: jest.fn(),
 }));
 
 const getRunMock = getJobDescriptionCreateRun as jest.MockedFunction<
@@ -41,6 +43,9 @@ const getRunMock = getJobDescriptionCreateRun as jest.MockedFunction<
 >;
 const listEventsMock = listJobDescriptionCreateRunEvents as jest.MockedFunction<
   typeof listJobDescriptionCreateRunEvents
+>;
+const failStaleMock = failStaleJobDescriptionCreateRuns as jest.MockedFunction<
+  typeof failStaleJobDescriptionCreateRuns
 >;
 
 const run: JobDescriptionCreateRunDto = {
@@ -80,6 +85,8 @@ describe('/api/jd/create-runs/[runId]', () => {
     requireAuthMock.mockReset();
     getRunMock.mockReset();
     listEventsMock.mockReset();
+    failStaleMock.mockReset();
+    failStaleMock.mockResolvedValue(0);
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
   });
 

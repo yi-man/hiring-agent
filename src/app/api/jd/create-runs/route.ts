@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { createAndStartJobDescriptionCreateRun } from '@/lib/jd/create-run-service';
-import { listJobDescriptionCreateRuns } from '@/lib/jd/create-run-repo';
+import {
+  failStaleJobDescriptionCreateRuns,
+  listJobDescriptionCreateRuns,
+} from '@/lib/jd/create-run-repo';
 import { parseCreateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {
@@ -31,6 +34,7 @@ export async function GET(request: Request) {
     const auth = await requireAuth();
     const { searchParams } = new URL(request.url);
     const jobDescriptionId = searchParams.get('jobDescriptionId')?.trim() || undefined;
+    await failStaleJobDescriptionCreateRuns({ userId: auth.user.id });
     const runs = await listJobDescriptionCreateRuns({
       userId: auth.user.id,
       jobDescriptionId,

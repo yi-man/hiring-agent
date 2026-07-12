@@ -147,6 +147,15 @@ function clampLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(100, Math.trunc(limit ?? 20)));
 }
 
+// Runs are executed in-process as fire-and-forget background work. If the
+// server restarts mid-generation a run can be left stuck in pending/running
+// forever, which would make the execution page poll indefinitely. This timeout
+// is generous enough to never interrupt a slow-but-live multi-step generation.
+export const STALE_CREATE_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+
+const STALE_CREATE_RUN_ERROR_MESSAGE =
+  'JD 生成任务超时未完成（服务可能已重启中断），已自动标记为失败，请重试。';
+
 function mapRun(row: JobDescriptionCreateRunRecord): JobDescriptionCreateRunDto {
   return {
     id: row.id,
@@ -198,6 +207,29 @@ export async function createJobDescriptionCreateRun(
     },
   });
   return mapRun(row);
+}
+
+export async function failStaleJobDescriptionCreateRuns(params: {
+  userId: string;
+  now?: Date;
+  timeoutMs?: number;
+}): Promise<number> {
+  const now = params.now ?? new Date();
+  const timeoutMs = params.timeoutMs ?? STALE_CREATE_RUN_TIMEOUT_MS;
+  const threshold = new Date(now.getTime() - timeoutMs);
+  const result = await prisma.jobDescriptionCreateRun.updateMany({
+    where: {
+      userId: params.userId,
+      status: { in: ['pending', 'running'] },
+      updatedAt: { lt: threshold },
+    },
+    data: {
+      status: 'failed',
+      errorMessage: STALE_CREATE_RUN_ERROR_MESSAGE,
+      finishedAt: now,
+    },
+  });
+  return result.count;
 }
 
 export async function getJobDescriptionCreateRun(params: {

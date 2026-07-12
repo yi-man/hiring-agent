@@ -4,6 +4,7 @@ import {
   type JobDescriptionCreateRunDto,
 } from './create-run-repo';
 import { runJobDescriptionCreateRun } from './create-run-runner';
+import { scheduleBackgroundTask } from './background';
 import type { CreateJobDescriptionRequest } from '@/types';
 
 export async function createAndStartJobDescriptionCreateRun(params: {
@@ -31,8 +32,9 @@ export async function createAndStartJobDescriptionCreateRun(params: {
     },
   });
 
-  void runJobDescriptionCreateRun({ userId: params.userId, runId: run.id }).catch(
-    (error: unknown) => {
+  scheduleBackgroundTask(
+    () => runJobDescriptionCreateRun({ userId: params.userId, runId: run.id }),
+    (error) => {
       console.error('JD create run failed', { runId: run.id, error });
     },
   );

@@ -3,7 +3,10 @@
  */
 import { GET, POST } from './route';
 import { createAndStartJobDescriptionCreateRun } from '@/lib/jd/create-run-service';
-import { listJobDescriptionCreateRuns } from '@/lib/jd/create-run-repo';
+import {
+  failStaleJobDescriptionCreateRuns,
+  listJobDescriptionCreateRuns,
+} from '@/lib/jd/create-run-repo';
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
 
 const requireAuthMock = jest.fn();
@@ -34,6 +37,7 @@ jest.mock('@/lib/jd/create-run-service', () => ({
 
 jest.mock('@/lib/jd/create-run-repo', () => ({
   listJobDescriptionCreateRuns: jest.fn(),
+  failStaleJobDescriptionCreateRuns: jest.fn(),
 }));
 
 const createAndStartMock = createAndStartJobDescriptionCreateRun as jest.MockedFunction<
@@ -41,6 +45,9 @@ const createAndStartMock = createAndStartJobDescriptionCreateRun as jest.MockedF
 >;
 const listRunsMock = listJobDescriptionCreateRuns as jest.MockedFunction<
   typeof listJobDescriptionCreateRuns
+>;
+const failStaleMock = failStaleJobDescriptionCreateRuns as jest.MockedFunction<
+  typeof failStaleJobDescriptionCreateRuns
 >;
 
 const run: JobDescriptionCreateRunDto = {
@@ -67,6 +74,8 @@ describe('/api/jd/create-runs', () => {
     requireAuthMock.mockReset();
     createAndStartMock.mockReset();
     listRunsMock.mockReset();
+    failStaleMock.mockReset();
+    failStaleMock.mockResolvedValue(0);
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
   });
 
@@ -109,6 +118,7 @@ describe('/api/jd/create-runs', () => {
 
     expect(response.status).toBe(200);
     expect(body.runs).toEqual([run]);
+    expect(failStaleMock).toHaveBeenCalledWith({ userId: 'u1' });
     expect(listRunsMock).toHaveBeenCalledWith({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
