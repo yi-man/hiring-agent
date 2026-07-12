@@ -7,6 +7,11 @@ import type {
 } from '@/types';
 import type { PublishJobDescriptionSettings, PublishTaskResult } from '@/lib/jd-publishing/types';
 import type { PublishTaskDto } from '@/lib/jd-publishing/types';
+import type { JobDescriptionContextDto } from '@/lib/jd/context';
+import type {
+  JobDescriptionCreateRunDto,
+  JobDescriptionCreateRunEventDto,
+} from './create-run-repo';
 
 async function readJson<T>(response: Response): Promise<T & { error?: string }> {
   return (await response.json().catch(() => ({}))) as T & { error?: string };
@@ -43,6 +48,61 @@ export async function createJobDescriptionFromInput(
   return data.jobDescription;
 }
 
+export async function startJobDescriptionCreateRun(
+  payload: CreateJobDescriptionRequest,
+): Promise<JobDescriptionCreateRunDto> {
+  const response = await fetch('/api/jd/create-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson<{ run?: JobDescriptionCreateRunDto }>(response);
+  if (!response.ok || !data.run) {
+    throw new Error(data.error || '创建 JD 生成任务失败');
+  }
+  return data.run;
+}
+
+export async function fetchJobDescriptionCreateRuns(
+  options: {
+    jobDescriptionId?: string;
+    limit?: number;
+  } = {},
+): Promise<JobDescriptionCreateRunDto[]> {
+  const params = new URLSearchParams();
+  if (options.jobDescriptionId) {
+    params.set('jobDescriptionId', options.jobDescriptionId);
+  }
+  if (options.limit !== undefined) {
+    params.set('limit', String(options.limit));
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/jd/create-runs${query ? `?${query}` : ''}`);
+  const data = await readJson<{ runs?: JobDescriptionCreateRunDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.runs)) {
+    throw new Error(data.error || '加载 JD 创建任务失败');
+  }
+  return data.runs;
+}
+
+export async function fetchJobDescriptionCreateRunWithEvents(runId: string): Promise<{
+  run: JobDescriptionCreateRunDto;
+  events: JobDescriptionCreateRunEventDto[];
+}> {
+  const response = await fetch(`/api/jd/create-runs/${runId}`);
+  const data = await readJson<{
+    run?: JobDescriptionCreateRunDto;
+    events?: JobDescriptionCreateRunEventDto[];
+  }>(response);
+  if (!response.ok || !data.run) {
+    throw new Error(data.error || '加载 JD 创建进度失败');
+  }
+  return {
+    run: data.run,
+    events: Array.isArray(data.events) ? data.events : [],
+  };
+}
+
 export async function fetchJobDescription(id: string): Promise<JobDescriptionDto> {
   const response = await fetch(`/api/jd/${id}`);
   const data = await readJson<{ jobDescription?: JobDescriptionDto }>(response);
@@ -50,6 +110,18 @@ export async function fetchJobDescription(id: string): Promise<JobDescriptionDto
     throw new Error(data.error || '加载 JD 失败');
   }
   return data.jobDescription;
+}
+
+export async function fetchJobDescriptionContext(id: string): Promise<JobDescriptionContextDto> {
+  const response = await fetch(`/api/jd/${id}/context`);
+  const data = await readJson<Partial<JobDescriptionContextDto>>(response);
+  if (!response.ok || !data.jobDescription || !data.context) {
+    throw new Error(data.error || '加载 JD 上下文失败');
+  }
+  return {
+    jobDescription: data.jobDescription,
+    context: data.context,
+  };
 }
 
 export async function updateJobDescriptionResource(

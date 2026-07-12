@@ -36,6 +36,8 @@ model User {
   sessions                       Session[]
   conversations                  Conversation[]
   jobDescriptions                JobDescription[]
+  jobDescriptionCreateRuns       JobDescriptionCreateRun[]
+  jobDescriptionCreateRunEvents  JobDescriptionCreateRunEvent[]
   jobPublishTasks                JobPublishTask[]
   knowledgeDocuments             KnowledgeDocument[]
   knowledgeDocumentChunks        KnowledgeDocumentChunk[]
@@ -102,6 +104,7 @@ model JobDescription {
   createdAt                      DateTime                        @default(now()) @map("created_at")
   updatedAt                      DateTime                        @updatedAt @map("updated_at")
   user                           User                            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  createRuns                     JobDescriptionCreateRun[]
   publishTasks                   JobPublishTask[]
   candidateScreeningRuns         CandidateScreeningRun[]
   candidateScreeningResults      CandidateScreeningResult[]
@@ -119,6 +122,51 @@ model JobDescription {
   @@index([updatedAt(sort: Desc)], map: "idx_job_descriptions_updated_at")
   @@index([userId, status], map: "idx_job_descriptions_user_status")
   @@map("job_descriptions")
+}
+
+model JobDescriptionCreateRun {
+  id                  String                         @id @default(uuid())
+  userId              String                         @map("user_id")
+  jobDescriptionId    String?                        @map("job_description_id")
+  department          String
+  position            String
+  positionDescription String                         @map("position_description")
+  tone                String                         @default("tech")
+  salaryRange         String                         @map("salary_range")
+  workLocations       Json                           @map("work_locations")
+  status              String                         @default("pending")
+  currentStage        String?                        @map("current_stage")
+  errorMessage        String?                        @map("error_message")
+  startedAt           DateTime?                      @map("started_at")
+  finishedAt          DateTime?                      @map("finished_at")
+  createdAt           DateTime                       @default(now()) @map("created_at")
+  updatedAt           DateTime                       @updatedAt @map("updated_at")
+  user                User                           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription      JobDescription?                @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  events              JobDescriptionCreateRunEvent[]
+
+  @@unique([id, userId], map: "job_description_create_runs_id_user_id_key")
+  @@index([userId, createdAt(sort: Desc)], map: "idx_jd_create_runs_user_created")
+  @@index([userId, jobDescriptionId, createdAt(sort: Desc)], map: "idx_jd_create_runs_user_jd_created")
+  @@index([status, updatedAt(sort: Desc)], map: "idx_jd_create_runs_status_updated")
+  @@map("job_description_create_runs")
+}
+
+model JobDescriptionCreateRunEvent {
+  id        String                  @id @default(uuid())
+  userId    String                  @map("user_id")
+  runId     String                  @map("run_id")
+  stage     String
+  level     String                  @default("info")
+  message   String
+  detail    Json?
+  createdAt DateTime                @default(now()) @map("created_at")
+  user      User                    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  run       JobDescriptionCreateRun @relation(fields: [runId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([userId, runId, createdAt], map: "idx_jd_create_run_events_user_run_created")
+  @@index([runId, createdAt], map: "idx_jd_create_run_events_run_created")
+  @@map("job_description_create_run_events")
 }
 
 model PublishSkill {

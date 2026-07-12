@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { env } from '@/lib/env';
-import { embedDocuments } from '@/lib/rag/embed';
+import { embedDocuments, getConfiguredEmbeddingModel } from '@/lib/rag/embed';
 import { splitMarkdownToChunks } from '@/lib/rag/markdown';
 import {
   claimKnowledgeDocumentIngest,
@@ -108,7 +108,7 @@ export async function ingestKnowledgeDocument(params: {
       documentId: document.id,
       userId: params.userId,
       claimToken,
-      embeddingModel: env.OPENAI_EMBEDDING_MODEL,
+      embeddingModel: getConfiguredEmbeddingModel(),
       chunks: markdownChunks.map((chunk, index) => ({
         id: randomUUID(),
         chunkIndex: chunk.index,

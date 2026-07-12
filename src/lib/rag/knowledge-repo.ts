@@ -25,6 +25,16 @@ export type KnowledgeChunkSearchResult = {
   score: number;
 };
 
+export type KnowledgeDocumentChunkSnapshot = {
+  id: string;
+  documentId: string;
+  chunkIndex: number;
+  content: string;
+  filename: string;
+  title: string | null;
+  sourceLabel: string | null;
+};
+
 export function vectorToPgLiteral(vector: number[]): string {
   if (vector.length === 0) {
     throw new Error('Cannot format empty vector for pgvector');
@@ -72,6 +82,47 @@ export async function getKnowledgeDocumentById(userId: string, id: string) {
   return prisma.knowledgeDocument.findFirst({
     where: { id, userId },
   });
+}
+
+export async function listKnowledgeDocumentChunksByIds(
+  userId: string,
+  chunkIds: string[],
+): Promise<KnowledgeDocumentChunkSnapshot[]> {
+  const uniqueChunkIds = Array.from(new Set(chunkIds.filter((id) => id.trim().length > 0)));
+  if (uniqueChunkIds.length === 0) {
+    return [];
+  }
+
+  const rows = await prisma.knowledgeDocumentChunk.findMany({
+    where: {
+      userId,
+      id: { in: uniqueChunkIds },
+      document: { userId },
+    },
+    select: {
+      id: true,
+      documentId: true,
+      chunkIndex: true,
+      content: true,
+      document: {
+        select: {
+          filename: true,
+          title: true,
+          sourceLabel: true,
+        },
+      },
+    },
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    documentId: row.documentId,
+    chunkIndex: row.chunkIndex,
+    content: row.content,
+    filename: row.document.filename,
+    title: row.document.title,
+    sourceLabel: row.document.sourceLabel,
+  }));
 }
 
 export async function findKnowledgeDocumentBySourceLabel(userId: string, sourceLabel: string) {

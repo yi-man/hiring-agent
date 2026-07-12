@@ -120,13 +120,35 @@ export type JDAgentContextMatch = {
   filename: string;
   title: string | null;
   sourceLabel: string | null;
+  content?: string;
+  selectedRank?: number;
+  reason?: string;
+};
+
+export type JDAgentContextSelection = {
+  candidateTopK: number;
+  candidateCount: number;
+  selectedCount: number;
+  maxChunks: number;
+  maxDocuments: number;
+  maxChunksPerDocument: number;
+  minScore: number;
+  maxContextChars: number;
+  excludedByLowScore: number;
+  excludedByEmptyContent: number;
+  excludedByDocumentLimit: number;
+  excludedByPerDocumentLimit: number;
+  excludedByRedundancy: number;
+  excludedByContextLength: number;
 };
 
 export type JDAgentContextMeta = {
   used: boolean;
   query: string;
   textLength: number;
+  contextText?: string;
   matches: JDAgentContextMatch[];
+  selection?: JDAgentContextSelection;
   warnings: string[];
 };
 

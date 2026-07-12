@@ -6,6 +6,7 @@ const replaceChunksMock = jest.fn();
 const replaceAndCompleteMock = jest.fn();
 const splitMock = jest.fn();
 const embedDocumentsMock = jest.fn();
+const getConfiguredEmbeddingModelMock = jest.fn();
 
 jest.mock('@/lib/env', () => ({
   env: {
@@ -30,6 +31,7 @@ jest.mock('@/lib/rag/markdown', () => ({
 
 jest.mock('@/lib/rag/embed', () => ({
   embedDocuments: (...args: unknown[]) => embedDocumentsMock(...args),
+  getConfiguredEmbeddingModel: (...args: unknown[]) => getConfiguredEmbeddingModelMock(...args),
 }));
 
 describe('ingestKnowledgeDocument', () => {
@@ -42,10 +44,12 @@ describe('ingestKnowledgeDocument', () => {
     replaceAndCompleteMock.mockReset();
     splitMock.mockReset();
     embedDocumentsMock.mockReset();
+    getConfiguredEmbeddingModelMock.mockReset();
     completeMock.mockResolvedValue(true);
     failMock.mockResolvedValue(true);
     replaceChunksMock.mockResolvedValue(1);
     replaceAndCompleteMock.mockResolvedValue(true);
+    getConfiguredEmbeddingModelMock.mockReturnValue('text-embedding-3-small');
   });
 
   it('claims with user, document, token, and stale lease date', async () => {

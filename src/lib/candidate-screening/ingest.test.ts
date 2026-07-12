@@ -1,5 +1,7 @@
 /** @jest-environment node */
 
+export {};
+
 const embedDocumentsMock = jest.fn();
 const splitMarkdownToChunksMock = jest.fn();
 const upsertCandidateWithIdentityMock = jest.fn();

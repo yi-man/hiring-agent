@@ -58,6 +58,23 @@ function mockLlmResult(output: JD | EvaluationResult) {
   };
 }
 
+const defaultSelection = {
+  candidateTopK: 12,
+  candidateCount: 1,
+  selectedCount: 1,
+  maxChunks: 6,
+  maxDocuments: 3,
+  maxChunksPerDocument: 3,
+  minScore: 0,
+  maxContextChars: 6000,
+  excludedByLowScore: 0,
+  excludedByEmptyContent: 0,
+  excludedByDocumentLimit: 0,
+  excludedByPerDocumentLimit: 0,
+  excludedByRedundancy: 0,
+  excludedByContextLength: 0,
+};
+
 describe('runJDAgent', () => {
   beforeEach(() => {
     runLLMMock.mockReset();
@@ -74,8 +91,12 @@ describe('runJDAgent', () => {
           filename: 'company.md',
           title: '公司介绍',
           sourceLabel: null,
+          content: '招聘助手是面向 HR 的 AI 招聘协作产品，包含对话、JD 生成和知识库能力。',
+          selectedRank: 1,
+          reason: '语义相似度 0.91，符合知识库选入规则',
         },
       ],
+      selection: defaultSelection,
     });
   });
 
@@ -253,7 +274,11 @@ describe('runJDAgent', () => {
   });
 
   it('generates with a warning when no company context is retrieved', async () => {
-    retrieveUserKnowledgeContextMock.mockResolvedValueOnce({ contextText: '', matches: [] });
+    retrieveUserKnowledgeContextMock.mockResolvedValueOnce({
+      contextText: '',
+      matches: [],
+      selection: { ...defaultSelection, candidateCount: 0, selectedCount: 0 },
+    });
     runLLMMock
       .mockResolvedValueOnce(mockLlmResult(generatedJd))
       .mockResolvedValueOnce(mockLlmResult(goodEvaluation));

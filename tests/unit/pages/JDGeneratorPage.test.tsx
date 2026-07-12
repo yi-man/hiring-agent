@@ -149,10 +149,18 @@ describe('JD pages', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({
           jobDescriptions: [{ ...sampleJobDescription, status: 'created' }],
           total: 1,
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
       });
 
     render(<JDListView />);
@@ -181,7 +189,7 @@ describe('JD pages', () => {
     fireEvent.change(screen.getByLabelText('JD 状态筛选'), { target: { value: 'created' } });
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenLastCalledWith('/api/jd?status=created');
+      expect(global.fetch).toHaveBeenCalledWith('/api/jd?status=created');
     });
   });
 
@@ -194,7 +202,24 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          jobDescription: sampleJobDescription,
+          run: {
+            id: 'create-run-1',
+            userId: 'u1',
+            jobDescriptionId: null,
+            department: '技术部',
+            position: '前端工程师',
+            positionDescription: '负责增长业务体验建设',
+            salaryRange: '30-50K',
+            workLocations: ['上海张江', '远程'],
+            tone: 'tech',
+            status: 'pending',
+            currentStage: 'queued',
+            errorMessage: null,
+            startedAt: null,
+            finishedAt: null,
+            createdAt: '2026-06-25T01:00:00.000Z',
+            updatedAt: '2026-06-25T01:00:00.000Z',
+          },
         }),
       });
 
@@ -216,7 +241,7 @@ describe('JD pages', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/jd',
+        '/api/jd/create-runs',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
@@ -230,7 +255,9 @@ describe('JD pages', () => {
         }),
       );
     });
-    expect(pushMock).toHaveBeenCalledWith('/jd-generator/jd-1/runs/create');
+    expect(pushMock).toHaveBeenCalledWith(
+      '/jd-generator/create-runs/create-run-1?returnTo=%2Fjd-generator%2Fnew&returnLabel=%E8%BF%94%E5%9B%9E%E6%96%B0%E5%BB%BA+JD',
+    );
   });
 
   it('regenerates editable JD detail from the primary action area', async () => {
@@ -284,6 +311,10 @@ describe('JD pages', () => {
       );
     });
     expect(screen.getByText('company.md')).toBeInTheDocument();
+    const contextHref =
+      screen.getByRole('link', { name: '查看本次上下文' }).getAttribute('href') ?? '';
+    expect(parsedHref(contextHref).pathname).toBe('/jd-generator/jd-1/context');
+    expectReturnContext(contextHref, '/jd-generator/jd-1', '返回 JD');
     expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
   });
 
