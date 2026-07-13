@@ -140,6 +140,7 @@ export type BrowserExecutor = {
   waitForUrl(url: string): Promise<BrowserStepResult>;
   check(check: BrowserStepCheck): Promise<boolean>;
   waitForText?(text: string): Promise<BrowserStepResult>;
+  waitForTarget?(target: BrowserTargetInput): Promise<BrowserStepResult>;
   addKeywords?(
     target: BrowserTargetInput,
     values: string[],

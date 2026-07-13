@@ -489,6 +489,43 @@ describe('candidate screening runner', () => {
     );
   });
 
+  it('finishes successfully with zero fetched candidates when first workflow exploration has no usable detail', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      skill: null,
+      loadOrExplore: jest.fn().mockResolvedValue(null),
+      searchCandidates: jest.fn(() => batches()),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        stats: expect.objectContaining({ fetched: 0 }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: expect.any(String) }),
+    );
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'searching_live',
+        level: 'success',
+        message: '实时搜索完成：抓取 0 人',
+        detail: expect.objectContaining({ fetched: 0 }),
+      }),
+    );
+  });
+
   it('uses the same workflow session for planned chat and collect actions', async () => {
     const adapter = makeAdapter();
     const workflow = makeWorkflowSession(adapter, {

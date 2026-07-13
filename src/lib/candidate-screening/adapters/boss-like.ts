@@ -531,8 +531,19 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   }
 
   private async waitForDetailContent(options?: CandidateBrowserActionOptions): Promise<void> {
-    if (!this.executor.waitForText) return;
     const target = this.targetFor(options, 'detailContent', '候选人详情');
+    if (this.executor.waitForTarget) {
+      await requireSuccessfulStep(
+        this.executor.waitForTarget(target),
+        'wait for candidate detail',
+        {
+          target,
+          targetKey: 'detailContent',
+        },
+      );
+      return;
+    }
+    if (!this.executor.waitForText) return;
     const text = typeof target === 'string' ? target : target.name;
     await requireSuccessfulStep(this.executor.waitForText(text), 'wait for candidate detail', {
       target,

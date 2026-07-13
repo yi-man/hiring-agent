@@ -127,6 +127,33 @@ describe('CommandTransportBrowserExecutor', () => {
     ]);
   });
 
+  it('preserves a structured target when waiting through the command transport', async () => {
+    const target: TargetDescriptor = {
+      kind: 'container',
+      name: '候选人详情',
+      exact: true,
+      stableAttrs: { testId: 'candidate-detail' },
+      scope: { kind: 'section', name: '候选人资料' },
+    };
+    const transport = new RecordingTransport((command) => ({
+      commandId: command.id,
+      success: true,
+      match: command.target ? uniqueReport(command.target) : undefined,
+    }));
+    const executor = new CommandTransportBrowserExecutor({ transport, taskId: 'task-1' });
+
+    await expect(executor.waitForTarget?.(target)).resolves.toEqual(
+      expect.objectContaining({ success: true }),
+    );
+    expect(transport.commands).toEqual([
+      expect.objectContaining({
+        action: 'wait_for_text',
+        target,
+        params: { text: '候选人详情' },
+      }),
+    ]);
+  });
+
   it('uses command context supplied by the publishing graph', async () => {
     const target: TargetDescriptor = {
       kind: 'field',

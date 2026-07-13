@@ -3,6 +3,7 @@ import type {
   BrowserStepResult,
   BrowserTargetInput,
   LocatorMatchReport,
+  StructuredDomSnapshot,
 } from '@/lib/browser/types';
 import {
   createExploredPublishSkill,
@@ -62,7 +63,7 @@ type ExploreScreeningWorkflow = (params: {
     username: string;
     password: string;
   };
-}) => Promise<ScreeningWorkflowSkill>;
+}) => Promise<ScreeningWorkflowSkill | null>;
 
 type CreateNextScreeningSkillVersion = (params: {
   previousSkill: PublishSkill;
@@ -116,9 +117,21 @@ type WorkflowEventDetail = {
   skillId: string;
   previousSkillId?: string;
   retry?: true;
+  retryState?: 'start' | 'success' | 'failure';
   repair?: true;
   browserTrace?: Record<string, unknown>;
   candidateName?: string;
+  candidateId?: string;
+  target?: BrowserTargetInput;
+  targetKey?: string;
+  error?: string;
+  rawSnapshot?: string;
+  structuredSnapshot?: StructuredDomSnapshot;
+};
+
+type BrowserFailureContext = {
+  rawSnapshot?: string;
+  structuredSnapshot?: StructuredDomSnapshot;
 };
 
 type ActionStart = {
@@ -347,6 +360,7 @@ export function createCandidateScreeningWorkflowSession(
   const dependencies = resolveDependencies(input);
   let skill: ScreeningWorkflowSkill | null = null;
   let stage: CandidateScreeningRunStage | null = null;
+  let emptyExplorationCompleted = false;
 
   function requireSkill(): ScreeningWorkflowSkill {
     if (!skill) throw new Error('screening workflow must be loaded before browser actions');
@@ -368,7 +382,7 @@ export function createCandidateScreeningWorkflowSession(
   }
 
   async function recordEvent(params: {
-    level: 'info' | 'success';
+    level: 'info' | 'success' | 'error';
     message: string;
     detail: WorkflowEventDetail;
     candidateId?: string;
@@ -390,18 +404,32 @@ export function createCandidateScreeningWorkflowSession(
     skillId?: string;
     previousSkillId?: string;
     retry?: boolean;
+    retryState?: 'start' | 'success' | 'failure';
     repair?: boolean;
     browserTrace?: Record<string, unknown>;
     candidateName?: string;
+    candidateId?: string;
+    target?: BrowserTargetInput;
+    targetKey?: string;
+    error?: string;
+    rawSnapshot?: string;
+    structuredSnapshot?: StructuredDomSnapshot;
   }): WorkflowEventDetail {
     return {
       workflowStep: params.workflowStep,
       skillId: params.skillId ?? requireSkill().id,
       ...(params.previousSkillId ? { previousSkillId: params.previousSkillId } : {}),
       ...(params.retry ? { retry: true } : {}),
+      ...(params.retryState ? { retryState: params.retryState } : {}),
       ...(params.repair ? { repair: true } : {}),
       ...(params.browserTrace ? { browserTrace: params.browserTrace } : {}),
       ...(params.candidateName ? { candidateName: params.candidateName } : {}),
+      ...(params.candidateId ? { candidateId: params.candidateId } : {}),
+      ...(params.target ? { target: params.target } : {}),
+      ...(params.targetKey ? { targetKey: params.targetKey } : {}),
+      ...(params.error ? { error: params.error } : {}),
+      ...(params.rawSnapshot ? { rawSnapshot: params.rawSnapshot } : {}),
+      ...(params.structuredSnapshot ? { structuredSnapshot: params.structuredSnapshot } : {}),
     };
   }
 
@@ -415,7 +443,12 @@ export function createCandidateScreeningWorkflowSession(
     await recordEvent({
       level: 'info',
       message: retry ? `Workflow 重试：${step.id}` : `Workflow 开始：${step.id}`,
-      detail: eventDetail({ workflowStep: step.id, skillId: currentSkill.id, retry }),
+      detail: eventDetail({
+        workflowStep: step.id,
+        skillId: currentSkill.id,
+        retry,
+        retryState: retry ? 'start' : undefined,
+      }),
     });
     return { skill: currentSkill, step };
   }
@@ -439,20 +472,85 @@ export function createCandidateScreeningWorkflowSession(
         workflowStep: params.stepId,
         skillId: currentSkill.id,
         retry: params.retry,
+        retryState: params.retry ? 'success' : undefined,
         browserTrace: params.browserTrace,
         candidateName: params.candidateName,
       }),
     });
   }
 
-  async function repairTarget(failed: ScreeningWorkflowTargetError): Promise<boolean> {
+  async function captureBrowserFailure(
+    failed: ScreeningWorkflowTargetError,
+  ): Promise<BrowserFailureContext> {
+    const executor = dependencies.adapter.getBrowserExecutor();
+    const [rawSnapshot, structuredSnapshot] = await Promise.all([
+      executor.snapshot?.().catch(() => undefined),
+      executor.snapshotStructured?.().catch(() => undefined),
+    ]);
+    const resultSnapshot = failed.result.domSnapshot;
+    return {
+      rawSnapshot:
+        rawSnapshot ??
+        (typeof resultSnapshot === 'string' && resultSnapshot.trim() ? resultSnapshot : undefined),
+      structuredSnapshot:
+        structuredSnapshot ??
+        (typeof resultSnapshot === 'object' && resultSnapshot !== null
+          ? resultSnapshot
+          : undefined),
+    };
+  }
+
+  async function recordWorkflowFailure(params: {
+    stepId: string;
+    candidateId?: string;
+    candidateName?: string;
+    error: string;
+    retry: boolean;
+    targetError?: ScreeningWorkflowTargetError;
+    browserTrace?: Record<string, unknown>;
+  }): Promise<BrowserFailureContext | undefined> {
+    const context = params.targetError
+      ? await captureBrowserFailure(params.targetError)
+      : undefined;
+    try {
+      await recordEvent({
+        level: 'error',
+        message: params.retry
+          ? `Workflow 重试失败：${params.stepId}`
+          : `Workflow 失败：${params.stepId}`,
+        candidateId: params.candidateId,
+        detail: eventDetail({
+          workflowStep: params.stepId,
+          retry: params.retry,
+          retryState: params.retry ? 'failure' : undefined,
+          candidateId: params.candidateId,
+          candidateName: params.candidateName,
+          target: params.targetError?.target,
+          targetKey: params.targetError?.targetKey,
+          error: params.error,
+          browserTrace: params.browserTrace,
+          rawSnapshot: context?.rawSnapshot,
+          structuredSnapshot: context?.structuredSnapshot,
+        }),
+      });
+    } catch (error) {
+      if (params.targetError) throw new ScreeningWorkflowRepairPersistenceError(error);
+      throw error;
+    }
+    return context;
+  }
+
+  async function repairTarget(
+    failed: ScreeningWorkflowTargetError,
+    failureContext?: BrowserFailureContext,
+  ): Promise<boolean> {
     const currentSkill = requireSkill();
     const executor = dependencies.adapter.getBrowserExecutor();
     if (!executor.snapshotStructured || !executor.resolveTarget) return false;
 
     let report: LocatorMatchReport | null = null;
     try {
-      const snapshot = await executor.snapshotStructured();
+      const snapshot = failureContext?.structuredSnapshot ?? (await executor.snapshotStructured());
       const replacement = repairBossLikeScreeningTargetFromSnapshot({
         snapshot,
         failedStepId: failed.stepId,
@@ -530,28 +628,55 @@ export function createCandidateScreeningWorkflowSession(
       try {
         value = await params.invoke(targetsForStep(started.step));
       } catch (error) {
-        if (retry) throw error;
         const targetError = targetErrorFromUnknown({
           error,
           step: started.step,
           candidateId: params.candidateId,
         });
-        if (!targetError || !(await repairTarget(targetError))) throw error;
+        if (retry) {
+          await recordWorkflowFailure({
+            stepId: started.step.id,
+            candidateId: params.candidateId,
+            candidateName: params.candidateName,
+            error: error instanceof Error ? error.message : String(error),
+            retry: true,
+            targetError: targetError ?? undefined,
+          });
+          throw error;
+        }
+        if (!targetError) throw error;
+        const failureContext = await recordWorkflowFailure({
+          stepId: started.step.id,
+          candidateId: params.candidateId,
+          candidateName: params.candidateName,
+          error: targetError.message,
+          retry: false,
+          targetError,
+        });
+        if (!(await repairTarget(targetError, failureContext))) throw error;
         retry = true;
         continue;
       }
 
       const actionResult = isActionExecutionResult(value) ? value : undefined;
       if (actionResult && !actionResult.success) {
-        if (retry || !actionResult.targetError) return value;
         const targetError = targetErrorFromUnknown({
           error: actionResult.targetError,
           step: started.step,
           candidateId: params.candidateId,
         });
-        if (!targetError) return value;
+        const failureContext = await recordWorkflowFailure({
+          stepId: started.step.id,
+          candidateId: params.candidateId,
+          candidateName: params.candidateName,
+          error: actionResult.error ?? 'candidate browser action failed',
+          retry,
+          targetError: targetError ?? undefined,
+          browserTrace: actionResult.browserTrace,
+        });
+        if (retry || !targetError) return value;
         try {
-          if (!(await repairTarget(targetError))) return value;
+          if (!(await repairTarget(targetError, failureContext))) return value;
         } catch (error) {
           if (error instanceof ScreeningWorkflowRepairResolutionError) return value;
           throw error;
@@ -583,9 +708,10 @@ export function createCandidateScreeningWorkflowSession(
     plan: SearchPlan,
     options: SearchOptions,
   ): AsyncIterable<RawCandidateBatch> {
-    if (!skill) {
+    if (!skill && !emptyExplorationCompleted) {
       await loadOrExplore({ searchPlan: plan, stage: stage ?? 'searching_live' });
     }
+    if (!skill && emptyExplorationCompleted) return;
     let retry = false;
 
     while (true) {
@@ -608,9 +734,24 @@ export function createCandidateScreeningWorkflowSession(
         await finishAction({ stepId: started.step.id, retry });
         return;
       } catch (error) {
-        if (retry) throw error;
         const targetError = targetErrorFromUnknown({ error, step: started.step });
-        if (!targetError || !(await repairTarget(targetError))) throw error;
+        if (retry) {
+          await recordWorkflowFailure({
+            stepId: started.step.id,
+            error: error instanceof Error ? error.message : String(error),
+            retry: true,
+            targetError: targetError ?? undefined,
+          });
+          throw error;
+        }
+        if (!targetError) throw error;
+        const failureContext = await recordWorkflowFailure({
+          stepId: started.step.id,
+          error: targetError.message,
+          retry: false,
+          targetError,
+        });
+        if (!(await repairTarget(targetError, failureContext))) throw error;
         retry = true;
       }
     }
@@ -636,6 +777,10 @@ export function createCandidateScreeningWorkflowSession(
         searchPlan: params.searchPlan,
         ...exploreContext,
       });
+      if (!explored) {
+        emptyExplorationCompleted = true;
+        return null;
+      }
       skill = screeningSkill(await dependencies.createExploredSkill(explored));
       await recordEvent({
         level: 'success',

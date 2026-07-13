@@ -156,6 +156,11 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
     );
   }
 
+  async waitForTarget(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    const text = typeof target === 'string' ? target : target.name;
+    return normalizeResult(await this.send('wait_for_text', { text }, target));
+  }
+
   async addKeywords(
     target: BrowserTargetInput,
     values: string[],

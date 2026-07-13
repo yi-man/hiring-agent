@@ -11,11 +11,17 @@ import {
   requireIntegrationEnv,
 } from '../chat/test-env';
 import { BossLikeCandidateSourceAdapter } from '@/lib/candidate-screening/adapters/boss-like';
+import { createCandidateScreeningWorkflowSession } from '@/lib/candidate-screening/workflow/executor';
+import { buildBossLikeScreeningSkill } from '@/lib/candidate-screening/workflow/skill-registry';
 import {
   createCandidateScreeningRun,
   getCandidateScreeningRun,
   listCandidateScreeningRunEvents,
 } from '@/lib/candidate-screening/repo';
+import {
+  createExploredPublishSkill,
+  createNextActivePublishSkillVersion,
+} from '@/lib/jd-publishing/publish-repo';
 import {
   runCandidateScreening,
   type ScreeningRunnerDependencies,
@@ -39,6 +45,7 @@ type BossLikeServer = {
   baseUrl: string;
   requests: string[];
   setSearchButtonLabel: (label: string) => void;
+  setCandidateResultsVisible: (visible: boolean) => void;
   close: () => Promise<void>;
 };
 
@@ -121,7 +128,7 @@ function renderLoginPage(): string {
 </html>`;
 }
 
-function renderResumeListPage(searchButtonLabel: string): string {
+function renderResumeListPage(searchButtonLabel: string, candidatesVisible: boolean): string {
   return `<!doctype html>
 <html lang="zh-CN">
   <head><meta charset="utf-8" /><title>候选人库</title></head>
@@ -133,7 +140,7 @@ function renderResumeListPage(searchButtonLabel: string): string {
         <button type="submit">${escapeHtml(searchButtonLabel)}</button>
       </form>
       <p>简历</p>
-      <section>${candidateFixtures().join('\n')}</section>
+      <section>${candidatesVisible ? candidateFixtures().join('\n') : ''}</section>
     </main>
   </body>
 </html>`;
@@ -185,6 +192,7 @@ function renderResumeDetailPage(id: string): string {
 async function startBossLikeServer(): Promise<BossLikeServer> {
   const requests: string[] = [];
   let searchButtonLabel = '搜索';
+  let candidateResultsVisible = true;
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     requests.push(`${request.method ?? 'GET'} ${url.pathname}${url.search}`);
@@ -195,7 +203,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
       return;
     }
     if (url.pathname === '/employer/resumes') {
-      response.end(renderResumeListPage(searchButtonLabel));
+      response.end(renderResumeListPage(searchButtonLabel, candidateResultsVisible));
       return;
     }
     const messageMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)\/messages$/);
@@ -234,6 +242,9 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     requests,
     setSearchButtonLabel: (label) => {
       searchButtonLabel = label;
+    },
+    setCandidateResultsVisible: (visible) => {
+      candidateResultsVisible = visible;
     },
     close: () =>
       new Promise<void>((resolve, reject) => {
@@ -342,6 +353,13 @@ const browserExecutionRequest: CreateScreeningRunRequest = {
   maxCandidates: 2,
   batchSize: 2,
   allowAlreadyContacted: true,
+};
+
+const workflowSearchPlan = {
+  keywords: ['Java'],
+  filters: {},
+  priorityTags: [],
+  retrievalQuery: 'Java 后端',
 };
 
 async function createRunAndExecute(params: {
@@ -646,6 +664,124 @@ describe('candidate screening integration flow with real postgres and boss-like 
         }),
       ).toBe(1);
     } finally {
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('completes an empty first exploration without persisting screen_candidates', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+
+    try {
+      await cleanupScreeningWorkflows();
+      bossLike.setCandidateResultsVisible(false);
+      const jobDescription = await createPublishedJobDescription(userId);
+      const run = await createRunAndExecute({
+        userId,
+        jobDescription,
+        bossLike,
+        request: browserExecutionRequest,
+        evaluate: evaluateCandidateWithChatAndCollect,
+      });
+      const completed = await getCandidateScreeningRun({ userId, runId: run.id });
+      const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
+      const workflowCount = await prisma.publishSkill.count({
+        where: { name: 'screen_candidates', platform: 'boss-like' },
+      });
+
+      expect(completed).toEqual(
+        expect.objectContaining({
+          status: 'success',
+          skillId: null,
+          stats: expect.objectContaining({ fetched: 0 }),
+        }),
+      );
+      expect(workflowCount).toBe(0);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            stage: 'searching_live',
+            level: 'success',
+            message: '实时搜索完成：抓取 0 人',
+            detail: expect.objectContaining({ fetched: 0 }),
+          }),
+        ]),
+      );
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('repairs an inactive v1 into v3 while v2 is active and associates the run with v3', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+    let session: ReturnType<typeof createCandidateScreeningWorkflowSession> | null = null;
+
+    try {
+      await cleanupScreeningWorkflows();
+      const jobDescription = await createPublishedJobDescription(userId);
+      const v1 = await createExploredPublishSkill(
+        buildBossLikeScreeningSkill({ id: 'screen-candidates-stale-v1', version: 1 }),
+      );
+      const v2 = await createNextActivePublishSkillVersion({ previousSkill: v1, steps: v1.steps });
+      const run = await createCandidateScreeningRun({
+        userId,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        mode: 'execution',
+        status: 'pending',
+      });
+      bossLike.setSearchButtonLabel('开始检索');
+      const adapter = new BossLikeCandidateSourceAdapter({
+        baseUrl: bossLike.baseUrl,
+        executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+        username: 'admin',
+        password: 'boss123',
+      });
+      session = createCandidateScreeningWorkflowSession({
+        adapter,
+        userId,
+        runId: run.id,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+      });
+
+      await session.loadExact({ skillId: v1.id, stage: 'searching_live' });
+      for await (const batch of session.searchCandidates(workflowSearchPlan, {
+        maxCandidates: 1,
+        batchSize: 1,
+      })) {
+        // Exhaust the browser stream to execute the repaired search step.
+        void batch;
+      }
+
+      const persisted = await getCandidateScreeningRun({ userId, runId: run.id });
+      const workflows = await prisma.publishSkill.findMany({
+        where: { name: 'screen_candidates', platform: 'boss-like' },
+        orderBy: { version: 'asc' },
+      });
+      const active = workflows.filter((workflow) => workflow.isActive);
+
+      expect(persisted?.skillId).toBe('screen_candidates-boss-like-v3');
+      expect(workflows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: v2.id, version: 2, isActive: false }),
+          expect.objectContaining({
+            id: 'screen_candidates-boss-like-v3',
+            version: 3,
+            isActive: true,
+          }),
+        ]),
+      );
+      expect(active).toEqual([
+        expect.objectContaining({ id: 'screen_candidates-boss-like-v3', version: 3 }),
+      ]);
+    } finally {
+      await session?.close();
       await cleanupIntegrationUser(userId);
       await cleanupScreeningWorkflows();
       await bossLike.close();

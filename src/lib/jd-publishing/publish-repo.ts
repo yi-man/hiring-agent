@@ -155,24 +155,31 @@ export async function upsertDefaultPublishSkill(skill: PublishSkill): Promise<Pu
 }
 
 export async function createExploredPublishSkill(skill: PublishSkill): Promise<PublishSkill> {
-  await prisma.publishSkill.updateMany({
-    where: { name: skill.name, platform: skill.platform, isActive: true },
-    data: { isActive: false },
+  return prisma.$transaction(async (tx) => {
+    const latest = await tx.publishSkill.findFirst({
+      where: { name: skill.name, platform: skill.platform },
+      orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
+    });
+    const nextVersion = latest ? Math.max(skill.version, latest.version + 1) : skill.version;
+    const row = await tx.publishSkill.create({
+      data: skillCreateData({
+        ...skill,
+        version: nextVersion,
+        isActive: true,
+        meta: skill.meta ?? { success_rate: 0, usage_count: 0, created_from: 'explore' },
+      }),
+    });
+    await tx.publishSkill.updateMany({
+      where: {
+        name: skill.name,
+        platform: skill.platform,
+        isActive: true,
+        id: { not: row.id },
+      },
+      data: { isActive: false },
+    });
+    return mapSkill(row);
   });
-  const latest = await prisma.publishSkill.findFirst({
-    where: { name: skill.name, platform: skill.platform },
-    orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
-  });
-  const nextVersion = latest ? Math.max(skill.version, latest.version + 1) : skill.version;
-  const row = await prisma.publishSkill.create({
-    data: skillCreateData({
-      ...skill,
-      version: nextVersion,
-      isActive: true,
-      meta: skill.meta ?? { success_rate: 0, usage_count: 0, created_from: 'explore' },
-    }),
-  });
-  return mapSkill(row);
 }
 
 export async function createNextActivePublishSkillVersion(params: {
@@ -181,20 +188,32 @@ export async function createNextActivePublishSkillVersion(params: {
   meta?: PublishSkillMeta;
 }): Promise<PublishSkill> {
   const { previousSkill, steps } = params;
-  await prisma.publishSkill.updateMany({
-    where: { name: previousSkill.name, platform: previousSkill.platform, isActive: true },
-    data: { isActive: false },
+  return prisma.$transaction(async (tx) => {
+    const latest = await tx.publishSkill.findFirst({
+      where: { name: previousSkill.name, platform: previousSkill.platform },
+      orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
+    });
+    const version = Math.max(previousSkill.version + 1, (latest?.version ?? 0) + 1);
+    const nextSkill: PublishSkill = {
+      ...previousSkill,
+      id: `${previousSkill.name}-${previousSkill.platform}-v${version}`,
+      version,
+      isActive: true,
+      steps,
+      meta: params.meta ?? { success_rate: 0, usage_count: 0, created_from: 'agent' },
+    };
+    const row = await tx.publishSkill.create({ data: skillCreateData(nextSkill) });
+    await tx.publishSkill.updateMany({
+      where: {
+        name: previousSkill.name,
+        platform: previousSkill.platform,
+        isActive: true,
+        id: { not: row.id },
+      },
+      data: { isActive: false },
+    });
+    return mapSkill(row);
   });
-  const nextSkill: PublishSkill = {
-    ...previousSkill,
-    id: `${previousSkill.name}-${previousSkill.platform}-v${previousSkill.version + 1}`,
-    version: previousSkill.version + 1,
-    isActive: true,
-    steps,
-    meta: params.meta ?? { success_rate: 0, usage_count: 0, created_from: 'agent' },
-  };
-  const row = await prisma.publishSkill.create({ data: skillCreateData(nextSkill) });
-  return mapSkill(row);
 }
 
 export async function getActivePublishSkillByName(params: {

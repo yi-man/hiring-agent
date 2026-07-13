@@ -19,6 +19,7 @@ jest.mock('@/lib/prisma', () => ({
       findFirst: jest.fn(),
       updateMany: jest.fn(),
     },
+    $transaction: jest.fn(),
     jobPublishTask: {
       create: jest.fn(),
       findMany: jest.fn(),
@@ -38,6 +39,7 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
       findFirst: jest.Mock;
       updateMany: jest.Mock;
     };
+    $transaction: jest.Mock;
     jobPublishTask: {
       create: jest.Mock;
       findMany: jest.Mock;
@@ -66,6 +68,10 @@ describe('publish repository', () => {
     prismaMock.publishSkill.upsert.mockReset();
     prismaMock.publishSkill.findFirst.mockReset();
     prismaMock.publishSkill.updateMany.mockReset();
+    prismaMock.$transaction.mockReset();
+    prismaMock.$transaction.mockImplementation(async (callback) =>
+      callback({ publishSkill: prismaMock.publishSkill }),
+    );
     prismaMock.jobPublishTask.create.mockReset();
     prismaMock.jobPublishTask.findMany.mockReset();
     prismaMock.jobPublishTask.update.mockReset();
@@ -152,7 +158,12 @@ describe('publish repository', () => {
     const result = await createExploredPublishSkill(exploredSkill);
 
     expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith({
-      where: { name: 'publish_jd', platform: 'boss-like', isActive: true },
+      where: {
+        name: 'publish_jd',
+        platform: 'boss-like',
+        isActive: true,
+        id: { not: 'explored-skill-1' },
+      },
       data: { isActive: false },
     });
     expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
@@ -217,6 +228,7 @@ describe('publish repository', () => {
       },
       { id: 'done', type: 'end' as const },
     ];
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce({ version: 1 });
     prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 1 });
     prismaMock.publishSkill.create.mockResolvedValueOnce({
       ...bossLikePublishSkill,
@@ -237,7 +249,12 @@ describe('publish repository', () => {
     });
 
     expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith({
-      where: { name: 'publish_jd', platform: 'boss-like', isActive: true },
+      where: {
+        name: 'publish_jd',
+        platform: 'boss-like',
+        isActive: true,
+        id: { not: 'boss-like-publish-jd-v2' },
+      },
       data: { isActive: false },
     });
     expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
@@ -251,6 +268,63 @@ describe('publish repository', () => {
     });
     expect(result.version).toBe(2);
     expect(result.steps).toEqual(repairedSteps);
+  });
+
+  it('repairs a stale inactive v1 as v3 before deactivating active v2', async () => {
+    const staleV1 = {
+      ...bossLikePublishSkill,
+      id: 'screen-candidates-v1',
+      name: 'screen_candidates',
+      version: 1,
+      isActive: false,
+    };
+    const repairedSteps = staleV1.steps;
+    const activeV2 = {
+      ...skillRow,
+      id: 'screen-candidates-v2',
+      name: 'screen_candidates',
+      version: 2,
+      isActive: true,
+    };
+    const persistedV3 = {
+      ...activeV2,
+      id: 'screen_candidates-boss-like-v3',
+      version: 3,
+      isActive: true,
+      steps: repairedSteps,
+    };
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(activeV2);
+    prismaMock.publishSkill.create.mockResolvedValueOnce(persistedV3);
+    prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await createNextActivePublishSkillVersion({
+      previousSkill: staleV1,
+      steps: repairedSteps,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({ id: persistedV3.id, version: 3, isActive: true }),
+    );
+    expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: 'screen_candidates-boss-like-v3',
+        name: 'screen_candidates',
+        version: 3,
+        isActive: true,
+      }),
+    });
+    expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith({
+      where: {
+        name: 'screen_candidates',
+        platform: 'boss-like',
+        isActive: true,
+        id: { not: 'screen_candidates-boss-like-v3' },
+      },
+      data: { isActive: false },
+    });
+    expect(prismaMock.publishSkill.create.mock.invocationCallOrder[0]).toBeLessThan(
+      prismaMock.publishSkill.updateMany.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it('creates a running publish task for a JD', async () => {

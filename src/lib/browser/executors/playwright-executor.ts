@@ -217,10 +217,14 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
   }
 
   async waitForText(text: string): Promise<BrowserStepResult> {
+    return this.waitForTarget({ kind: 'text', name: text, exact: false });
+  }
+
+  async waitForTarget(target: BrowserTargetInput): Promise<BrowserStepResult> {
     let match: LocatorMatchReport | undefined;
     try {
       const resolved = await this.resolveForAction(
-        { kind: 'text', name: text, exact: false },
+        typeof target === 'string' ? { kind: 'text', name: target, exact: false } : target,
         { action: 'wait_for_text' },
       );
       match = resolved.report;

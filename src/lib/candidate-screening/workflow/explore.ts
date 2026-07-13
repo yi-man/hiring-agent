@@ -529,7 +529,7 @@ function firstSearchKeyword(plan: SearchPlan): string | null {
 
 export async function exploreBossLikeScreeningWorkflow(
   params: ExploreBossLikeScreeningWorkflowParams,
-): Promise<ScreeningWorkflowSkill> {
+): Promise<ScreeningWorkflowSkill | null> {
   const { executor, credentials, searchPlan } = params;
   const baseUrl = normalizeBaseUrl(params.baseUrl);
   const resumeListUrl = `${baseUrl}/employer/resumes`;
@@ -601,7 +601,7 @@ export async function exploreBossLikeScreeningWorkflow(
     .map((candidate) => resolveBossLikeProfileUrl(candidate.profileUrl, baseUrl).profileUrl)
     .find((candidateUrl): candidateUrl is string => Boolean(candidateUrl));
   if (!profileUrl) {
-    throw new Error('screening_explore_no_candidate_detail');
+    return null;
   }
 
   ensureSuccess('open candidate detail', await executor.navigate(profileUrl));

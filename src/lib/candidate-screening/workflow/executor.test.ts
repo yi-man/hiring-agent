@@ -293,6 +293,7 @@ function makeExecutor(): MockedBrowserExecutor {
     click: jest.fn().mockResolvedValue({ success: true }),
     waitForUrl: jest.fn().mockResolvedValue({ success: true }),
     check: jest.fn().mockResolvedValue(true),
+    snapshot: jest.fn().mockResolvedValue('<main>candidate list snapshot</main>'),
     snapshotStructured: jest.fn().mockResolvedValue(repairedListSnapshot),
     resolveTarget: jest.fn().mockResolvedValue(uniqueTargetReport(repairedTarget)),
   } as MockedBrowserExecutor;
@@ -394,6 +395,22 @@ describe('CandidateScreeningWorkflowSession', () => {
           skillId: 'screen-v1',
         }),
       }),
+    );
+  });
+
+  it('completes an empty first exploration without persisting a workflow or searching twice', async () => {
+    const dependencies = makeDependencies({ exploreSkill: jest.fn().mockResolvedValue(null) });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await expect(
+      collectBatches(session.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).resolves.toEqual([]);
+
+    expect(session.skill).toBeNull();
+    expect(dependencies.createExploredSkill).not.toHaveBeenCalled();
+    expect(dependencies.adapter.searchCandidates).not.toHaveBeenCalled();
+    expect(dependencies.updateRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: expect.any(String) }),
     );
   });
 
@@ -617,6 +634,50 @@ describe('CandidateScreeningWorkflowSession', () => {
         }),
       }),
     );
+    expect(dependencies.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        message: 'Workflow 失败：search_candidates',
+        detail: expect.objectContaining({
+          workflowStep: 'search_candidates',
+          skillId: 'screen-v1',
+          targetKey: 'searchSubmit',
+          target: oldTarget,
+          error: `not_found_target: ${oldTarget.name}`,
+          rawSnapshot: '<main>candidate list snapshot</main>',
+          structuredSnapshot: repairedListSnapshot,
+        }),
+      }),
+    );
+  });
+
+  it('points a run loaded from inactive v1 at repaired v3 when v2 is already active', async () => {
+    const staleV1 = makeSkill({ id: 'screen-v1', version: 1, isActive: false });
+    const dependencies = makeDependencies({
+      getSkillById: jest.fn().mockResolvedValue(staleV1),
+      createNextSkillVersion: jest
+        .fn()
+        .mockImplementation(async ({ steps }) => makeSkill({ id: 'screen-v3', version: 3, steps })),
+    });
+    dependencies.adapter.searchCandidates
+      .mockImplementationOnce(() => {
+        throw browserTargetError('search_candidates', 'searchSubmit', oldTarget);
+      })
+      .mockImplementationOnce(() => batches({ candidates: [rawCandidate] }));
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadExact({ skillId: 'screen-v1', stage: 'searching_live' });
+    await collectBatches(session.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }));
+
+    expect(dependencies.createNextSkillVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousSkill: expect.objectContaining({ id: 'screen-v1', version: 1 }),
+      }),
+    );
+    expect(dependencies.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: 'screen-v3', currentWorkflowStep: 'search_candidates' }),
+    );
+    expect(session.skill).toEqual(expect.objectContaining({ id: 'screen-v3', version: 3 }));
   });
 
   it('does not repair or retry an ambiguous target failure', async () => {
@@ -699,6 +760,20 @@ describe('CandidateScreeningWorkflowSession', () => {
 
     expect(dependencies.createNextSkillVersion).toHaveBeenCalledTimes(1);
     expect(dependencies.adapter.searchCandidates).toHaveBeenCalledTimes(2);
+    expect(dependencies.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        message: 'Workflow 重试失败：search_candidates',
+        detail: expect.objectContaining({
+          workflowStep: 'search_candidates',
+          skillId: 'screen-v2',
+          retry: true,
+          targetKey: 'searchSubmit',
+          target: repairedTarget,
+          error: `not_found_target: ${repairedTarget.name}`,
+        }),
+      }),
+    );
   });
 
   it('repairs a target failure result from a candidate action and retries it once', async () => {
@@ -771,6 +846,57 @@ describe('CandidateScreeningWorkflowSession', () => {
 
     expect(dependencies.createNextSkillVersion).not.toHaveBeenCalled();
     expect(dependencies.adapter.chatCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        level: 'error',
+        message: 'Workflow 失败：chat_candidate',
+        detail: expect.objectContaining({
+          workflowStep: 'chat_candidate',
+          skillId: 'screen-v1',
+          candidateName: 'Ada Lovelace',
+          targetKey: 'sendButton',
+          error: 'not_found_target: 发送',
+        }),
+      }),
+    );
+  });
+
+  it('records a non-target candidate action result failure without throwing it', async () => {
+    const skill = makeSkill();
+    const dependencies = makeDependencies({ getActiveSkill: jest.fn().mockResolvedValue(skill) });
+    const failedResult = {
+      success: false,
+      error: 'candidate declined automated greeting',
+      browserTrace: { action: 'chat', candidateId: 'candidate-1' },
+    };
+    dependencies.adapter.chatCandidate.mockResolvedValueOnce(failedResult);
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+    const candidate = { candidateId: 'candidate-1', displayName: 'Ada Lovelace' };
+    const actionPlan: CandidateActionPlan = {
+      action: 'chat',
+      priority: 'high',
+      message: 'Hello Ada',
+      reason: 'Strong match',
+    };
+
+    await session.loadOrExplore({ searchPlan, stage: 'executing_actions' });
+
+    await expect(session.chatCandidate(candidate, actionPlan)).resolves.toEqual(failedResult);
+    expect(dependencies.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        level: 'error',
+        message: 'Workflow 失败：chat_candidate',
+        detail: expect.objectContaining({
+          workflowStep: 'chat_candidate',
+          skillId: 'screen-v1',
+          candidateName: 'Ada Lovelace',
+          error: 'candidate declined automated greeting',
+          browserTrace: failedResult.browserTrace,
+        }),
+      }),
+    );
   });
 
   it('fails clearly without retrying or replacing the session skill when repair run persistence fails', async () => {

@@ -233,6 +233,7 @@ describe('exploreBossLikeScreeningWorkflow', () => {
       credentials,
       searchPlan,
     });
+    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
 
     expect(skill.id).toMatch(/^boss-like-screen-candidates-explore-/);
     expect(skill.steps).toEqual(
@@ -258,12 +259,12 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     expect(executor.calls).not.toEqual(expect.arrayContaining(['click:发送', 'click:收藏']));
   });
 
-  it('rejects exploration when the list has no candidate detail to inspect', async () => {
+  it('returns no workflow when the first search has no candidate detail to inspect', async () => {
     const executor = new ExploringScreeningExecutor(false);
 
     await expect(
       exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
-    ).rejects.toThrow('screening_explore_no_candidate_detail');
+    ).resolves.toBeNull();
   });
 
   it('explores a form-less search page through unique semantic global targets', async () => {
@@ -275,6 +276,7 @@ describe('exploreBossLikeScreeningWorkflow', () => {
       credentials,
       searchPlan,
     });
+    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
 
     const searchStep = skill.steps.find((step) => step.id === 'search_candidates');
     expect(searchStep).toEqual(
@@ -299,6 +301,7 @@ describe('exploreBossLikeScreeningWorkflow', () => {
       credentials,
       searchPlan,
     });
+    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
 
     const enrichStep = skill.steps.find((step) => step.id === 'enrich_candidate');
     const chatStep = skill.steps.find((step) => step.id === 'chat_candidate');

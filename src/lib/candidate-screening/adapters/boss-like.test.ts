@@ -239,6 +239,16 @@ class EmptyThenResultExecutor extends FakeBrowserExecutor {
   }
 }
 
+class TargetAwareDetailExecutor extends FakeBrowserExecutor {
+  readonly detailTargets: BrowserTargetInput[] = [];
+
+  async waitForTarget(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    this.detailTargets.push(target);
+    this.calls.push(`waitForTarget:${targetName(target)}`);
+    return { success: true };
+  }
+}
+
 function createSnapshotlessExecutor(): BrowserExecutor & { calls: string[] } {
   const calls: string[] = [];
   return {
@@ -418,6 +428,35 @@ describe('BossLikeCandidateSourceAdapter', () => {
         cursor: '1',
       },
     ]);
+  });
+
+  it('uses the complete persisted detail target when the executor supports target-aware waits', async () => {
+    const executor = new TargetAwareDetailExecutor([detailFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+    const detailTarget = {
+      kind: 'container' as const,
+      name: '候选人详情',
+      exact: true,
+      stableAttrs: { testId: 'candidate-detail-1' },
+      scope: { kind: 'section' as const, name: '候选人资料' },
+    };
+
+    await adapter.enrichCandidate(
+      {
+        platformCandidateId: '1',
+        profileUrl: '/employer/resumes/1',
+        name: '王小明',
+        title: '高级后端工程师',
+        company: '星河智能',
+        resumeText: 'Java',
+      },
+      {
+        targets: { detailContent: detailTarget },
+      },
+    );
+
+    expect(executor.detailTargets).toEqual([detailTarget]);
+    expect(executor.calls).not.toContain('waitForText:候选人详情');
   });
 
   it('uses the caller-authenticated session without performing a second login check while searching', async () => {

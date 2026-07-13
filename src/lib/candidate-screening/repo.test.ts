@@ -363,6 +363,7 @@ describe('candidate screening repository', () => {
   it('updates workflow fields only when they are provided', async () => {
     prismaMock.candidateScreeningRun.updateMany
       .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 })
       .mockResolvedValueOnce({ count: 0 });
 
     await updateCandidateScreeningRun({
@@ -372,6 +373,12 @@ describe('candidate screening repository', () => {
       currentWorkflowStep: 'search_candidates',
     });
     await updateCandidateScreeningRun({ userId: 'u1', runId: 'run-1' });
+    await updateCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+      skillId: null,
+      currentWorkflowStep: null,
+    });
 
     expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(1, {
       where: { id: 'run-1', userId: 'u1' },
@@ -383,6 +390,10 @@ describe('candidate screening repository', () => {
     expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(2, {
       where: { id: 'run-1', userId: 'u1' },
       data: {},
+    });
+    expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(3, {
+      where: { id: 'run-1', userId: 'u1' },
+      data: { skillId: null, currentWorkflowStep: null },
     });
   });
 
