@@ -23,6 +23,7 @@
     "test:ci": "jest --ci --coverage --runInBand --coverageReporters=text-summary",
     "test:e2e": "playwright test",
     "test:e2e:playwright": "playwright test",
+    "test:e2e:playwright:candidate-screening": "playwright test tests/e2e-playwright/candidate-screening.spec.ts",
     "test:e2e:playwright:jd": "playwright test tests/e2e-playwright/jd-generator-real.spec.ts",
     "test:e2e:playwright:workflow": "playwright test tests/e2e-playwright/workflow-learning.spec.ts",
     "test:integration:chat": "bunx jest tests/integration/chat/real-deps.e2e.test.ts --runInBand --coverage=false",
