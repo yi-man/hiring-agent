@@ -32,6 +32,10 @@ import {
   type CandidateScreeningDetailDto,
   type CandidateScreeningResultListItem,
 } from './repo';
+import {
+  createCandidateScreeningWorkflowSession,
+  type CandidateScreeningWorkflowSession,
+} from './workflow/executor';
 import type {
   CandidateActionPlan,
   CandidateDecisionAction,
@@ -75,6 +79,7 @@ type SeenIdentityRef = {
 export type ScreeningRunnerDependencies = {
   buildPlan: typeof buildScreeningPlanFromJd;
   createAdapter: typeof createCandidateSourceAdapter;
+  createWorkflowSession: typeof createCandidateScreeningWorkflowSession;
   ingestCandidate: typeof ingestRawCandidate;
   recallCandidates: typeof recallCandidatesForJd;
   evaluateCandidate: typeof evaluateCandidateForJd;
@@ -108,6 +113,7 @@ export type ExecuteSingleCandidateActionResult = {
 const defaultDependencies: ScreeningRunnerDependencies = {
   buildPlan: buildScreeningPlanFromJd,
   createAdapter: createCandidateSourceAdapter,
+  createWorkflowSession: createCandidateScreeningWorkflowSession,
   ingestCandidate: ingestRawCandidate,
   recallCandidates: recallCandidatesForJd,
   evaluateCandidate: evaluateCandidateForJd,
@@ -157,6 +163,7 @@ type CandidateScreeningGraphUpdate = typeof CandidateScreeningState.Update;
 
 type CandidateScreeningGraphResources = {
   adapter: CandidateSourceAdapter | null;
+  workflowSession: CandidateScreeningWorkflowSession | null;
   latestStats: ScreeningRunStats;
 };
 
@@ -366,14 +373,14 @@ function buildVectorInputs(params: {
 }
 
 async function collectRawCandidates(params: {
-  adapter: CandidateSourceAdapter;
+  search: Pick<CandidateSourceAdapter, 'searchCandidates'>;
   searchPlan: SearchPlan;
   request: CreateScreeningRunRequest;
   stats: ScreeningRunStats;
 }): Promise<RawCandidate[]> {
   const rawCandidates: RawCandidate[] = [];
 
-  for await (const batch of params.adapter.searchCandidates(params.searchPlan, {
+  for await (const batch of params.search.searchCandidates(params.searchPlan, {
     maxCandidates: params.request.maxCandidates,
     batchSize: params.request.batchSize,
   })) {
@@ -1056,9 +1063,28 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       userId: state.userId,
     });
     resources.adapter = adapter;
-    await adapter.loginIfNeeded();
-    const rawCandidates = await collectRawCandidates({
+    const workflowSession = state.dependencies.createWorkflowSession({
       adapter,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      platform: state.request.platform,
+      repo: state.dependencies.repo,
+    });
+    resources.workflowSession = workflowSession;
+    const skill = await workflowSession.loadOrExplore({
+      searchPlan,
+      stage: 'searching_live',
+    });
+    if (skill) {
+      await state.dependencies.repo.updateRun({
+        userId: state.userId,
+        runId: state.runId,
+        skillId: skill.id,
+      });
+    }
+    const rawCandidates = await collectRawCandidates({
+      search: workflowSession,
       searchPlan,
       request: state.request,
       stats,
@@ -1500,9 +1526,9 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
     state: CandidateScreeningGraphState,
   ): Promise<CandidateScreeningGraphUpdate> {
     const stats = copyStats(state.stats);
-    const adapter = resources.adapter;
-    if (!adapter) {
-      throw new Error('candidate screening execution requires an initialized adapter');
+    const workflowSession = resources.workflowSession;
+    if (!workflowSession) {
+      throw new Error('candidate screening execution requires an initialized workflow session');
     }
 
     await updateStage({
@@ -1517,7 +1543,8 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       userId: state.userId,
       runId: state.runId,
       jobDescriptionId: state.jobDescription.id,
-      getAdapterAfterClaim: async () => adapter,
+      executeChat: (candidate, actionPlan) => workflowSession.chatCandidate(candidate, actionPlan),
+      executeCollect: (candidate) => workflowSession.collectCandidate(candidate),
       request: {
         confirmExecution: true,
         maxChatActions: state.request.maxCandidates,
@@ -1599,6 +1626,7 @@ export const runCandidateScreeningGraph = async (params: {
   const initialStats = createEmptyStats();
   const resources: CandidateScreeningGraphResources = {
     adapter: null,
+    workflowSession: null,
     latestStats: copyStats(initialStats),
   };
   const graph = makeCandidateScreeningGraph(resources);
@@ -1807,7 +1835,8 @@ async function executePlannedActionsForRun(params: {
   userId: string;
   runId: string;
   jobDescriptionId: string;
-  getAdapterAfterClaim: () => Promise<CandidateSourceAdapter>;
+  executeChat: CandidateSourceAdapter['chatCandidate'];
+  executeCollect: CandidateSourceAdapter['collectCandidate'];
   request: ExecuteActionsRequest;
   stats: ScreeningRunStats;
 }): Promise<void> {
@@ -1853,7 +1882,6 @@ async function executePlannedActionsForRun(params: {
     if (!claimedActionLog) continue;
 
     try {
-      const adapter = await params.getAdapterAfterClaim();
       const storedCandidate = createStoredCandidateRef(result);
       await recordRunEvent({
         dependencies: params.dependencies,
@@ -1872,8 +1900,8 @@ async function executePlannedActionsForRun(params: {
       });
       const executionResult =
         result.actionPlan.action === 'chat'
-          ? await adapter.chatCandidate(storedCandidate, result.actionPlan)
-          : await adapter.collectCandidate(storedCandidate);
+          ? await params.executeChat(storedCandidate, result.actionPlan)
+          : await params.executeCollect(storedCandidate);
 
       await persistExecutionResult({
         dependencies: params.dependencies,
@@ -1956,8 +1984,9 @@ export async function executeScreeningRunActions(params: {
   const currentRun = run;
   const stats = currentRun.stats ? copyStats(currentRun.stats) : createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
+  let workflowSession: CandidateScreeningWorkflowSession | null = null;
 
-  async function getAdapterAfterClaim(): Promise<CandidateSourceAdapter> {
+  async function getLegacyAdapterAfterClaim(): Promise<CandidateSourceAdapter> {
     if (adapter) {
       return adapter;
     }
@@ -1975,6 +2004,57 @@ export async function executeScreeningRunActions(params: {
     return adapter;
   }
 
+  async function getWorkflowSessionAfterClaim(): Promise<CandidateScreeningWorkflowSession> {
+    if (workflowSession) {
+      return workflowSession;
+    }
+    if (currentRun.skillId === null) {
+      throw new Error('stored workflow skill id is required for workflow execution');
+    }
+
+    const nextAdapter = dependencies.createAdapter(currentRun.platform, {
+      userId: params.userId,
+    });
+    const nextWorkflowSession = dependencies.createWorkflowSession({
+      adapter: nextAdapter,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: currentRun.jobDescriptionId,
+      platform: currentRun.platform,
+      repo: dependencies.repo,
+    });
+    try {
+      await nextWorkflowSession.loadExact({
+        skillId: currentRun.skillId,
+        stage: 'executing_actions',
+      });
+    } catch (error) {
+      await closeAdapterSafely(nextAdapter);
+      throw error;
+    }
+    adapter = nextAdapter;
+    workflowSession = nextWorkflowSession;
+    return workflowSession;
+  }
+
+  const executeChat: CandidateSourceAdapter['chatCandidate'] = async (candidate, actionPlan) => {
+    if (currentRun.skillId === null) {
+      const legacyAdapter = await getLegacyAdapterAfterClaim();
+      return legacyAdapter.chatCandidate(candidate, actionPlan);
+    }
+    const session = await getWorkflowSessionAfterClaim();
+    return session.chatCandidate(candidate, actionPlan);
+  };
+
+  const executeCollect: CandidateSourceAdapter['collectCandidate'] = async (candidate) => {
+    if (currentRun.skillId === null) {
+      const legacyAdapter = await getLegacyAdapterAfterClaim();
+      return legacyAdapter.collectCandidate(candidate);
+    }
+    const session = await getWorkflowSessionAfterClaim();
+    return session.collectCandidate(candidate);
+  };
+
   try {
     await dependencies.repo.updateRun({
       userId: params.userId,
@@ -1991,7 +2071,8 @@ export async function executeScreeningRunActions(params: {
       userId: params.userId,
       runId: params.runId,
       jobDescriptionId: currentRun.jobDescriptionId,
-      getAdapterAfterClaim,
+      executeChat,
+      executeCollect,
       request: params.request,
       stats,
     });
@@ -2063,14 +2144,30 @@ export async function executeSingleCandidateAction(params: {
   const stats = createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
   try {
-    adapter = dependencies.createAdapter(run.platform, {
+    const nextAdapter = dependencies.createAdapter(run.platform, {
       userId: params.userId,
     });
-    await adapter.loginIfNeeded();
-    const executionResult = await adapter.chatCandidate(
-      createStoredCandidateRef(detail),
-      actionPlan,
-    );
+    adapter = nextAdapter;
+    const storedCandidate = createStoredCandidateRef(detail);
+    let executionResult: Awaited<ReturnType<CandidateSourceAdapter['chatCandidate']>>;
+    if (run.skillId === null) {
+      await nextAdapter.loginIfNeeded();
+      executionResult = await nextAdapter.chatCandidate(storedCandidate, actionPlan);
+    } else {
+      const workflowSession = dependencies.createWorkflowSession({
+        adapter: nextAdapter,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescriptionId,
+        platform: run.platform,
+        repo: dependencies.repo,
+      });
+      await workflowSession.loadExact({
+        skillId: run.skillId,
+        stage: 'executing_actions',
+      });
+      executionResult = await workflowSession.chatCandidate(storedCandidate, actionPlan);
+    }
 
     if (!executionResult.success) {
       await markExecutionFailed({

@@ -317,6 +317,23 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
+  it('exposes its normalized workflow exploration context', () => {
+    const adapter = new BossLikeCandidateSourceAdapter({
+      executor: new FakeBrowserExecutor(),
+      baseUrl: 'http://boss-like.fixture/',
+      username: 'fixture-user',
+      password: 'fixture-password',
+    });
+
+    expect(adapter.getWorkflowExploreContext()).toEqual({
+      baseUrl: 'http://boss-like.fixture',
+      credentials: {
+        username: 'fixture-user',
+        password: 'fixture-password',
+      },
+    });
+  });
+
   it('keeps structured snapshot failures best-effort during login detection', async () => {
     const executor = new StructuredSnapshotFailureExecutor(['<main>候选人列表</main>']);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });

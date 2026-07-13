@@ -56,9 +56,18 @@ export type CandidateBrowserActionOptions = {
   targets?: Partial<BossLikeScreeningTargets>;
 };
 
+export type CandidateWorkflowExploreContext = {
+  baseUrl: string;
+  credentials: {
+    username: string;
+    password: string;
+  };
+};
+
 export type CandidateSourceAdapter = {
   platform: CandidateScreeningPlatform;
   getBrowserExecutor(): BrowserExecutor;
+  getWorkflowExploreContext?(): CandidateWorkflowExploreContext;
   loginIfNeeded(options?: CandidateBrowserActionOptions): Promise<void>;
   searchCandidates(
     plan: SearchPlan,

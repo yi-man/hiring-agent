@@ -10,6 +10,7 @@ import {
   getActivePublishSkillByName,
 } from '@/lib/jd-publishing/publish-repo';
 import type { PublishSkill, PublishSkillMeta, PublishStep } from '@/lib/jd-publishing/types';
+import { getPublishedWorkflowDetail } from '@/lib/workflows/published-workflows';
 import {
   createCandidateScreeningRunEvent,
   updateCandidateScreeningRun,
@@ -56,6 +57,11 @@ type WorkflowRunRepository = {
 type ExploreScreeningWorkflow = (params: {
   adapter: CandidateSourceAdapter;
   searchPlan: SearchPlan;
+  baseUrl: string;
+  credentials: {
+    username: string;
+    password: string;
+  };
 }) => Promise<ScreeningWorkflowSkill>;
 
 type CreateNextScreeningSkillVersion = (params: {
@@ -75,6 +81,7 @@ export type CandidateScreeningWorkflowSessionDependencies = {
     name: string;
     platform: CandidateScreeningPlatform;
   }) => Promise<PublishSkill | null>;
+  getSkillById?: (skillId: string) => Promise<PublishSkill | null>;
   exploreSkill?: ExploreScreeningWorkflow;
   createExploredSkill?: (skill: PublishSkill) => Promise<PublishSkill>;
   createNextSkillVersion?: CreateNextScreeningSkillVersion;
@@ -86,6 +93,7 @@ type ResolvedDependencies = Omit<
   CandidateScreeningWorkflowSessionDependencies,
   | 'repo'
   | 'getActiveSkill'
+  | 'getSkillById'
   | 'exploreSkill'
   | 'createExploredSkill'
   | 'createNextSkillVersion'
@@ -93,6 +101,7 @@ type ResolvedDependencies = Omit<
   | 'createRunEvent'
 > & {
   getActiveSkill: NonNullable<CandidateScreeningWorkflowSessionDependencies['getActiveSkill']>;
+  getSkillById: NonNullable<CandidateScreeningWorkflowSessionDependencies['getSkillById']>;
   exploreSkill: ExploreScreeningWorkflow;
   createExploredSkill: NonNullable<
     CandidateScreeningWorkflowSessionDependencies['createExploredSkill']
@@ -150,6 +159,10 @@ export type CandidateScreeningWorkflowSession = {
     searchPlan: SearchPlan;
     stage: CandidateScreeningRunStage;
   }): Promise<ScreeningWorkflowSkill | null>;
+  loadExact(params: {
+    skillId: string;
+    stage: CandidateScreeningRunStage;
+  }): Promise<ScreeningWorkflowSkill>;
   searchCandidates(plan: SearchPlan, options: SearchOptions): AsyncIterable<RawCandidateBatch>;
   enrichCandidate(candidate: RawCandidate): Promise<RawCandidate>;
   chatCandidate(
@@ -162,6 +175,21 @@ export type CandidateScreeningWorkflowSession = {
 
 function readBossLikeSetting(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
+}
+
+function resolveWorkflowExploreContext(adapter: CandidateSourceAdapter): {
+  baseUrl: string;
+  credentials: { username: string; password: string };
+} {
+  return (
+    adapter.getWorkflowExploreContext?.() ?? {
+      baseUrl: readBossLikeSetting('BOSS_LIKE_BASE_URL', 'http://localhost:6183'),
+      credentials: {
+        username: readBossLikeSetting('BOSS_LIKE_EMPLOYER_USERNAME', 'admin'),
+        password: readBossLikeSetting('BOSS_LIKE_EMPLOYER_PASSWORD', 'boss123'),
+      },
+    }
+  );
 }
 
 function screeningSkill(skill: PublishSkill): ScreeningWorkflowSkill {
@@ -289,18 +317,22 @@ function resolveDependencies(
   return {
     ...dependencies,
     getActiveSkill: dependencies.getActiveSkill ?? getActivePublishSkillByName,
+    getSkillById:
+      dependencies.getSkillById ??
+      (async (skillId) => {
+        const detail = await getPublishedWorkflowDetail(skillId);
+        return detail?.workflow ?? null;
+      }),
     exploreSkill:
       dependencies.exploreSkill ??
-      (async ({ adapter, searchPlan }) =>
-        exploreBossLikeScreeningWorkflow({
+      (async ({ adapter, searchPlan, baseUrl, credentials }) => {
+        return exploreBossLikeScreeningWorkflow({
           executor: adapter.getBrowserExecutor(),
-          baseUrl: readBossLikeSetting('BOSS_LIKE_BASE_URL', 'http://localhost:6183'),
-          credentials: {
-            username: readBossLikeSetting('BOSS_LIKE_EMPLOYER_USERNAME', 'admin'),
-            password: readBossLikeSetting('BOSS_LIKE_EMPLOYER_PASSWORD', 'boss123'),
-          },
+          baseUrl,
+          credentials,
           searchPlan,
-        })),
+        });
+      }),
     createExploredSkill: dependencies.createExploredSkill ?? createExploredPublishSkill,
     createNextSkillVersion:
       dependencies.createNextSkillVersion ?? createNextActivePublishSkillVersion,
@@ -598,9 +630,11 @@ export function createCandidateScreeningWorkflowSession(
     if (active) {
       skill = screeningSkill(active);
     } else {
+      const exploreContext = resolveWorkflowExploreContext(dependencies.adapter);
       const explored = await dependencies.exploreSkill({
         adapter: dependencies.adapter,
         searchPlan: params.searchPlan,
+        ...exploreContext,
       });
       skill = screeningSkill(await dependencies.createExploredSkill(explored));
       await recordEvent({
@@ -618,11 +652,46 @@ export function createCandidateScreeningWorkflowSession(
     return skill;
   }
 
+  async function loadExact(params: {
+    skillId: string;
+    stage: CandidateScreeningRunStage;
+  }): Promise<ScreeningWorkflowSkill> {
+    stage = params.stage;
+    if (skill) {
+      if (skill.id !== params.skillId) {
+        throw new Error(
+          `screening workflow session already loaded ${skill.id}, cannot load ${params.skillId}`,
+        );
+      }
+      return skill;
+    }
+
+    const storedSkill = await dependencies.getSkillById(params.skillId);
+    if (!storedSkill) {
+      throw new Error(`screening workflow skill not found: ${params.skillId}`);
+    }
+
+    skill = screeningSkill(storedSkill);
+    if (skill.platform !== dependencies.platform) {
+      throw new Error(
+        `screening workflow skill platform mismatch: expected ${dependencies.platform}, received ${skill.platform}`,
+      );
+    }
+
+    await updateRun({ skillId: skill.id, currentWorkflowStep: null });
+    await runAction({
+      action: 'ensure_login',
+      invoke: (workflow) => dependencies.adapter.loginIfNeeded(workflow),
+    });
+    return skill;
+  }
+
   return {
     get skill() {
       return skill;
     },
     loadOrExplore,
+    loadExact,
     searchCandidates: runSearchCandidates,
     enrichCandidate,
     chatCandidate: (candidate, plan) =>

@@ -288,6 +288,14 @@ function buildLoginTargets(
 function buildSearchTargets(
   snapshot: StructuredDomSnapshot,
 ): Pick<BossLikeScreeningTargets, 'searchInput' | 'searchSubmit'> {
+  if (snapshot.forms.length === 0) {
+    const defaults = defaultBossLikeScreeningTargets();
+    return {
+      searchInput: defaults.searchInput,
+      searchSubmit: defaults.searchSubmit,
+    };
+  }
+
   const form = selectForm({
     snapshot,
     fieldRequirement: SEARCH_FIELD_REQUIREMENT,
@@ -319,37 +327,66 @@ function buildSearchTargets(
 function buildDetailTargets(
   snapshot: StructuredDomSnapshot,
 ): Pick<BossLikeScreeningTargets, 'detailContent' | 'greetButton' | 'collectButton'> {
-  const detailCandidate = selectCandidate({
-    candidates: [...snapshot.headings, ...snapshot.textBlocks],
-    requirement: DETAIL_CONTENT_REQUIREMENT,
-  });
-  const form = selectForm({
-    snapshot,
-    buttonRequirement: GREET_BUTTON_REQUIREMENT,
-    key: 'detailActions',
-  });
-  const scope = formScope(form, '候选人操作');
-  return {
-    detailContent: containerTargetFromCandidate({
-      candidate: detailCandidate,
+  const defaults = defaultBossLikeScreeningTargets();
+  let detailContent: TargetDescriptor = {
+    kind: 'text',
+    name: '候选人详情',
+    exact: true,
+    scope: { kind: 'page' },
+  };
+  try {
+    detailContent = containerTargetFromCandidate({
+      candidate: selectCandidate({
+        candidates: [...snapshot.headings, ...snapshot.textBlocks],
+        requirement: DETAIL_CONTENT_REQUIREMENT,
+      }),
       fallbackName: '候选人详情',
-    }),
-    greetButton: buttonTargetFromCandidate({
-      candidate: selectCandidate({
-        candidates: form.buttons,
-        requirement: GREET_BUTTON_REQUIREMENT,
-      }),
-      fallbackName: '打招呼',
-      scope,
-    }),
-    collectButton: buttonTargetFromCandidate({
-      candidate: selectCandidate({
-        candidates: form.buttons,
-        requirement: COLLECT_BUTTON_REQUIREMENT,
-      }),
-      fallbackName: '收藏',
-      scope,
-    }),
+    });
+  } catch {
+    // A form-less detail page can still validate the semantic default through resolveTarget.
+  }
+
+  let greetButton = defaults.greetButton;
+  let collectButton = defaults.collectButton;
+  try {
+    const form = selectForm({
+      snapshot,
+      buttonRequirement: GREET_BUTTON_REQUIREMENT,
+      key: 'detailActions',
+    });
+    const scope = formScope(form, '候选人操作');
+    try {
+      greetButton = buttonTargetFromCandidate({
+        candidate: selectCandidate({
+          candidates: form.buttons,
+          requirement: GREET_BUTTON_REQUIREMENT,
+        }),
+        fallbackName: '打招呼',
+        scope,
+      });
+    } catch {
+      // Keep the semantic default when the greeting control cannot be identified uniquely.
+    }
+    try {
+      collectButton = buttonTargetFromCandidate({
+        candidate: selectCandidate({
+          candidates: form.buttons,
+          requirement: COLLECT_BUTTON_REQUIREMENT,
+        }),
+        fallbackName: '收藏',
+        scope,
+      });
+    } catch {
+      // Keep the semantic default when the collection control cannot be identified uniquely.
+    }
+  } catch {
+    // A form-less detail page can still validate the semantic defaults through resolveTarget.
+  }
+
+  return {
+    detailContent,
+    greetButton,
+    collectButton,
   };
 }
 
@@ -362,7 +399,7 @@ function buildComposerTargets(
     buttonRequirement: SEND_BUTTON_REQUIREMENT,
     key: 'chatComposer',
   });
-  const scope = { kind: 'dialog', name: form.name ?? '沟通候选人' } as const;
+  const scope = formScope(form, '沟通候选人');
   return {
     messageInput: fieldTargetFromCandidate({
       candidate: selectCandidate({

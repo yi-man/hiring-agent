@@ -6,6 +6,7 @@ import type {
   BrowserStepCheck,
   BrowserStepResult,
   BrowserTargetInput,
+  LocatorMatchReport,
   StructuredDomSnapshot,
 } from '@/lib/browser/types';
 import {
@@ -74,7 +75,7 @@ class ExploringScreeningExecutor implements BrowserExecutor {
   async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
     const name = targetName(target);
     this.calls.push(`click:${name}`);
-    if (name === '沟通') this.currentPage = 'composer';
+    if (name === '沟通' || name === '打招呼') this.currentPage = 'composer';
     return { success: true };
   }
 
@@ -170,6 +171,58 @@ class ExploringScreeningExecutor implements BrowserExecutor {
   }
 }
 
+class FormlessSearchExploringExecutor extends ExploringScreeningExecutor {
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    const snapshot = await super.snapshotStructured();
+    return snapshot.url.endsWith('/employer/resumes') ? { ...snapshot, forms: [] } : snapshot;
+  }
+
+  async resolveTarget(target: BrowserTargetInput): Promise<LocatorMatchReport> {
+    if (typeof target === 'string') {
+      throw new Error('expected a semantic browser target');
+    }
+    this.calls.push(`resolve:${target.name}`);
+    return {
+      target,
+      status: 'unique',
+      strategy: 'fixture',
+      candidateCount: 1,
+      confidence: 1,
+      candidates: [],
+    };
+  }
+}
+
+class AmbiguousFormlessDetailExploringExecutor extends FormlessSearchExploringExecutor {
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    const snapshot = await super.snapshotStructured();
+    return snapshot.url.endsWith('/employer/resumes/1') && snapshot.title === '候选人详情'
+      ? {
+          ...snapshot,
+          forms: [],
+          textBlocks: [
+            candidate({ tag: 'section', name: '候选人详情' }),
+            candidate({ tag: 'article', name: '候选人简历详情' }),
+          ],
+        }
+      : snapshot;
+  }
+
+  async resolveTarget(target: BrowserTargetInput): Promise<LocatorMatchReport> {
+    if (typeof target !== 'string' && target.name === '消息内容' && target.scope?.kind !== 'form') {
+      return {
+        target,
+        status: 'not_found',
+        strategy: 'fixture',
+        candidateCount: 0,
+        confidence: 0,
+        candidates: [],
+      };
+    }
+    return super.resolveTarget(target);
+  }
+}
+
 describe('exploreBossLikeScreeningWorkflow', () => {
   it('explores list and detail targets without sending or collecting', async () => {
     const executor = new ExploringScreeningExecutor();
@@ -211,6 +264,84 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     await expect(
       exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
     ).rejects.toThrow('screening_explore_no_candidate_detail');
+  });
+
+  it('explores a form-less search page through unique semantic global targets', async () => {
+    const executor = new FormlessSearchExploringExecutor();
+
+    const skill = await exploreBossLikeScreeningWorkflow({
+      executor,
+      baseUrl,
+      credentials,
+      searchPlan,
+    });
+
+    const searchStep = skill.steps.find((step) => step.id === 'search_candidates');
+    expect(searchStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          targets: expect.objectContaining({
+            searchInput: expect.objectContaining({ name: '搜索候选人', role: 'textbox' }),
+            searchSubmit: expect.objectContaining({ name: '搜索', role: 'button' }),
+          }),
+        }),
+      }),
+    );
+    expect(executor.calls).toEqual(expect.arrayContaining(['resolve:搜索候选人', 'resolve:搜索']));
+  });
+
+  it('explores an ambiguous form-less detail page through unique semantic global targets', async () => {
+    const executor = new AmbiguousFormlessDetailExploringExecutor();
+
+    const skill = await exploreBossLikeScreeningWorkflow({
+      executor,
+      baseUrl,
+      credentials,
+      searchPlan,
+    });
+
+    const enrichStep = skill.steps.find((step) => step.id === 'enrich_candidate');
+    const chatStep = skill.steps.find((step) => step.id === 'chat_candidate');
+    const collectStep = skill.steps.find((step) => step.id === 'collect_candidate');
+    expect(enrichStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          targets: expect.objectContaining({
+            detailContent: {
+              kind: 'text',
+              name: '候选人详情',
+              exact: true,
+              scope: { kind: 'page' },
+            },
+          }),
+        }),
+      }),
+    );
+    expect(chatStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          targets: expect.objectContaining({
+            greetButton: expect.objectContaining({ name: '打招呼' }),
+            messageInput: expect.objectContaining({
+              name: '消息内容',
+              scope: { kind: 'form', name: '沟通候选人' },
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(collectStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          targets: expect.objectContaining({
+            collectButton: expect.objectContaining({ name: '收藏' }),
+          }),
+        }),
+      }),
+    );
+    expect(executor.calls).toEqual(
+      expect.arrayContaining(['resolve:候选人详情', 'resolve:打招呼', 'resolve:收藏']),
+    );
   });
 
   it('derives a renamed search target from the failed screening step snapshot', async () => {

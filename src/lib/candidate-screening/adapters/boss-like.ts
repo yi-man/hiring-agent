@@ -250,6 +250,16 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     return this.executor;
   }
 
+  getWorkflowExploreContext() {
+    return {
+      baseUrl: this.baseUrl,
+      credentials: {
+        username: this.credentials.username,
+        password: this.credentials.password,
+      },
+    };
+  }
+
   async loginIfNeeded(options?: CandidateBrowserActionOptions): Promise<void> {
     await requireSuccessfulStep(this.executor.navigate(this.resumeListUrl()), 'open resume list');
 

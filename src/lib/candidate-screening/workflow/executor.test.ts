@@ -397,6 +397,31 @@ describe('CandidateScreeningWorkflowSession', () => {
     );
   });
 
+  it('passes the injected adapter workflow context to exploration', async () => {
+    const skill = makeSkill();
+    const exploreSkill = jest.fn().mockResolvedValue(skill);
+    const dependencies = makeDependencies({ exploreSkill });
+    const context = {
+      baseUrl: 'http://boss-like.fixture',
+      credentials: {
+        username: 'fixture-user',
+        password: 'fixture-password',
+      },
+    };
+    Object.assign(dependencies.adapter, {
+      getWorkflowExploreContext: jest.fn().mockReturnValue(context),
+    });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadOrExplore({ searchPlan, stage: 'searching_live' });
+
+    expect(exploreSkill).toHaveBeenCalledWith({
+      adapter: dependencies.adapter,
+      searchPlan,
+      ...context,
+    });
+  });
+
   it('reuses the active screening workflow without exploring again', async () => {
     const skill = makeSkill();
     const dependencies = makeDependencies({ getActiveSkill: jest.fn().mockResolvedValue(skill) });
@@ -409,6 +434,40 @@ describe('CandidateScreeningWorkflowSession', () => {
     expect(dependencies.createExploredSkill).not.toHaveBeenCalled();
     expect(dependencies.getActiveSkill).toHaveBeenCalledTimes(1);
     expect(session.skill).toEqual(skill);
+  });
+
+  it('loads an exact stored workflow version without consulting the active workflow', async () => {
+    const skill = makeSkill({ id: 'screen-v3', version: 3, isActive: false });
+    const getSkillById = jest.fn().mockResolvedValue(skill);
+    const dependencies = makeDependencies({ getSkillById });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await expect(
+      session.loadExact({ skillId: 'screen-v3', stage: 'executing_actions' }),
+    ).resolves.toEqual(skill);
+
+    expect(getSkillById).toHaveBeenCalledWith('screen-v3');
+    expect(dependencies.getActiveSkill).not.toHaveBeenCalled();
+    expect(dependencies.exploreSkill).not.toHaveBeenCalled();
+    expect(dependencies.createExploredSkill).not.toHaveBeenCalled();
+    expect(dependencies.adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
+    expect(session.skill).toEqual(skill);
+  });
+
+  it('fails missing stored workflows without falling back to exploration or the active version', async () => {
+    const getSkillById = jest.fn().mockResolvedValue(null);
+    const dependencies = makeDependencies({ getSkillById });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await expect(
+      session.loadExact({ skillId: 'screen-missing', stage: 'executing_actions' }),
+    ).rejects.toThrow('screening workflow skill not found: screen-missing');
+
+    expect(getSkillById).toHaveBeenCalledWith('screen-missing');
+    expect(dependencies.getActiveSkill).not.toHaveBeenCalled();
+    expect(dependencies.exploreSkill).not.toHaveBeenCalled();
+    expect(dependencies.createExploredSkill).not.toHaveBeenCalled();
+    expect(dependencies.adapter.loginIfNeeded).not.toHaveBeenCalled();
   });
 
   it('defers a short resume to enrich_candidate, repairs a drifted detail target once, and yields the enriched candidate', async () => {
