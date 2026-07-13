@@ -1,3 +1,4 @@
+import type { BrowserAction } from '@/lib/browser/types';
 import type {
   BrowserExecutor,
   BrowserTargetInput,
@@ -6,6 +7,7 @@ import type {
   PublishConditionStep,
   PublishExecutionContext,
   PublishSkill,
+  PublishSkillAction,
   PublishStep,
   PublishStepOnFail,
   PublishTaskResult,
@@ -68,11 +70,21 @@ function asBrowserTargetInput(preferred: unknown, legacyLocator: unknown): Brows
   return asString(legacyLocator);
 }
 
+function isBrowserAction(action: PublishSkillAction): action is BrowserAction {
+  return ['navigate', 'fill', 'click', 'wait_for_url', 'wait_for_text', 'add_keywords'].includes(
+    action as BrowserAction,
+  );
+}
+
 async function executeActionStep(
   step: PublishActionStep,
   params: Record<string, unknown>,
   executor: BrowserExecutor,
 ): Promise<BrowserStepResult> {
+  if (!isBrowserAction(step.action)) {
+    return { success: false, error: `unsupported action: ${step.action}` };
+  }
+
   if (step.action === 'navigate') {
     return executor.navigate(asString(params.url));
   }

@@ -197,14 +197,21 @@ export async function createNextActivePublishSkillVersion(params: {
   return mapSkill(row);
 }
 
-export async function getActivePublishSkillFromDb(
-  platform: PublishPlatform,
-): Promise<PublishSkill | null> {
+export async function getActivePublishSkillByName(params: {
+  name: string;
+  platform: PublishPlatform;
+}): Promise<PublishSkill | null> {
   const row = await prisma.publishSkill.findFirst({
-    where: { name: 'publish_jd', platform, isActive: true },
+    where: { name: params.name, platform: params.platform, isActive: true },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
   });
   return row ? mapSkill(row) : null;
+}
+
+export function getActivePublishSkillFromDb(
+  platform: PublishPlatform,
+): Promise<PublishSkill | null> {
+  return getActivePublishSkillByName({ name: 'publish_jd', platform });
 }
 
 export async function createPublishTask(params: {

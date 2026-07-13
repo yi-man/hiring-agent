@@ -176,6 +176,38 @@ describe('runPublishingSkill', () => {
     });
   });
 
+  it('rejects screening-only actions without dispatching a browser command', async () => {
+    const executor = new RecordingExecutor();
+
+    const result = await executePublishingStep({
+      stepId: 'search_candidates',
+      skill: {
+        ...skill,
+        steps: [
+          {
+            id: 'search_candidates',
+            type: 'action',
+            action: 'search_candidates',
+            params: {},
+            next: 'done',
+          },
+          { id: 'done', type: 'end' },
+        ],
+      },
+      executor,
+      context: { input: {}, credentials: {}, target: {} },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.traceStep).toEqual({
+      stepId: 'search_candidates',
+      action: 'search_candidates',
+      params: {},
+      result: { success: false, error: 'unsupported action: search_candidates' },
+    });
+    expect(executor.calls).toEqual([]);
+  });
+
   it('passes structured target descriptors to browser actions', async () => {
     const executor = new RecordingExecutor();
     const target = {

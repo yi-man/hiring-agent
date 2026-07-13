@@ -36,7 +36,14 @@ export type BossLikeJobPayload = {
   keywords: string[];
 };
 
-export type PublishSkillAction = BrowserAction;
+export type ScreeningWorkflowAction =
+  | 'ensure_login'
+  | 'search_candidates'
+  | 'enrich_candidate'
+  | 'chat_candidate'
+  | 'collect_candidate';
+
+export type PublishSkillAction = BrowserAction | ScreeningWorkflowAction;
 
 export type PublishSkillMeta = Record<string, unknown> & {
   success_rate?: number;

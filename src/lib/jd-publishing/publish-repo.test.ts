@@ -3,6 +3,7 @@ import {
   createExploredPublishSkill,
   createNextActivePublishSkillVersion,
   createPublishTask,
+  getActivePublishSkillByName,
   getActivePublishSkillFromDb,
   listPublishTasksForJobDescription,
   updatePublishTaskCurrentStep,
@@ -115,6 +116,20 @@ describe('publish repository', () => {
       success_rate: 0.75,
       usage_count: 4,
       created_from: 'explore',
+    });
+  });
+
+  it('loads the active workflow for an explicit name and platform', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce({
+      ...skillRow,
+      name: 'screen_candidates',
+    });
+
+    await getActivePublishSkillByName({ name: 'screen_candidates', platform: 'boss-like' });
+
+    expect(prismaMock.publishSkill.findFirst).toHaveBeenCalledWith({
+      where: { name: 'screen_candidates', platform: 'boss-like', isActive: true },
+      orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
     });
   });
 

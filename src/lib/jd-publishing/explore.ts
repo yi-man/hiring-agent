@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { BrowserAction } from '@/lib/browser/types';
 import {
   buildBossLikeStructuredPublishSkill,
   defaultBossLikePublishTargets,
@@ -30,9 +31,15 @@ const REQUIRED_BOSS_LIKE_FORM_TEXT = [
 
 type TargetValidation = {
   stepId: string;
-  action: PublishSkillAction;
+  action: BrowserAction;
   target: BrowserTargetInput;
 };
+
+function isBrowserAction(action: PublishSkillAction): action is BrowserAction {
+  return ['navigate', 'fill', 'click', 'wait_for_url', 'wait_for_text', 'add_keywords'].includes(
+    action as BrowserAction,
+  );
+}
 
 type FieldRequirement = {
   key: keyof Pick<
@@ -385,7 +392,7 @@ function ensureSuccess(label: string, result: BrowserStepResult): void {
   }
 }
 
-function actionResolveOptions(action: PublishSkillAction): BrowserResolveOptions {
+function actionResolveOptions(action: BrowserAction): BrowserResolveOptions {
   if (action === 'fill' || action === 'add_keywords') {
     return { action, requireEditable: true };
   }
@@ -446,6 +453,7 @@ async function dryRunResolveSkillTargets(params: {
   for (const step of skill.steps) {
     if (step.type !== 'action') continue;
     if (!currentPageTargetSteps.has(step.id)) continue;
+    if (!isBrowserAction(step.action)) continue;
     const target = step.params.target;
     if (isBrowserTargetInput(target)) {
       await ensureTargetResolvable({
