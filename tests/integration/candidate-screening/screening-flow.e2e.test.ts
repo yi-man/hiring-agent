@@ -152,12 +152,26 @@ function renderResumeDetailPage(id: string): string {
       ${article}
       <button type="button" id="collect">收藏</button>
       <button type="button" id="open-chat">打招呼</button>
-      <form method="post" action="/employer/resumes/${escapeHtml(id)}/messages">
-        <label>消息 <textarea name="message"></textarea></label>
-        <button type="submit">发送</button>
+      <form id="chat-composer" method="post" action="/employer/resumes/${escapeHtml(id)}/messages" hidden>
+        <label>消息 <textarea name="message" disabled></textarea></label>
+        <button type="submit" disabled>发送</button>
       </form>
     </main>
     <script>
+      const chatComposer = document.querySelector('#chat-composer');
+      const messageInput = chatComposer.querySelector('textarea[name="message"]');
+      const sendButton = chatComposer.querySelector('button[type="submit"]');
+      let chatOpened = false;
+
+      document.querySelector('#open-chat').addEventListener('click', () => {
+        chatOpened = true;
+        chatComposer.hidden = false;
+        messageInput.disabled = false;
+        sendButton.disabled = false;
+      });
+      chatComposer.addEventListener('submit', (event) => {
+        if (!chatOpened) event.preventDefault();
+      });
       document.querySelector('#collect').addEventListener('click', () => {
         const request = new XMLHttpRequest();
         request.open('POST', '/employer/resumes/${escapeHtml(id)}/collect', false);
@@ -386,6 +400,32 @@ describe('candidate screening integration flow with real postgres and boss-like 
     embedQueryMock.mockResolvedValue([1, 0, 0]);
   });
 
+  it('requires greeting to open the chat composer before a browser can submit a message', async () => {
+    const bossLike = await startBossLikeServer();
+    const executor = new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 500 });
+
+    try {
+      expect(
+        await executor.navigate(`${bossLike.baseUrl}/employer/resumes/${adaResumeId}`),
+      ).toMatchObject({ success: true });
+
+      const beforeGreeting = await executor.fill('消息', '您好，想和您沟通岗位机会。');
+
+      expect(beforeGreeting).toMatchObject({ success: false });
+      expect(bossLike.requests).not.toContain(`POST /employer/resumes/${adaResumeId}/messages`);
+      expect(await executor.click('打招呼')).toMatchObject({ success: true });
+      expect(await executor.fill('消息', '您好，想和您沟通岗位机会。')).toMatchObject({
+        success: true,
+      });
+      expect(await executor.click('发送')).toMatchObject({ success: true });
+      expect(await executor.waitForText('Message sent')).toMatchObject({ success: true });
+      expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
+    } finally {
+      await executor.close();
+      await bossLike.close();
+    }
+  }, 30000);
+
   it('stores live resumes, indexes vectors, evaluates candidates, and links results to the JD', async () => {
     const bossLike = await startBossLikeServer();
     const userId = await createIntegrationUser();
@@ -554,6 +594,20 @@ describe('candidate screening integration flow with real postgres and boss-like 
         ]),
       );
       expect(firstResults).toHaveLength(2);
+      expect(firstResults).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            decisionAction: 'chat',
+            actionStatus: 'success',
+            interviewStage: 'contacted',
+          }),
+          expect.objectContaining({
+            decisionAction: 'collect',
+            actionStatus: 'success',
+            interviewStage: 'collected',
+          }),
+        ]),
+      );
       expect(firstActionLogs).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
