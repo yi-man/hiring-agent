@@ -115,12 +115,15 @@ function renderLoginPage(): string {
   <body>
     <main>
       <h1>招聘端登录</h1>
-      <label>用户名 <input name="username" type="text" /></label>
-      <label>密码 <input name="password" type="password" /></label>
-      <button type="button" id="login">登录</button>
+      <form id="login-form">
+        <label>用户名 <input name="username" type="text" /></label>
+        <label>密码 <input name="password" type="password" /></label>
+        <button type="button" id="login">登录</button>
+      </form>
     </main>
     <script>
       document.querySelector('#login').addEventListener('click', () => {
+        document.cookie = 'boss-like-auth=1; Path=/; SameSite=Lax';
         window.location.href = '/employer/resumes';
       });
     </script>
@@ -139,7 +142,7 @@ function renderResumeListPage(searchButtonLabel: string, candidatesVisible: bool
         <label>搜索候选人 <input name="keyword" type="search" /></label>
         <button type="submit">${escapeHtml(searchButtonLabel)}</button>
       </form>
-      <p>简历</p>
+      <p>${candidatesVisible ? '简历' : '暂无简历数据'}</p>
       <section>${candidatesVisible ? candidateFixtures().join('\n') : ''}</section>
     </main>
   </body>
@@ -203,6 +206,12 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
       return;
     }
     if (url.pathname === '/employer/resumes') {
+      if (!request.headers.cookie?.includes('boss-like-auth=1')) {
+        response.statusCode = 302;
+        response.setHeader('location', '/employer/login');
+        response.end();
+        return;
+      }
       response.end(renderResumeListPage(searchButtonLabel, candidateResultsVisible));
       return;
     }
@@ -499,6 +508,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(chunks.length).toBeGreaterThan(0);
       expect(actionLogs.every((log) => log.mode === 'dry_run')).toBe(true);
       expect(actionLogs.every((log) => log.status === 'planned')).toBe(true);
+      expect(bossLike.requests).toContain('GET /employer/login');
       expect(bossLike.requests).toContain('GET /employer/resumes');
     } finally {
       await cleanupIntegrationUser(userId);
@@ -804,6 +814,34 @@ describe('candidate screening integration flow with real postgres and boss-like 
       await bossLike.close();
     }
   }, 120000);
+
+  it('serializes concurrent workflow version allocations', async () => {
+    try {
+      await cleanupScreeningWorkflows();
+      const v1 = await createExploredPublishSkill(
+        buildBossLikeScreeningSkill({ id: 'screen-candidates-concurrent-v1', version: 1 }),
+      );
+
+      const repaired = await Promise.all([
+        createNextActivePublishSkillVersion({ previousSkill: v1, steps: v1.steps }),
+        createNextActivePublishSkillVersion({ previousSkill: v1, steps: v1.steps }),
+        createNextActivePublishSkillVersion({ previousSkill: v1, steps: v1.steps }),
+        createNextActivePublishSkillVersion({ previousSkill: v1, steps: v1.steps }),
+      ]);
+      const workflows = await prisma.publishSkill.findMany({
+        where: { name: 'screen_candidates', platform: 'boss-like' },
+        orderBy: { version: 'asc' },
+      });
+
+      expect(repaired.map((workflow) => workflow.version).sort()).toEqual([2, 3, 4, 5]);
+      expect(workflows.map((workflow) => workflow.version)).toEqual([1, 2, 3, 4, 5]);
+      expect(workflows.filter((workflow) => workflow.isActive)).toEqual([
+        expect.objectContaining({ version: 5 }),
+      ]);
+    } finally {
+      await cleanupScreeningWorkflows();
+    }
+  }, 30000);
 
   it('repairs a drifted search target once and records v2', async () => {
     const bossLike = await startBossLikeServer();

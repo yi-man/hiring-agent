@@ -20,6 +20,7 @@ jest.mock('@/lib/prisma', () => ({
       updateMany: jest.fn(),
     },
     $transaction: jest.fn(),
+    $executeRaw: jest.fn(),
     jobPublishTask: {
       create: jest.fn(),
       findMany: jest.fn(),
@@ -40,6 +41,7 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
       updateMany: jest.Mock;
     };
     $transaction: jest.Mock;
+    $executeRaw: jest.Mock;
     jobPublishTask: {
       create: jest.Mock;
       findMany: jest.Mock;
@@ -70,8 +72,9 @@ describe('publish repository', () => {
     prismaMock.publishSkill.updateMany.mockReset();
     prismaMock.$transaction.mockReset();
     prismaMock.$transaction.mockImplementation(async (callback) =>
-      callback({ publishSkill: prismaMock.publishSkill }),
+      callback({ publishSkill: prismaMock.publishSkill, $executeRaw: prismaMock.$executeRaw }),
     );
+    prismaMock.$executeRaw.mockReset();
     prismaMock.jobPublishTask.create.mockReset();
     prismaMock.jobPublishTask.findMany.mockReset();
     prismaMock.jobPublishTask.update.mockReset();
@@ -177,6 +180,27 @@ describe('publish repository', () => {
       }),
     });
     expect(result.meta?.created_from).toBe('explore');
+  });
+
+  it('locks a workflow name and platform before allocating an explored version', async () => {
+    const exploredSkill = {
+      ...bossLikePublishSkill,
+      id: 'explored-skill-lock',
+      meta: { success_rate: 0, usage_count: 0, created_from: 'explore' as const },
+    };
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(null);
+    prismaMock.publishSkill.create.mockResolvedValueOnce({
+      ...exploredSkill,
+      isActive: true,
+      inputSchema: exploredSkill.inputSchema,
+      createdAt: now,
+      updatedAt: now,
+    });
+    prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await createExploredPublishSkill(exploredSkill);
+
+    expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it('stores an explored skill as the next version when inactive history already exists', async () => {
@@ -324,6 +348,47 @@ describe('publish repository', () => {
     });
     expect(prismaMock.publishSkill.create.mock.invocationCallOrder[0]).toBeLessThan(
       prismaMock.publishSkill.updateMany.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('retries a version collision and recalculates the next repair version', async () => {
+    const staleV1 = {
+      ...bossLikePublishSkill,
+      id: 'screen-candidates-v1',
+      name: 'screen_candidates',
+      version: 1,
+      isActive: false,
+    };
+    const uniqueViolation = Object.assign(new Error('Unique constraint failed'), {
+      code: 'P2002',
+    });
+    const persistedV3 = {
+      ...staleV1,
+      id: 'screen_candidates-boss-like-v3',
+      version: 3,
+      isActive: true,
+      inputSchema: staleV1.inputSchema,
+      createdAt: now,
+      updatedAt: now,
+    };
+    prismaMock.publishSkill.findFirst
+      .mockResolvedValueOnce({ version: 1 })
+      .mockResolvedValueOnce({ version: 2 });
+    prismaMock.publishSkill.create
+      .mockRejectedValueOnce(uniqueViolation)
+      .mockResolvedValueOnce(persistedV3);
+    prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await expect(
+      createNextActivePublishSkillVersion({ previousSkill: staleV1, steps: staleV1.steps }),
+    ).resolves.toEqual(expect.objectContaining({ id: persistedV3.id, version: 3 }));
+
+    expect(prismaMock.$transaction).toHaveBeenCalledTimes(2);
+    expect(prismaMock.publishSkill.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({ id: persistedV3.id, version: 3 }),
+      }),
     );
   });
 

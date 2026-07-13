@@ -198,6 +198,15 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
     return result.htmlSnapshot;
   }
 
+  async waitForSnapshotChange(
+    previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult> {
+    return normalizeResult(
+      await this.send('wait_for_snapshot_change', { previousSnapshot, previousUrl }),
+    );
+  }
+
   async resolveTarget(
     target: BrowserTargetInput,
     options: BrowserResolveOptions = {},

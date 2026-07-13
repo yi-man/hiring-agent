@@ -31,6 +31,13 @@ const resumeListHtml = `
 </article>
 `;
 
+const refreshedResumeListHtml = `
+<article data-candidate-id="2" data-profile-url="/employer/resumes/2">
+  <h2>李小红</h2>
+  <p data-field="resume">Java Spring Boot 分布式系统</p>
+</article>
+`;
+
 function targetName(target: BrowserTargetInput): string {
   return typeof target === 'string' ? target : target.name;
 }
@@ -223,6 +230,115 @@ class AmbiguousFormlessDetailExploringExecutor extends FormlessSearchExploringEx
   }
 }
 
+class DelayedSearchResultsExploringExecutor extends ExploringScreeningExecutor {
+  private candidatesReady = false;
+
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    const result = await super.click(target);
+    if (targetName(target) === '搜索') {
+      this.candidatesReady = false;
+    }
+    return result;
+  }
+
+  async check(check: BrowserStepCheck): Promise<boolean> {
+    const result = await super.check(check);
+    if (check.type === 'dom_exists' && check.selector === 'article[data-candidate-id]') {
+      this.candidatesReady = true;
+    }
+    return result;
+  }
+
+  async snapshot(): Promise<string> {
+    this.calls.push('snapshot');
+    return this.candidatesReady ? resumeListHtml : '<main>正在加载候选人</main>';
+  }
+}
+
+class RefreshedSearchResultsExploringExecutor extends ExploringScreeningExecutor {
+  private searchSubmitted = false;
+  private resultsRefreshed = false;
+
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    const result = await super.click(target);
+    if (targetName(target) === '搜索') {
+      this.searchSubmitted = true;
+    }
+    return result;
+  }
+
+  async snapshot(): Promise<string> {
+    this.calls.push('snapshot');
+    return this.searchSubmitted && !this.resultsRefreshed
+      ? resumeListHtml
+      : refreshedResumeListHtml;
+  }
+
+  async waitForSnapshotChange(): Promise<BrowserStepResult> {
+    this.calls.push('waitForSnapshotChange');
+    this.resultsRefreshed = true;
+    return { success: true };
+  }
+}
+
+class UrlThenResultsExploringExecutor extends ExploringScreeningExecutor {
+  private searchSubmitted = false;
+  private urlChanged = false;
+  private resultsRefreshed = false;
+
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    const result = await super.click(target);
+    if (targetName(target) === '搜索') {
+      this.searchSubmitted = true;
+    }
+    return result;
+  }
+
+  async snapshot(): Promise<string> {
+    this.calls.push('snapshot');
+    if (!this.searchSubmitted) return resumeListHtml;
+    if (!this.urlChanged) return resumeListHtml;
+    return this.resultsRefreshed ? refreshedResumeListHtml : '<main>正在加载候选人</main>';
+  }
+
+  async waitForSnapshotChange(
+    _previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult> {
+    this.calls.push(`waitForSnapshotChange:${previousUrl ? 'url' : 'snapshot'}`);
+    if (previousUrl) {
+      this.urlChanged = true;
+      return { success: true };
+    }
+    this.resultsRefreshed = true;
+    return { success: true };
+  }
+}
+
+class NestedEmptySearchResultsExploringExecutor extends ExploringScreeningExecutor {
+  private searchSubmitted = false;
+
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    const result = await super.click(target);
+    if (targetName(target) === '搜索') {
+      this.searchSubmitted = true;
+    }
+    return result;
+  }
+
+  async snapshot(): Promise<string> {
+    this.calls.push('snapshot');
+    return this.searchSubmitted
+      ? '<main><section><span>暂无</span><b>符合条件的候选人</b></section></main>'
+      : resumeListHtml;
+  }
+
+  async waitForSnapshotChange(): Promise<BrowserStepResult> {
+    this.calls.push('waitForSnapshotChange');
+    return { success: true };
+  }
+}
+
 describe('exploreBossLikeScreeningWorkflow', () => {
   it('explores list and detail targets without sending or collecting', async () => {
     const executor = new ExploringScreeningExecutor();
@@ -261,6 +377,51 @@ describe('exploreBossLikeScreeningWorkflow', () => {
 
   it('returns no workflow when the first search has no candidate detail to inspect', async () => {
     const executor = new ExploringScreeningExecutor(false);
+
+    await expect(
+      exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
+    ).resolves.toBeNull();
+  });
+
+  it('waits for search candidates before reading the first exploration snapshot', async () => {
+    const executor = new DelayedSearchResultsExploringExecutor();
+
+    await expect(
+      exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
+    ).resolves.toEqual(expect.objectContaining({ name: 'screen_candidates' }));
+
+    expect(executor.calls).toContain('check:article[data-candidate-id]');
+  });
+
+  it('waits for a new search-result snapshot instead of learning the previous candidate list', async () => {
+    const executor = new RefreshedSearchResultsExploringExecutor();
+
+    await expect(
+      exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
+    ).resolves.toEqual(expect.objectContaining({ name: 'screen_candidates' }));
+
+    expect(executor.calls).toContain('waitForSnapshotChange');
+    expect(executor.calls).toContain(`navigate:${baseUrl}/employer/resumes/2`);
+  });
+
+  it('keeps waiting for a result snapshot after the search URL changes', async () => {
+    const executor = new UrlThenResultsExploringExecutor();
+
+    await expect(
+      exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
+    ).resolves.toEqual(expect.objectContaining({ name: 'screen_candidates' }));
+
+    expect(executor.calls).toEqual(
+      expect.arrayContaining([
+        'waitForSnapshotChange:url',
+        'waitForSnapshotChange:snapshot',
+        `navigate:${baseUrl}/employer/resumes/2`,
+      ]),
+    );
+  });
+
+  it('accepts a nested explicit empty-state message after the result page changes', async () => {
+    const executor = new NestedEmptySearchResultsExploringExecutor();
 
     await expect(
       exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),

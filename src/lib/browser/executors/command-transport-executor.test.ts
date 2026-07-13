@@ -119,12 +119,24 @@ describe('CommandTransportBrowserExecutor', () => {
       expect.objectContaining({ target, status: 'unique' }),
     );
     await expect(executor.snapshot?.()).resolves.toBe(htmlSnapshot);
+    await expect(
+      executor.waitForSnapshotChange?.(htmlSnapshot, 'https://boss.example.com/employer/resumes'),
+    ).resolves.toEqual(expect.objectContaining({ success: true }));
     await expect(executor.snapshotStructured?.()).resolves.toBe(snapshot);
     expect(transport.commands.map((command) => command.action)).toEqual([
       'resolve_target',
       'snapshot',
+      'wait_for_snapshot_change',
       'snapshot_structured',
     ]);
+    expect(transport.commands[2]).toEqual(
+      expect.objectContaining({
+        params: {
+          previousSnapshot: htmlSnapshot,
+          previousUrl: 'https://boss.example.com/employer/resumes',
+        },
+      }),
+    );
   });
 
   it('preserves a structured target when waiting through the command transport', async () => {

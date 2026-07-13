@@ -76,6 +76,7 @@ export type BrowserCommandAction =
   | 'fill_selector'
   | 'snapshot'
   | 'snapshot_structured'
+  | 'wait_for_snapshot_change'
   | 'resolve_target';
 
 export type BrowserCommand = {
@@ -147,6 +148,10 @@ export type BrowserExecutor = {
     submitTarget: BrowserTargetInput,
   ): Promise<BrowserStepResult>;
   snapshot?(): Promise<string>;
+  waitForSnapshotChange?(
+    previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult>;
   snapshotStructured?(): Promise<StructuredDomSnapshot>;
   resolveTarget?(
     target: BrowserTargetInput,

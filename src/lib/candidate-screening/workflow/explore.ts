@@ -527,6 +527,55 @@ function firstSearchKeyword(plan: SearchPlan): string | null {
   return keyword?.trim() || plan.retrievalQuery.trim() || null;
 }
 
+const SEARCH_RESULT_SNAPSHOT_CHANGE_MAX_ATTEMPTS = 5;
+
+function isExplicitEmptySearchResultSnapshot(html: string): boolean {
+  const text = html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, '');
+  return /暂无(?:符合条件的)?(?:简历|候选人|人才|数据)/.test(text);
+}
+
+async function waitForCandidateSearchResults(
+  executor: BrowserExecutor,
+  previousSnapshot: string,
+  previousUrl: string,
+): Promise<string> {
+  if (executor.waitForSnapshotChange) {
+    let snapshot = previousSnapshot;
+    for (let attempt = 0; attempt < SEARCH_RESULT_SNAPSHOT_CHANGE_MAX_ATTEMPTS; attempt += 1) {
+      ensureSuccess(
+        'wait for candidate search result change',
+        await executor.waitForSnapshotChange(snapshot, attempt === 0 ? previousUrl : undefined),
+      );
+      snapshot = await requireRawSnapshot(executor);
+      if (
+        extractBossLikeCandidatesFromHtml(snapshot).length > 0 ||
+        isExplicitEmptySearchResultSnapshot(snapshot)
+      ) {
+        return snapshot;
+      }
+    }
+    throw new Error('screening_explore_candidate_results_not_ready');
+  }
+
+  const hasCandidateCards = await executor.check({
+    type: 'dom_exists',
+    selector: 'article[data-candidate-id]',
+    timeout: 5_000,
+  });
+  if (hasCandidateCards) return requireRawSnapshot(executor);
+
+  const hasEmptyState = await executor.check({
+    type: 'text_contains',
+    text: '暂无',
+    timeout: 5_000,
+  });
+  if (hasEmptyState) return requireRawSnapshot(executor);
+  throw new Error('screening_explore_candidate_results_not_ready');
+}
+
 export async function exploreBossLikeScreeningWorkflow(
   params: ExploreBossLikeScreeningWorkflowParams,
 ): Promise<ScreeningWorkflowSkill | null> {
@@ -594,9 +643,15 @@ export async function exploreBossLikeScreeningWorkflow(
     throw new Error('screening_explore_search_keyword_required');
   }
   ensureSuccess('fill search keyword', await executor.fill(searchTargets.searchInput, keyword));
+  const previousSearchSnapshot = await requireRawSnapshot(executor);
   ensureSuccess('submit candidate search', await executor.click(searchTargets.searchSubmit));
+  const candidateSearchSnapshot = await waitForCandidateSearchResults(
+    executor,
+    previousSearchSnapshot,
+    listSnapshot.url,
+  );
 
-  const candidates = extractBossLikeCandidatesFromHtml(await requireRawSnapshot(executor));
+  const candidates = extractBossLikeCandidatesFromHtml(candidateSearchSnapshot);
   const profileUrl = candidates
     .map((candidate) => resolveBossLikeProfileUrl(candidate.profileUrl, baseUrl).profileUrl)
     .find((candidateUrl): candidateUrl is string => Boolean(candidateUrl));
