@@ -187,6 +187,8 @@ const sampleRun: CandidateScreeningRunDto = {
   mode: 'execution',
   status: 'pending',
   currentStage: 'planning',
+  skillId: 'screen-candidates-v2',
+  currentWorkflowStep: 'chat_candidate',
   searchPlan: null,
   evaluationSchema: null,
   stats: null,
@@ -885,6 +887,12 @@ describe('candidate screening UI', () => {
     render(<CandidateScreeningRunLog jobDescriptionId="jd-1" runId="run-1" />);
 
     expect(await screen.findByText('筛选执行日志')).toBeInTheDocument();
+    expect(await screen.findByText('筛选浏览器 Workflow')).toBeInTheDocument();
+    expect(screen.getByText('当前步骤：chat_candidate')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看 Workflow 详情' })).toHaveAttribute(
+      'href',
+      '/workflows/screen-candidates-v2',
+    );
     expect(fetchCandidateScreeningRunWithEventsMock).toHaveBeenCalledWith('run-1');
     expect(fetchJdCandidatesMock).toHaveBeenCalledWith('jd-1', {
       runId: 'run-1',
@@ -923,6 +931,22 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('未达标')).toBeInTheDocument();
     expect(screen.getByText('跳过候选人')).toBeInTheDocument();
     expect(screen.getByText('已跳过')).toBeInTheDocument();
+  });
+
+  it('screening run log identifies historical runs without a linked Workflow', async () => {
+    fetchCandidateScreeningRunWithEventsMock.mockResolvedValueOnce({
+      run: {
+        ...sampleRun,
+        skillId: null,
+        currentWorkflowStep: null,
+      },
+      events: sampleRunEvents,
+    });
+
+    render(<CandidateScreeningRunLog jobDescriptionId="jd-1" runId="run-1" />);
+
+    expect(await screen.findByText('历史任务未关联 Workflow')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '查看 Workflow 详情' })).not.toBeInTheDocument();
   });
 
   it('screening run log returns to the supplied source context', async () => {

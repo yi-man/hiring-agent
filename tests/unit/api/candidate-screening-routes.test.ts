@@ -149,6 +149,8 @@ const sampleRun: CandidateScreeningRunDto = {
   mode: 'dry_run',
   status: 'running',
   currentStage: 'evaluating',
+  skillId: 'screen-candidates-v2',
+  currentWorkflowStep: 'chat_candidate',
   searchPlan: null,
   evaluationSchema: null,
   stats: {
@@ -528,6 +530,10 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(200);
     expect(body.run).toEqual(sampleRun);
+    expect(body.run).toMatchObject({
+      skillId: 'screen-candidates-v2',
+      currentWorkflowStep: 'chat_candidate',
+    });
     expect(body.events).toEqual([sampleRunEvent]);
     expect(getCandidateScreeningRunMock).toHaveBeenCalledWith({
       userId: 'u1',

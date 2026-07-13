@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, FileText, ListFilter, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, FileText, GitBranch, ListFilter, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import {
   fetchCandidateScreeningRunWithEvents,
@@ -627,6 +627,33 @@ export function CandidateScreeningRunLog({
         </section>
 
         <aside className="space-y-4">
+          <section className="border-border rounded-lg border p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <GitBranch className="text-muted-foreground h-4 w-4" aria-hidden />
+              筛选浏览器 Workflow
+            </div>
+            {run.skillId ? (
+              <Link
+                href={`/workflows/${run.skillId}`}
+                className="group flex items-center justify-between gap-3"
+                aria-label="查看 Workflow 详情"
+              >
+                <div>
+                  <div className="text-foreground text-sm font-medium group-hover:underline">
+                    查看 Workflow 详情
+                  </div>
+                  <div className="text-muted-foreground mt-1 text-xs">Skill ID: {run.skillId}</div>
+                  <div className="text-muted-foreground mt-1 text-xs">
+                    当前步骤：{run.currentWorkflowStep ?? '等待浏览器操作'}
+                  </div>
+                </div>
+                <ArrowRight className="text-muted-foreground h-4 w-4" aria-hidden />
+              </Link>
+            ) : (
+              <p className="text-muted-foreground text-sm">历史任务未关联 Workflow</p>
+            )}
+          </section>
+
           <section className="border-border rounded-lg border p-4">
             <div className="mb-3 flex items-center gap-2 text-sm font-medium">
               <ListFilter className="text-muted-foreground h-4 w-4" aria-hidden />
