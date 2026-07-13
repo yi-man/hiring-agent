@@ -13,6 +13,7 @@ import type {
   RawCandidateBatch,
   SearchOptions,
 } from '../adapters/types';
+import { CandidateAdapterTargetError } from '../adapters/types';
 import type { RawCandidate } from '../ingest';
 import type { CandidateActionPlan, SearchPlan } from '../types';
 import { buildBossLikeScreeningSkill } from './skill-registry';
@@ -50,12 +51,84 @@ const repairedTarget: TargetDescriptor = {
   stableAttrs: { testId: 'candidate-search-submit' },
 };
 
+const repairedComposerTarget: TargetDescriptor = {
+  kind: 'button',
+  role: 'button',
+  name: '确认发送',
+  exact: true,
+  stableAttrs: { testId: 'candidate-send-submit' },
+};
+
 const repairedListSnapshot: StructuredDomSnapshot = {
   url: 'http://localhost:6183/employer/resumes',
   title: '人才搜索',
   pageState: 'list',
   headings: [],
-  forms: [],
+  forms: [
+    {
+      name: '人才搜索',
+      fields: [
+        {
+          tag: 'input',
+          role: 'textbox',
+          label: '关键词',
+          name: 'keyword',
+          visible: true,
+          enabled: true,
+          editable: true,
+        },
+      ],
+      buttons: [
+        {
+          tag: 'button',
+          role: 'button',
+          accessibleName: '开始检索',
+          name: 'candidate-search-submit',
+          testId: 'candidate-search-submit',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+    },
+  ],
+  links: [],
+  textBlocks: [],
+};
+
+const repairedComposerSnapshot: StructuredDomSnapshot = {
+  url: 'http://localhost:6183/employer/resumes/1',
+  title: '沟通候选人',
+  pageState: 'list',
+  headings: [],
+  forms: [
+    {
+      name: '沟通候选人',
+      fields: [
+        {
+          tag: 'textarea',
+          role: 'textbox',
+          label: '消息内容',
+          name: 'message',
+          visible: true,
+          enabled: true,
+          editable: true,
+        },
+      ],
+      buttons: [
+        {
+          tag: 'button',
+          role: 'button',
+          accessibleName: '确认发送',
+          name: 'candidate-send-submit',
+          testId: 'candidate-send-submit',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+    },
+  ],
   links: [],
   textBlocks: [],
 };
@@ -118,6 +191,34 @@ function browserTargetError(
     failedTargetKey: 'target',
   };
   return new ScreeningWorkflowTargetError({ stepId, targetKey, target, result });
+}
+
+function workflowTarget(
+  skill: ScreeningWorkflowSkill,
+  stepId: string,
+  targetKey: string,
+): TargetDescriptor {
+  const step = skill.steps.find(
+    (candidate): candidate is Extract<(typeof skill.steps)[number], { type: 'action' }> =>
+      candidate.id === stepId && candidate.type === 'action',
+  );
+  const targets = step?.params.targets as Record<string, unknown> | undefined;
+  const target = targets?.[targetKey];
+  if (!target || typeof target === 'string') {
+    throw new Error(`workflow target fixture is missing: ${stepId}.${targetKey}`);
+  }
+  return target as TargetDescriptor;
+}
+
+function adapterTargetError(params: {
+  target: TargetDescriptor;
+  targetKey: 'greetButton' | 'messageInput' | 'sendButton' | 'collectButton';
+}): CandidateAdapterTargetError {
+  return new CandidateAdapterTargetError({
+    result: { success: false, error: `not_found_target: ${params.target.name}` },
+    target: params.target,
+    targetKey: params.targetKey,
+  });
 }
 
 type MockedBrowserExecutor = BrowserExecutor & {
@@ -271,7 +372,12 @@ describe('CandidateScreeningWorkflowSession', () => {
           expect.objectContaining({
             id: 'search_candidates',
             params: expect.objectContaining({
-              targets: expect.objectContaining({ searchSubmit: repairedTarget }),
+              targets: expect.objectContaining({
+                searchSubmit: expect.objectContaining({
+                  name: repairedTarget.name,
+                  stableAttrs: expect.objectContaining(repairedTarget.stableAttrs),
+                }),
+              }),
             }),
           }),
         ]),
@@ -284,6 +390,17 @@ describe('CandidateScreeningWorkflowSession', () => {
     );
     expect(dependencies.updateRun).toHaveBeenCalledWith(
       expect.objectContaining({ skillId: 'screen-v2' }),
+    );
+    expect(dependencies.executor.resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: repairedTarget.name,
+        stableAttrs: expect.objectContaining(repairedTarget.stableAttrs),
+      }),
+      expect.objectContaining({ action: 'click' }),
+    );
+    expect(dependencies.executor.resolveTarget).not.toHaveBeenCalledWith(
+      oldTarget,
+      expect.anything(),
     );
     expect(dependencies.adapter.searchCandidates).toHaveBeenCalledTimes(2);
     expect(dependencies.createRunEvent).toHaveBeenCalledWith(
@@ -399,11 +516,19 @@ describe('CandidateScreeningWorkflowSession', () => {
         success: false,
         error: 'not_found_target: 发送',
         browserTrace: { action: 'chat', candidateId: 'candidate-1' },
+        targetError: adapterTargetError({
+          target: workflowTarget(skill, 'chat_candidate', 'sendButton'),
+          targetKey: 'sendButton',
+        }),
       })
       .mockResolvedValueOnce({
         success: true,
         browserTrace: { action: 'chat', candidateId: 'candidate-1' },
       });
+    dependencies.executor.snapshotStructured.mockResolvedValue(repairedComposerSnapshot);
+    dependencies.executor.resolveTarget.mockResolvedValue(
+      uniqueTargetReport(repairedComposerTarget),
+    );
     const session = createCandidateScreeningWorkflowSession(dependencies);
     const candidate = { candidateId: 'candidate-1', displayName: 'Ada Lovelace' };
     const actionPlan: CandidateActionPlan = {
@@ -419,6 +544,87 @@ describe('CandidateScreeningWorkflowSession', () => {
     expect(result.success).toBe(true);
     expect(dependencies.createNextSkillVersion).toHaveBeenCalledTimes(1);
     expect(dependencies.adapter.chatCandidate).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an ambiguous chat target failure as a candidate action result', async () => {
+    const skill = makeSkill();
+    const dependencies = makeDependencies({ getActiveSkill: jest.fn().mockResolvedValue(skill) });
+    const failedResult = {
+      success: false,
+      error: 'not_found_target: 发送',
+      targetError: adapterTargetError({
+        target: workflowTarget(skill, 'chat_candidate', 'sendButton'),
+        targetKey: 'sendButton',
+      }),
+    };
+    dependencies.adapter.chatCandidate.mockResolvedValueOnce(failedResult);
+    dependencies.executor.snapshotStructured.mockResolvedValue(repairedComposerSnapshot);
+    dependencies.executor.resolveTarget.mockResolvedValue(
+      ambiguousTargetReport(repairedComposerTarget),
+    );
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+    const candidate = { candidateId: 'candidate-1', displayName: 'Ada Lovelace' };
+    const actionPlan: CandidateActionPlan = {
+      action: 'chat',
+      priority: 'high',
+      message: 'Hello Ada',
+      reason: 'Strong match',
+    };
+
+    await session.loadOrExplore({ searchPlan, stage: 'executing_actions' });
+    await expect(session.chatCandidate(candidate, actionPlan)).resolves.toEqual(failedResult);
+
+    expect(dependencies.createNextSkillVersion).not.toHaveBeenCalled();
+    expect(dependencies.adapter.chatCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails clearly without retrying or replacing the session skill when repair run persistence fails', async () => {
+    const skill = makeSkill();
+    const dependencies = makeDependencies({
+      getActiveSkill: jest.fn().mockResolvedValue(skill),
+      updateRun: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error('database unavailable')),
+    });
+    dependencies.adapter.searchCandidates.mockImplementationOnce(() => {
+      throw browserTargetError('search_candidates', 'searchSubmit', oldTarget);
+    });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await expect(
+      collectBatches(session.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).rejects.toThrow('screening_workflow_repair_persistence_failed');
+
+    expect(session.skill).toEqual(skill);
+    expect(dependencies.adapter.searchCandidates).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails clearly without retrying or replacing the session skill when repair event persistence fails', async () => {
+    const skill = makeSkill();
+    const dependencies = makeDependencies({
+      getActiveSkill: jest.fn().mockResolvedValue(skill),
+      createRunEvent: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error('event store unavailable')),
+    });
+    dependencies.adapter.searchCandidates.mockImplementationOnce(() => {
+      throw browserTargetError('search_candidates', 'searchSubmit', oldTarget);
+    });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await expect(
+      collectBatches(session.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).rejects.toThrow('screening_workflow_repair_persistence_failed');
+
+    expect(session.skill).toEqual(skill);
+    expect(dependencies.adapter.searchCandidates).toHaveBeenCalledTimes(1);
   });
 
   it('routes chat and collect actions with their workflow targets and closes the adapter', async () => {

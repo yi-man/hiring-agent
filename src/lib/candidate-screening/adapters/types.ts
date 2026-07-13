@@ -1,4 +1,4 @@
-import type { BrowserExecutor } from '@/lib/browser/types';
+import type { BrowserExecutor, BrowserStepResult, BrowserTargetInput } from '@/lib/browser/types';
 import type { RawCandidate } from '../ingest';
 import type { CandidateActionPlan, CandidateScreeningPlatform, SearchPlan } from '../types';
 import type { BossLikeScreeningTargets } from '../workflow/types';
@@ -19,10 +19,32 @@ export type StoredCandidateRef = {
   displayName: string;
 };
 
+export type CandidateAdapterTargetKey = keyof BossLikeScreeningTargets;
+
+export class CandidateAdapterTargetError extends Error {
+  readonly result: BrowserStepResult;
+  readonly target: BrowserTargetInput;
+  readonly targetKey: CandidateAdapterTargetKey;
+
+  constructor(params: {
+    result: BrowserStepResult;
+    target: BrowserTargetInput;
+    targetKey: CandidateAdapterTargetKey;
+  }) {
+    super(params.result.error ?? `browser target failed: ${params.targetKey}`);
+    this.name = 'CandidateAdapterTargetError';
+    this.result = params.result;
+    this.target = params.target;
+    this.targetKey = params.targetKey;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export type ActionExecutionResult = {
   success: boolean;
   error?: string;
   browserTrace?: Record<string, unknown>;
+  targetError?: CandidateAdapterTargetError;
 };
 
 export type CandidateBrowserActionOptions = {

@@ -200,6 +200,32 @@ class AmbiguousResumeTextExecutor extends FakeBrowserExecutor {
   }
 }
 
+class SearchTargetFailureExecutor extends FakeBrowserExecutor {
+  readonly failure: BrowserStepResult = {
+    success: false,
+    error: 'not_found_target: 搜索候选人',
+    domSnapshot: '<main>target missing</main>',
+  };
+
+  async fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult> {
+    this.calls.push(`fill:${targetName(target)}:${value}`);
+    return this.failure;
+  }
+}
+
+class CollectTargetFailureExecutor extends FakeBrowserExecutor {
+  readonly failure: BrowserStepResult = {
+    success: false,
+    error: 'not_found_target: 收藏',
+    domSnapshot: '<main>target missing</main>',
+  };
+
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    this.calls.push(`click:${targetName(target)}`);
+    return this.failure;
+  }
+}
+
 class EmptyThenResultExecutor extends FakeBrowserExecutor {
   private cardChecks = 0;
 
@@ -379,6 +405,19 @@ describe('BossLikeCandidateSourceAdapter', () => {
     expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('1');
   });
 
+  it('throws typed target metadata for failed search browser steps', async () => {
+    const executor = new SearchTargetFailureExecutor();
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await expect(
+      collectAsyncBatches(adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).rejects.toMatchObject({
+      result: executor.failure,
+      target: '搜索候选人',
+      targetKey: 'searchInput',
+    });
+  });
+
   it('submits each keyword search and continues after an empty result page', async () => {
     const executor = new EmptyThenResultExecutor(['<main>暂无简历数据</main>', resumeListFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
@@ -529,6 +568,27 @@ describe('BossLikeCandidateSourceAdapter', () => {
       `fill:消息:${chatPlan.message}`,
       'click:发送',
     ]);
+  });
+
+  it('keeps failed collect browser target metadata in the action result', async () => {
+    const executor = new CollectTargetFailureExecutor();
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const result = await adapter.collectCandidate({
+      candidateId: 'candidate-1',
+      displayName: '王小明',
+      profileUrl: '/employer/resumes/1',
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'not_found_target: 收藏',
+      targetError: {
+        result: executor.failure,
+        target: '收藏',
+        targetKey: 'collectButton',
+      },
+    });
   });
 
   it('uses discovered screening targets for search and greeting actions', async () => {

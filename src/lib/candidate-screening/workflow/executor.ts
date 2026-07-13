@@ -24,6 +24,7 @@ import type {
   SearchOptions,
   StoredCandidateRef,
 } from '../adapters/types';
+import { CandidateAdapterTargetError } from '../adapters/types';
 import type { RawCandidate } from '../ingest';
 import type {
   CandidateActionPlan,
@@ -31,7 +32,10 @@ import type {
   CandidateScreeningRunStage,
   SearchPlan,
 } from '../types';
-import { exploreBossLikeScreeningWorkflow } from './explore';
+import {
+  exploreBossLikeScreeningWorkflow,
+  repairBossLikeScreeningTargetFromSnapshot,
+} from './explore';
 import type { BossLikeScreeningTargets, ScreeningWorkflowSkill } from './types';
 
 type ScreeningWorkflowAction =
@@ -190,43 +194,21 @@ function targetsForStep(
   return { targets: targets as Partial<BossLikeScreeningTargets> };
 }
 
-function targetFailurePrefix(message: string): boolean {
-  return /(?:ambiguous|low_confidence|not_found)_target\b/.test(message);
-}
-
-function targetEntries(
-  step: Extract<PublishStep, { type: 'action' }>,
-): Array<[string, BrowserTargetInput]> {
-  const targets = targetsForStep(step).targets ?? {};
-  return Object.entries(targets);
-}
-
-function targetName(target: BrowserTargetInput): string {
-  return typeof target === 'string' ? target : target.name;
-}
-
 function targetErrorFromUnknown(params: {
   error: unknown;
   step: Extract<PublishStep, { type: 'action' }>;
   candidateId?: string;
 }): ScreeningWorkflowTargetError | null {
   if (params.error instanceof ScreeningWorkflowTargetError) return params.error;
-  const error = params.error;
-  if (!(error instanceof Error) || !targetFailurePrefix(error.message)) return null;
-
-  const candidates = targetEntries(params.step).filter(([, target]) =>
-    error.message.includes(targetName(target)),
-  );
-  const fallback = targetEntries(params.step);
-  const [targetKey, target] =
-    candidates.length === 1 ? candidates[0]! : fallback.length === 1 ? fallback[0]! : [];
-  if (!targetKey || !target) return null;
+  if (!(params.error instanceof CandidateAdapterTargetError)) return null;
+  const targets = targetsForStep(params.step).targets;
+  if (!targets || !Object.hasOwn(targets, params.error.targetKey)) return null;
 
   return new ScreeningWorkflowTargetError({
     stepId: params.step.id,
-    targetKey,
-    target,
-    result: { success: false, error: error.message },
+    targetKey: params.error.targetKey,
+    target: params.error.target,
+    result: params.error.result,
     candidateId: params.candidateId,
   });
 }
@@ -248,6 +230,23 @@ function targetFailureCode(report: LocatorMatchReport): string {
   if (report.status === 'ambiguous') return 'ambiguous_target';
   if (report.status === 'low_confidence') return 'low_confidence_target';
   return 'not_found_target';
+}
+
+class ScreeningWorkflowRepairResolutionError extends Error {
+  constructor(report: LocatorMatchReport) {
+    super(`${targetFailureCode(report)}: ${report.reason ?? report.target.name}`);
+    this.name = 'ScreeningWorkflowRepairResolutionError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+class ScreeningWorkflowRepairPersistenceError extends Error {
+  constructor(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    super(`screening_workflow_repair_persistence_failed: ${message}`);
+    this.name = 'ScreeningWorkflowRepairPersistenceError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
 }
 
 function patchStepTarget(params: {
@@ -418,19 +417,30 @@ export function createCandidateScreeningWorkflowSession(
     const executor = dependencies.adapter.getBrowserExecutor();
     if (!executor.snapshotStructured || !executor.resolveTarget) return false;
 
+    let report: LocatorMatchReport | null = null;
     try {
-      await executor.snapshotStructured();
-      const report = await executor.resolveTarget(
-        failed.target,
-        resolveOptionsForTarget(failed.targetKey),
-      );
+      const snapshot = await executor.snapshotStructured();
+      const replacement = repairBossLikeScreeningTargetFromSnapshot({
+        snapshot,
+        failedStepId: failed.stepId,
+        targetKey: failed.targetKey,
+        failedTarget: failed.target,
+      });
+      if (!replacement) return false;
+      report = await executor.resolveTarget(replacement, resolveOptionsForTarget(failed.targetKey));
       if (report.status !== 'unique') {
-        throw new Error(
-          `${targetFailureCode(report)}: ${report.reason ?? targetName(report.target)}`,
-        );
+        throw new ScreeningWorkflowRepairResolutionError(report);
       }
+    } catch (error) {
+      if (error instanceof ScreeningWorkflowRepairResolutionError) throw error;
+      return false;
+    }
 
-      const nextSkill = screeningSkill(
+    if (!report) return false;
+
+    let nextSkill: ScreeningWorkflowSkill;
+    try {
+      nextSkill = screeningSkill(
         await dependencies.createNextSkillVersion({
           previousSkill: currentSkill,
           steps: patchStepTarget({
@@ -448,8 +458,11 @@ export function createCandidateScreeningWorkflowSession(
           },
         }),
       );
+    } catch (error) {
+      throw new ScreeningWorkflowRepairPersistenceError(error);
+    }
 
-      skill = nextSkill;
+    try {
       await updateRun({ skillId: nextSkill.id, currentWorkflowStep: failed.stepId });
       await recordEvent({
         level: 'info',
@@ -462,11 +475,12 @@ export function createCandidateScreeningWorkflowSession(
           repair: true,
         }),
       });
-      return true;
     } catch (error) {
-      if (error instanceof Error && targetFailurePrefix(error.message)) throw error;
-      return false;
+      throw new ScreeningWorkflowRepairPersistenceError(error);
     }
+
+    skill = nextSkill;
+    return true;
   }
 
   async function runAction<T>(params: {
@@ -496,13 +510,19 @@ export function createCandidateScreeningWorkflowSession(
 
       const actionResult = isActionExecutionResult(value) ? value : undefined;
       if (actionResult && !actionResult.success) {
-        if (retry || !actionResult.error) return value;
+        if (retry || !actionResult.targetError) return value;
         const targetError = targetErrorFromUnknown({
-          error: new Error(actionResult.error),
+          error: actionResult.targetError,
           step: started.step,
           candidateId: params.candidateId,
         });
-        if (!targetError || !(await repairTarget(targetError))) return value;
+        if (!targetError) return value;
+        try {
+          if (!(await repairTarget(targetError))) return value;
+        } catch (error) {
+          if (error instanceof ScreeningWorkflowRepairResolutionError) return value;
+          throw error;
+        }
         retry = true;
         continue;
       }

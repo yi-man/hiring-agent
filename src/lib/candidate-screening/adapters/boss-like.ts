@@ -1,6 +1,7 @@
 import type {
   BrowserExecutor,
   BrowserStepResult,
+  BrowserTargetInput,
   StructuredDomSnapshot,
 } from '@/lib/browser/types';
 import type { RawCandidate } from '../ingest';
@@ -14,6 +15,7 @@ import type {
   SearchOptions,
   StoredCandidateRef,
 } from './types';
+import { CandidateAdapterTargetError } from './types';
 
 const DEFAULT_BOSS_LIKE_BASE_URL = 'http://localhost:6183';
 const DEFAULT_BOSS_LIKE_USERNAME = 'admin';
@@ -71,12 +73,35 @@ function isSuccessfulStep(result: BrowserStepResult): boolean {
 async function requireSuccessfulStep(
   result: Promise<BrowserStepResult>,
   action: string,
+  targetFailure?: {
+    target: BrowserTargetInput;
+    targetKey: keyof BossLikeScreeningTargets;
+  },
 ): Promise<BrowserStepResult> {
   const stepResult = await result;
   if (!isSuccessfulStep(stepResult)) {
+    if (targetFailure) {
+      throw new CandidateAdapterTargetError({
+        result: stepResult,
+        target: targetFailure.target,
+        targetKey: targetFailure.targetKey,
+      });
+    }
     throw new Error(stepResult.error ?? `${action} failed`);
   }
   return stepResult;
+}
+
+function actionFailure(params: {
+  error: unknown;
+  browserTrace: Record<string, unknown>;
+}): ActionExecutionResult {
+  return {
+    success: false,
+    error: asErrorMessage(params.error),
+    browserTrace: params.browserTrace,
+    ...(params.error instanceof CandidateAdapterTargetError ? { targetError: params.error } : {}),
+  };
 }
 
 async function readStructuredSnapshotBestEffort(
@@ -236,18 +261,29 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
 
     if (!isLoginPage) return;
 
+    const usernameTarget = this.targetFor(options, 'username', '用户名');
     await requireSuccessfulStep(
-      this.executor.fill(this.targetFor(options, 'username', '用户名'), this.credentials.username),
+      this.executor.fill(usernameTarget, this.credentials.username),
       'fill username',
+      {
+        target: usernameTarget,
+        targetKey: 'username',
+      },
     );
+    const passwordTarget = this.targetFor(options, 'password', '密码');
     await requireSuccessfulStep(
-      this.executor.fill(this.targetFor(options, 'password', '密码'), this.credentials.password),
+      this.executor.fill(passwordTarget, this.credentials.password),
       'fill password',
+      {
+        target: passwordTarget,
+        targetKey: 'password',
+      },
     );
-    await requireSuccessfulStep(
-      this.executor.click(this.targetFor(options, 'loginButton', '登录')),
-      'submit login',
-    );
+    const loginButtonTarget = this.targetFor(options, 'loginButton', '登录');
+    await requireSuccessfulStep(this.executor.click(loginButtonTarget), 'submit login', {
+      target: loginButtonTarget,
+      targetKey: 'loginButton',
+    });
     await requireSuccessfulStep(
       this.executor.waitForUrl(this.resumeListUrl()),
       'wait for resume list',
@@ -270,13 +306,17 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
       if (emittedCount >= maxCandidates) break;
 
       await requireSuccessfulStep(this.executor.navigate(this.resumeListUrl()), 'open resume list');
+      const searchInputTarget = this.targetFor(workflow, 'searchInput', '搜索候选人');
       await requireSuccessfulStep(
-        this.executor.fill(this.targetFor(workflow, 'searchInput', '搜索候选人'), keyword),
+        this.executor.fill(searchInputTarget, keyword),
         'fill search keyword',
+        { target: searchInputTarget, targetKey: 'searchInput' },
       );
+      const searchSubmitTarget = this.targetFor(workflow, 'searchSubmit', '搜索');
       await requireSuccessfulStep(
-        this.executor.click(this.targetFor(workflow, 'searchSubmit', '搜索')),
+        this.executor.click(searchSubmitTarget),
         'submit candidate search',
+        { target: searchSubmitTarget, targetKey: 'searchSubmit' },
       );
       await this.waitForResumeContent();
 
@@ -357,13 +397,14 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
         this.executor.navigate(profileUrlResolution.profileUrl),
         'open candidate profile',
       );
-      await requireSuccessfulStep(
-        this.executor.click(this.targetFor(options, 'collectButton', '收藏')),
-        'collect candidate',
-      );
+      const collectButtonTarget = this.targetFor(options, 'collectButton', '收藏');
+      await requireSuccessfulStep(this.executor.click(collectButtonTarget), 'collect candidate', {
+        target: collectButtonTarget,
+        targetKey: 'collectButton',
+      });
       return { success: true, browserTrace };
     } catch (error) {
-      return { success: false, error: asErrorMessage(error), browserTrace };
+      return actionFailure({ error, browserTrace });
     }
   }
 
@@ -401,21 +442,28 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
         this.executor.navigate(profileUrlResolution.profileUrl),
         'open candidate profile',
       );
+      const greetButtonTarget = this.targetFor(options, 'greetButton', '打招呼');
+      await requireSuccessfulStep(this.executor.click(greetButtonTarget), 'open chat composer', {
+        target: greetButtonTarget,
+        targetKey: 'greetButton',
+      });
+      const messageInputTarget = this.targetFor(options, 'messageInput', '消息');
       await requireSuccessfulStep(
-        this.executor.click(this.targetFor(options, 'greetButton', '打招呼')),
-        'open chat composer',
-      );
-      await requireSuccessfulStep(
-        this.executor.fill(this.targetFor(options, 'messageInput', '消息'), message),
+        this.executor.fill(messageInputTarget, message),
         'fill chat message',
+        {
+          target: messageInputTarget,
+          targetKey: 'messageInput',
+        },
       );
-      await requireSuccessfulStep(
-        this.executor.click(this.targetFor(options, 'sendButton', '发送')),
-        'send chat message',
-      );
+      const sendButtonTarget = this.targetFor(options, 'sendButton', '发送');
+      await requireSuccessfulStep(this.executor.click(sendButtonTarget), 'send chat message', {
+        target: sendButtonTarget,
+        targetKey: 'sendButton',
+      });
       return { success: true, browserTrace: { ...browserTrace, messageLength: message.length } };
     } catch (error) {
-      return { success: false, error: asErrorMessage(error), browserTrace };
+      return actionFailure({ error, browserTrace });
     }
   }
 
@@ -474,6 +522,9 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     if (!this.executor.waitForText) return;
     const target = this.targetFor(options, 'detailContent', '候选人详情');
     const text = typeof target === 'string' ? target : target.name;
-    await requireSuccessfulStep(this.executor.waitForText(text), 'wait for candidate detail');
+    await requireSuccessfulStep(this.executor.waitForText(text), 'wait for candidate detail', {
+      target,
+      targetKey: 'detailContent',
+    });
   }
 }

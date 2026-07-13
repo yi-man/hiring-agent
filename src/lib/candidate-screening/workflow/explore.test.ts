@@ -8,7 +8,10 @@ import type {
   BrowserTargetInput,
   StructuredDomSnapshot,
 } from '@/lib/browser/types';
-import { exploreBossLikeScreeningWorkflow } from './explore';
+import {
+  exploreBossLikeScreeningWorkflow,
+  repairBossLikeScreeningTargetFromSnapshot,
+} from './explore';
 import type { SearchPlan } from '../types';
 
 const baseUrl = 'http://localhost:6183';
@@ -208,5 +211,41 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     await expect(
       exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
     ).rejects.toThrow('screening_explore_no_candidate_detail');
+  });
+
+  it('derives a renamed search target from the failed screening step snapshot', async () => {
+    const executor = new ExploringScreeningExecutor();
+    const snapshot = await executor.snapshotStructured();
+    const renamedSnapshot: StructuredDomSnapshot = {
+      ...snapshot,
+      forms: snapshot.forms.map((form) => ({
+        ...form,
+        buttons: form.buttons.map((button) => ({
+          ...button,
+          accessibleName: '开始检索',
+          name: 'candidate-search-submit',
+          testId: 'candidate-search-submit',
+        })),
+      })),
+    };
+
+    expect(
+      repairBossLikeScreeningTargetFromSnapshot({
+        snapshot: renamedSnapshot,
+        failedStepId: 'search_candidates',
+        targetKey: 'searchSubmit',
+        failedTarget: {
+          kind: 'button',
+          role: 'button',
+          name: '搜索',
+          exact: true,
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        name: '开始检索',
+        stableAttrs: expect.objectContaining({ testId: 'candidate-search-submit' }),
+      }),
+    );
   });
 });

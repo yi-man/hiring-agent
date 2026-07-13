@@ -4,6 +4,7 @@ import type {
   BrowserExecutor,
   BrowserResolveOptions,
   BrowserStepResult,
+  BrowserTargetInput,
   DomCandidate,
   StructuredDomSnapshot,
   TargetDescriptor,
@@ -29,6 +30,23 @@ type ExploreBossLikeScreeningWorkflowParams = {
 type CandidateRequirement = {
   key: string;
   patterns: RegExp[];
+};
+
+type ScreeningRepairKey = keyof BossLikeScreeningTargets;
+
+const REPAIR_KEY_BY_STEP: Record<string, readonly ScreeningRepairKey[]> = {
+  ensure_login: ['username', 'password', 'loginButton'],
+  search_candidates: ['searchInput', 'searchSubmit'],
+  enrich_candidate: ['detailContent'],
+  chat_candidate: ['greetButton', 'messageInput', 'sendButton'],
+  collect_candidate: ['collectButton'],
+};
+
+const REPAIR_KEY_BY_VALUE_HINT: Partial<
+  Record<NonNullable<TargetDescriptor['valueHint']>, ScreeningRepairKey>
+> = {
+  keyword: 'searchInput',
+  message: 'messageInput',
 };
 
 const SEARCH_FIELD_REQUIREMENT: CandidateRequirement = {
@@ -364,6 +382,50 @@ function buildComposerTargets(
       scope,
     }),
   };
+}
+
+function repairKeyFromFailedTarget(params: {
+  failedStepId: string;
+  targetKey: string;
+  failedTarget: BrowserTargetInput;
+}): ScreeningRepairKey | undefined {
+  const stepKeys = REPAIR_KEY_BY_STEP[params.failedStepId];
+  if (stepKeys?.includes(params.targetKey as ScreeningRepairKey)) {
+    return params.targetKey as ScreeningRepairKey;
+  }
+  if (typeof params.failedTarget === 'string') return undefined;
+  return params.failedTarget.valueHint
+    ? REPAIR_KEY_BY_VALUE_HINT[params.failedTarget.valueHint]
+    : undefined;
+}
+
+export function repairBossLikeScreeningTargetFromSnapshot(params: {
+  snapshot: StructuredDomSnapshot;
+  failedStepId: string;
+  targetKey: string;
+  failedTarget: BrowserTargetInput;
+}): TargetDescriptor | undefined {
+  const repairKey = repairKeyFromFailedTarget(params);
+  if (!repairKey) return undefined;
+
+  try {
+    if (repairKey === 'username' || repairKey === 'password' || repairKey === 'loginButton') {
+      return buildLoginTargets(params.snapshot)[repairKey];
+    }
+    if (repairKey === 'searchInput' || repairKey === 'searchSubmit') {
+      return buildSearchTargets(params.snapshot)[repairKey];
+    }
+    if (
+      repairKey === 'detailContent' ||
+      repairKey === 'greetButton' ||
+      repairKey === 'collectButton'
+    ) {
+      return buildDetailTargets(params.snapshot)[repairKey];
+    }
+    return buildComposerTargets(params.snapshot)[repairKey];
+  } catch {
+    return undefined;
+  }
 }
 
 function ensureSuccess(label: string, result: BrowserStepResult): void {
