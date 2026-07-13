@@ -135,9 +135,22 @@ export async function embedQuery(query: string, model?: string): Promise<number[
   return first;
 }
 
+/** Provider limit (e.g. DashScope text-embedding): batch size must be <= 10. */
+const EMBEDDING_INPUT_BATCH_SIZE = 10;
+
 export async function embedDocuments(documents: string[], model?: string): Promise<number[][]> {
   if (documents.length === 0) {
     return [];
   }
-  return requestEmbeddings(documents, model);
+  if (documents.length <= EMBEDDING_INPUT_BATCH_SIZE) {
+    return requestEmbeddings(documents, model);
+  }
+
+  const vectors: number[][] = [];
+  for (let offset = 0; offset < documents.length; offset += EMBEDDING_INPUT_BATCH_SIZE) {
+    const batch = documents.slice(offset, offset + EMBEDDING_INPUT_BATCH_SIZE);
+    const batchVectors = await requestEmbeddings(batch, model);
+    vectors.push(...batchVectors);
+  }
+  return vectors;
 }

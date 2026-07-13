@@ -36,6 +36,7 @@ import {
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
+import { getJobDescriptionDisplayTitle } from '@/lib/jd/display';
 import type { JobDescriptionRegenerateRunDto } from '@/lib/jd/regenerate-run-repo';
 import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
 import { JD_STATUSES } from '@/types';
@@ -649,11 +650,11 @@ export function JDListView() {
               >
                 <div className="min-w-0">
                   <div className="text-foreground min-w-0 truncate text-sm font-medium">
-                    {item.position}
+                    {getJobDescriptionDisplayTitle(item)}
                   </div>
                   <div className="text-muted-foreground mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                     <span>{item.department}</span>
-                    <span className="min-w-0 truncate">{item.content.title}</span>
+                    <span className="min-w-0 truncate">{item.position}</span>
                   </div>
                 </div>
                 <StatusChip status={item.status} />

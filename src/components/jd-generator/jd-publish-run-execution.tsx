@@ -6,15 +6,18 @@ import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
   Clock3,
   FileText,
+  GitBranch,
   Loader2,
   RefreshCw,
   XCircle,
 } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { fetchJobDescriptionPublishRunWithEvents } from '@/lib/jd/client';
+import { formatPublishAutomationError } from '@/lib/jd-publishing/format-error';
 import {
   currentPathWithSearch,
   getReturnTarget,
@@ -98,6 +101,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function renderDetailValue(key: string, value: unknown) {
   if (value === null || value === undefined || value === '') return null;
+  if (key === 'error' && typeof value === 'string') {
+    const formatted = formatPublishAutomationError(value);
+    return (
+      <div className="space-y-1">
+        <p className="text-foreground text-sm">{formatted.summary}</p>
+        {formatted.hint ? (
+          <p className="text-muted-foreground text-xs leading-5">{formatted.hint}</p>
+        ) : null}
+      </div>
+    );
+  }
+  if (key === 'technical' && typeof value === 'string') {
+    return (
+      <details className="mt-1">
+        <summary className="text-muted-foreground cursor-pointer text-xs">技术详情</summary>
+        <pre className="bg-muted/40 mt-2 max-h-40 overflow-auto rounded-md px-2 py-1 font-mono text-[11px] whitespace-pre-wrap">
+          {formatPublishAutomationError(value).technical ?? value}
+        </pre>
+      </details>
+    );
+  }
   if (Array.isArray(value)) {
     return value.length > 0 ? value.join('、') : null;
   }
@@ -117,19 +141,52 @@ function renderDetailValue(key: string, value: unknown) {
 function EventDetail({ detail }: { detail: Record<string, unknown> | null }) {
   if (!detail || Object.keys(detail).length === 0) return null;
 
+  const entries = Object.entries(detail).filter(([key]) => key !== 'technical');
+  const technical = typeof detail.technical === 'string' ? detail.technical : null;
+
   return (
-    <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
-      {Object.entries(detail).map(([key, value]) => {
-        const rendered = renderDetailValue(key, value);
-        if (!rendered) return null;
-        return (
-          <div key={key} className="min-w-0 rounded-md border px-2 py-1.5">
-            <dt className="text-muted-foreground mb-1 font-mono">{key}</dt>
-            <dd className="text-foreground min-w-0 break-words">{rendered}</dd>
-          </div>
-        );
-      })}
-    </dl>
+    <div className="mt-2 space-y-2">
+      <dl className="grid gap-2 text-xs sm:grid-cols-2">
+        {entries.map(([key, value]) => {
+          const rendered = renderDetailValue(key, value);
+          if (!rendered) return null;
+          const label = key === 'error' ? '原因' : key;
+          return (
+            <div
+              key={key}
+              className={`min-w-0 rounded-md border px-2 py-1.5 ${key === 'error' ? 'sm:col-span-2' : ''}`}
+            >
+              <dt className="text-muted-foreground mb-1">{label}</dt>
+              <dd className="text-foreground min-w-0 break-words">{rendered}</dd>
+            </div>
+          );
+        })}
+      </dl>
+      {technical ? renderDetailValue('technical', technical) : null}
+    </div>
+  );
+}
+
+function FailedPublishBanner({ errorMessage }: { errorMessage: string | null }) {
+  const formatted = formatPublishAutomationError(errorMessage);
+  return (
+    <div className="border-destructive/30 bg-destructive/10 text-destructive flex items-start gap-2 rounded-md border px-4 py-3 text-sm">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <div className="min-w-0 space-y-1">
+        <p className="font-medium">{formatted.summary}</p>
+        {formatted.hint ? (
+          <p className="text-destructive/90 text-xs leading-5">{formatted.hint}</p>
+        ) : null}
+        {formatted.technical ? (
+          <details className="pt-1">
+            <summary className="cursor-pointer text-xs opacity-80">技术详情</summary>
+            <pre className="bg-background/60 text-destructive mt-2 max-h-40 overflow-auto rounded-md border px-2 py-1 font-mono text-[11px] whitespace-pre-wrap">
+              {formatted.technical}
+            </pre>
+          </details>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -284,12 +341,7 @@ export function JDPublishRunExecution({ runId }: { runId: string }) {
         </div>
       ) : null}
 
-      {run.status === 'failed' ? (
-        <div className="border-destructive/30 bg-destructive/10 text-destructive flex items-start gap-2 rounded-md border px-4 py-3 text-sm">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          <span>{run.errorMessage || '发布失败'}</span>
-        </div>
-      ) : null}
+      {run.status === 'failed' ? <FailedPublishBanner errorMessage={run.errorMessage} /> : null}
 
       {error ? (
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
@@ -320,20 +372,58 @@ export function JDPublishRunExecution({ runId }: { runId: string }) {
         </div>
       </section>
 
-      {/* Workflow / Skill info section */}
-      {run.skillId ? (
-        <section className="border-border rounded-lg border p-4">
-          <details>
-            <summary className="cursor-pointer text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">
-              Workflow: {run.skillId}
-            </summary>
-            <div className="text-muted-foreground mt-2 text-xs">
-              Skill ID: {run.skillId}
-              {run.publishTaskId ? <> · Task ID: {run.publishTaskId}</> : null}
+      <section className="border-border rounded-lg border p-4">
+        {run.skillId ? (
+          <Link
+            href={`/workflows/${run.skillId}`}
+            className="group flex items-center justify-between gap-3"
+            aria-label="查看 Workflow 详情"
+          >
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="bg-primary/10 text-primary mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+                <GitBranch className="h-4 w-4" aria-hidden />
+              </span>
+              <div className="min-w-0">
+                <div className="text-foreground text-sm font-medium group-hover:underline">
+                  查看 Workflow 详情
+                </div>
+                <div className="text-muted-foreground mt-1 truncate text-xs">
+                  Skill ID: {run.skillId}
+                  {run.publishTaskId ? <> · Task ID: {run.publishTaskId}</> : null}
+                </div>
+              </div>
             </div>
-          </details>
-        </section>
-      ) : null}
+            <ArrowRight
+              className="text-muted-foreground group-hover:text-primary h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5"
+              aria-hidden
+            />
+          </Link>
+        ) : (
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="bg-muted text-muted-foreground mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+                <GitBranch className="h-4 w-4" aria-hidden />
+              </span>
+              <div className="min-w-0">
+                <div className="text-foreground text-sm font-medium">Workflow 尚未关联</div>
+                <div className="text-muted-foreground mt-1 text-xs leading-5">
+                  本次发布在关联技能前失败。可前往 Workflow 库查看已有发布流程。
+                </div>
+              </div>
+            </div>
+            <Button
+              as={Link}
+              className="shrink-0 gap-2"
+              href="/workflows"
+              size="sm"
+              variant="bordered"
+            >
+              Workflow 库
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          </div>
+        )}
+      </section>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(300px,0.42fr)_minmax(0,0.58fr)]">
         <section className="border-border rounded-lg border p-4">
