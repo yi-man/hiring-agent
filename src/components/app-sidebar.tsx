@@ -37,12 +37,11 @@ const appMenuSections: AppMenuSection[] = [
         href: '/',
         Icon: LayoutDashboard,
       },
-      {
-        label: '知识库',
-        description: '文档与上下文',
-        href: '/knowledge',
-        Icon: FileCode,
-      },
+    ],
+  },
+  {
+    label: '招聘流程',
+    items: [
       {
         label: 'JD 工作台',
         description: '生成与评估',
@@ -56,40 +55,34 @@ const appMenuSections: AppMenuSection[] = [
         Icon: Users,
       },
       {
-        label: '简历列表',
-        description: '简历与 JD 挂载',
-        href: '/resumes',
-        Icon: FileText,
-      },
-      {
         label: '面试记录',
         description: '反馈与结论',
         href: '/interviews',
         Icon: ClipboardList,
       },
       {
-        label: 'Workflow 库',
+        label: 'Workflow 列表',
         description: '已发布流程',
         href: '/workflows',
         Icon: GitBranch,
       },
       {
-        label: 'LLM 可观测',
-        description: '调用与趋势',
-        href: '/llm-observability',
-        Icon: Eye,
-      },
-      {
-        label: '公司设置',
-        description: '公司与地点',
-        href: '/settings/company',
-        Icon: Building2,
+        label: '简历列表',
+        description: '简历与 JD 挂载',
+        href: '/resumes',
+        Icon: FileText,
       },
     ],
   },
   {
-    label: '其他',
+    label: '知识与自动化',
     items: [
+      {
+        label: '知识库',
+        description: '文档与上下文',
+        href: '/knowledge',
+        Icon: FileCode,
+      },
       {
         label: '智能对话',
         description: '对话与 RAG',
@@ -101,6 +94,23 @@ const appMenuSections: AppMenuSection[] = [
         description: '流程沉淀',
         href: '/workflow-learning',
         Icon: BrainCircuit,
+      },
+    ],
+  },
+  {
+    label: '系统',
+    items: [
+      {
+        label: 'LLM 可观测',
+        description: '调用与趋势',
+        href: '/llm-observability',
+        Icon: Eye,
+      },
+      {
+        label: '公司设置',
+        description: '公司与地点',
+        href: '/settings/company',
+        Icon: Building2,
       },
     ],
   },

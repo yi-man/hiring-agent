@@ -30,7 +30,7 @@ describe('AppSidebar', () => {
       'href',
       '/workflow-learning',
     );
-    expect(screen.getByRole('link', { name: /Workflow 库/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Workflow 列表/i })).toHaveAttribute(
       'href',
       '/workflows',
     );
@@ -44,11 +44,29 @@ describe('AppSidebar', () => {
     );
 
     const menuText = menu.textContent ?? '';
-    const otherSectionIndex = menuText.indexOf('其他');
-    expect(otherSectionIndex).toBeGreaterThan(-1);
-    expect(menuText.indexOf('Workflow 库')).toBeLessThan(otherSectionIndex);
-    expect(menuText.indexOf('智能对话')).toBeGreaterThan(otherSectionIndex);
-    expect(menuText.indexOf('Workflow 学习')).toBeGreaterThan(otherSectionIndex);
+
+    const recruitingSectionIndex = menuText.indexOf('招聘流程');
+    const automationSectionIndex = menuText.indexOf('知识与自动化');
+    const systemSectionIndex = menuText.indexOf('系统');
+    expect(recruitingSectionIndex).toBeGreaterThan(-1);
+    expect(automationSectionIndex).toBeGreaterThan(recruitingSectionIndex);
+    expect(systemSectionIndex).toBeGreaterThan(automationSectionIndex);
+
+    expect(menuText.indexOf('工作台')).toBeLessThan(recruitingSectionIndex);
+
+    expect(menuText.indexOf('JD 工作台')).toBeGreaterThan(recruitingSectionIndex);
+    expect(menuText.indexOf('候选人列表')).toBeLessThan(menuText.indexOf('面试记录'));
+    expect(menuText.indexOf('面试记录')).toBeLessThan(menuText.indexOf('Workflow 列表'));
+    expect(menuText.indexOf('Workflow 列表')).toBeGreaterThan(recruitingSectionIndex);
+    expect(menuText.indexOf('Workflow 列表')).toBeLessThan(automationSectionIndex);
+    expect(menuText.indexOf('简历列表')).toBeGreaterThan(menuText.indexOf('Workflow 列表'));
+    expect(menuText.indexOf('简历列表')).toBeLessThan(automationSectionIndex);
+
+    expect(menuText.indexOf('智能对话')).toBeGreaterThan(automationSectionIndex);
+    expect(menuText.indexOf('Workflow 学习')).toBeGreaterThan(automationSectionIndex);
+    expect(menuText.indexOf('Workflow 学习')).toBeLessThan(systemSectionIndex);
+
+    expect(menuText.indexOf('LLM 可观测')).toBeGreaterThan(systemSectionIndex);
   });
 
   it('highlights the active route branch', () => {
