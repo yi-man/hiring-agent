@@ -2213,6 +2213,13 @@ export async function executeSingleCandidateAction(params: {
     };
   } catch (error) {
     const errorMessage = getErrorMessage(error);
+    await dependencies.repo
+      .updateRun({
+        userId: params.userId,
+        runId: params.runId,
+        currentWorkflowStep: null,
+      })
+      .catch(() => undefined);
     await markExecutionFailed({
       dependencies,
       userId: params.userId,

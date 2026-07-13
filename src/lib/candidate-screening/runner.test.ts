@@ -2613,6 +2613,40 @@ describe('candidate screening runner', () => {
     expect(adapter.chatCandidate).not.toHaveBeenCalled();
   });
 
+  it('clears the active workflow step when a single candidate action throws', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      loadExact: jest.fn().mockResolvedValue(makeWorkflowSkill({ id: 'screen-v1' })),
+      chatCandidate: jest.fn().mockRejectedValue(new Error('browser crashed')),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const detail = makeDetail();
+    dependencies.repo.getRun = jest
+      .fn()
+      .mockResolvedValue(makeRun({ skillId: 'screen-v1', searchPlan, evaluationSchema }));
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).resolves.toMatchObject({ status: 'failed', errorMessage: 'browser crashed' });
+
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        runId: 'run-1',
+        currentWorkflowStep: null,
+      }),
+    );
+  });
+
   it('executes planned actions only through executeScreeningRunActions and updates contacted state after successful chat action', async () => {
     const adapter = makeAdapter({
       chatCandidate: jest.fn().mockResolvedValue({ success: true }),

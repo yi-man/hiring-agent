@@ -634,6 +634,20 @@ export function createCandidateScreeningWorkflowSession(
     candidateName?: string;
     invoke: (options: CandidateBrowserActionOptions) => Promise<T>;
   }): Promise<T> {
+    try {
+      return await runActionWithRetry(params);
+    } catch (error) {
+      await clearCurrentWorkflowStep().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async function runActionWithRetry<T>(params: {
+    action: Exclude<ScreeningWorkflowAction, 'search_candidates'>;
+    candidateId?: string;
+    candidateName?: string;
+    invoke: (options: CandidateBrowserActionOptions) => Promise<T>;
+  }): Promise<T> {
     let retry = false;
 
     while (true) {

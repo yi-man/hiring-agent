@@ -915,6 +915,28 @@ describe('CandidateScreeningWorkflowSession', () => {
     );
   });
 
+  it('clears the active workflow step when a candidate action throws', async () => {
+    const skill = makeSkill();
+    const dependencies = makeDependencies({ getActiveSkill: jest.fn().mockResolvedValue(skill) });
+    const failure = new Error('browser crashed while sending greeting');
+    dependencies.adapter.chatCandidate.mockRejectedValueOnce(failure);
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+    const candidate = { candidateId: 'candidate-1', displayName: 'Ada Lovelace' };
+    const actionPlan: CandidateActionPlan = {
+      action: 'chat',
+      priority: 'high',
+      message: 'Hello Ada',
+      reason: 'Strong match',
+    };
+
+    await session.loadOrExplore({ searchPlan, stage: 'executing_actions' });
+
+    await expect(session.chatCandidate(candidate, actionPlan)).rejects.toBe(failure);
+    expect(dependencies.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ skillId: 'screen-v1', currentWorkflowStep: null }),
+    );
+  });
+
   it('fails clearly without retrying or replacing the session skill when repair run persistence fails', async () => {
     const skill = makeSkill();
     const dependencies = makeDependencies({
