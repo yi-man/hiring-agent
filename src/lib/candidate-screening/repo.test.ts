@@ -259,6 +259,8 @@ describe('candidate screening repository', () => {
       mode: 'dry_run',
       status: 'pending',
       currentStage: 'planning',
+      skillId: null,
+      currentWorkflowStep: null,
       searchPlan: { keywords: ['React'] },
       evaluationSchema: { skills: ['React'] },
       stats: { fetched: 0 },
@@ -304,7 +306,57 @@ describe('candidate screening repository', () => {
         currentStage: 'planning',
       }),
     });
-    expect(result.createdAt).toBe(createdAt.toISOString());
+    expect(result).toEqual(
+      expect.objectContaining({
+        skillId: null,
+        currentWorkflowStep: null,
+        createdAt: createdAt.toISOString(),
+      }),
+    );
+  });
+
+  it('persists workflow identity and current browser step on a screening run', async () => {
+    prismaMock.candidateScreeningRun.create.mockResolvedValueOnce({
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'pending',
+      currentStage: 'searching_live',
+      skillId: 'screen-candidates-v1',
+      currentWorkflowStep: 'search_candidates',
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt,
+      updatedAt,
+    });
+
+    const run = await createCandidateScreeningRun({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      skillId: 'screen-candidates-v1',
+      currentWorkflowStep: 'search_candidates',
+    });
+
+    expect(prismaMock.candidateScreeningRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        skillId: 'screen-candidates-v1',
+        currentWorkflowStep: 'search_candidates',
+      }),
+    });
+    expect(run).toEqual(
+      expect.objectContaining({
+        skillId: 'screen-candidates-v1',
+        currentWorkflowStep: 'search_candidates',
+      }),
+    );
   });
 
   it('creates and lists run events scoped to user and run', async () => {

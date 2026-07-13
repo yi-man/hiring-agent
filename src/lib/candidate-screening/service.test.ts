@@ -91,6 +91,8 @@ function makeRun(overrides: Partial<CandidateScreeningRunDto> = {}): CandidateSc
     mode: 'dry_run',
     status: 'pending',
     currentStage: null,
+    skillId: null,
+    currentWorkflowStep: null,
     searchPlan: null,
     evaluationSchema: null,
     stats: emptyStats(),

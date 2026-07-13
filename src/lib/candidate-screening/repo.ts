@@ -37,6 +37,8 @@ type CandidateScreeningRunRecord = {
   mode: string;
   status: string;
   currentStage: string | null;
+  skillId: string | null;
+  currentWorkflowStep: string | null;
   searchPlan: unknown | null;
   evaluationSchema: unknown | null;
   stats: unknown | null;
@@ -193,6 +195,8 @@ export type CandidateScreeningRunDto = {
   mode: CandidateScreeningMode;
   status: CandidateScreeningRunStatus;
   currentStage: CandidateScreeningRunStage | null;
+  skillId: string | null;
+  currentWorkflowStep: string | null;
   searchPlan: SearchPlan | null;
   evaluationSchema: EvaluationSchema | null;
   stats: ScreeningRunStats | null;
@@ -396,6 +400,8 @@ export type CreateRunParams = {
   mode: CandidateScreeningMode;
   status?: CandidateScreeningRunStatus;
   currentStage?: CandidateScreeningRunStage | null;
+  skillId?: string | null;
+  currentWorkflowStep?: string | null;
   searchPlan?: SearchPlan | null;
   evaluationSchema?: EvaluationSchema | null;
   stats?: ScreeningRunStats | null;
@@ -410,6 +416,8 @@ export type UpdateRunParams = {
   jobDescriptionId?: string;
   status?: CandidateScreeningRunStatus;
   currentStage?: CandidateScreeningRunStage | null;
+  skillId?: string | null;
+  currentWorkflowStep?: string | null;
   searchPlan?: SearchPlan | null;
   evaluationSchema?: EvaluationSchema | null;
   stats?: ScreeningRunStats | null;
@@ -621,6 +629,8 @@ function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
     mode: row.mode as CandidateScreeningMode,
     status: row.status as CandidateScreeningRunStatus,
     currentStage: row.currentStage as CandidateScreeningRunStage | null,
+    skillId: row.skillId,
+    currentWorkflowStep: row.currentWorkflowStep,
     searchPlan: row.searchPlan ? (row.searchPlan as SearchPlan) : null,
     evaluationSchema: row.evaluationSchema ? (row.evaluationSchema as EvaluationSchema) : null,
     stats: row.stats ? (row.stats as ScreeningRunStats) : null,
@@ -886,25 +896,31 @@ function isInterviewingCandidate(row: CandidateScreeningResultDto): boolean {
 export async function createCandidateScreeningRun(
   params: CreateRunParams,
 ): Promise<CandidateScreeningRunDto> {
+  const data: Prisma.CandidateScreeningRunUncheckedCreateInput = {
+    userId: params.userId,
+    jobDescriptionId: params.jobDescriptionId,
+    platform: params.platform,
+    mode: params.mode,
+    status: params.status ?? 'pending',
+    currentStage: params.currentStage ?? null,
+    searchPlan:
+      params.searchPlan === undefined ? Prisma.JsonNull : toNullableJson(params.searchPlan),
+    evaluationSchema:
+      params.evaluationSchema === undefined
+        ? Prisma.JsonNull
+        : toNullableJson(params.evaluationSchema),
+    stats: params.stats === undefined ? Prisma.JsonNull : toNullableJson(params.stats),
+    errorMessage: params.errorMessage ?? null,
+    startedAt: params.startedAt ?? null,
+    finishedAt: params.finishedAt ?? null,
+  };
+  if (params.skillId !== undefined) data.skillId = params.skillId;
+  if (params.currentWorkflowStep !== undefined) {
+    data.currentWorkflowStep = params.currentWorkflowStep;
+  }
+
   const row = await prisma.candidateScreeningRun.create({
-    data: {
-      userId: params.userId,
-      jobDescriptionId: params.jobDescriptionId,
-      platform: params.platform,
-      mode: params.mode,
-      status: params.status ?? 'pending',
-      currentStage: params.currentStage ?? null,
-      searchPlan:
-        params.searchPlan === undefined ? Prisma.JsonNull : toNullableJson(params.searchPlan),
-      evaluationSchema:
-        params.evaluationSchema === undefined
-          ? Prisma.JsonNull
-          : toNullableJson(params.evaluationSchema),
-      stats: params.stats === undefined ? Prisma.JsonNull : toNullableJson(params.stats),
-      errorMessage: params.errorMessage ?? null,
-      startedAt: params.startedAt ?? null,
-      finishedAt: params.finishedAt ?? null,
-    },
+    data,
   });
   return mapRun(row);
 }
@@ -938,6 +954,10 @@ export async function updateCandidateScreeningRun(
   const data: Prisma.CandidateScreeningRunUpdateManyMutationInput = {};
   if (params.status !== undefined) data.status = params.status;
   if (params.currentStage !== undefined) data.currentStage = params.currentStage;
+  if (params.skillId !== undefined) data.skillId = params.skillId;
+  if (params.currentWorkflowStep !== undefined) {
+    data.currentWorkflowStep = params.currentWorkflowStep;
+  }
   if (params.searchPlan !== undefined) data.searchPlan = toNullableJson(params.searchPlan);
   if (params.evaluationSchema !== undefined) {
     data.evaluationSchema = toNullableJson(params.evaluationSchema);
