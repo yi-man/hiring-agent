@@ -29,9 +29,9 @@ import {
   fetchJobDescription,
   fetchJobDescriptionPublishTasks,
   fetchJobDescriptions,
-  publishJobDescriptionResource,
   regenerateJobDescription,
   startJobDescriptionCreateRun,
+  startJobDescriptionPublishRun,
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
@@ -1040,7 +1040,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     }
     setIsPublishing(true);
     setError('');
-    setPublishTrace(null);
     try {
       const saved = await updateJobDescriptionResource(jobDescription.id, {
         status: 'ready_to_publish',
@@ -1052,45 +1051,22 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setForm(jdToForm(saved.content));
       setStatus(saved.status);
 
-      const result = await publishJobDescriptionResource(saved.id, {
+      const run = await startJobDescriptionPublishRun(saved.id, {
         platform: 'boss-like',
         company: trimmedCompany,
         salary: trimmedSalary,
         location: publishLocation,
         keywords: parseKeywordInput(publishKeywords),
       });
-      setJobDescription(result.jobDescription);
-      setForm(jdToForm(result.jobDescription.content));
-      setStatus(result.jobDescription.status);
-      setPublishTrace(result.task.trace);
-      setPublishTasks((current) => [
-        {
-          id: result.task.taskId,
-          userId: result.jobDescription.userId,
-          jobDescriptionId: result.jobDescription.id,
-          skillId: result.task.skillId,
-          platform: 'boss-like',
-          input: {},
-          currentStep: null,
-          status: result.task.status,
-          errorMessage: result.task.trace.steps.at(-1)?.result.error ?? null,
-          trace: result.task.trace,
-          createdAt: result.task.trace.createdAt,
-          updatedAt: result.task.trace.createdAt,
-        },
-        ...current,
-      ]);
+
+      router.push(
+        withReturnTarget(`/jd-generator/publish-runs/${run.id}`, {
+          href: `/jd-generator/${saved.id}`,
+          label: '返回详情',
+        }),
+      );
     } catch (e) {
-      const publishError = e as Error &
-        Partial<{ jobDescription: JobDescriptionDto; task: PublishTaskResult }>;
-      if (publishError.jobDescription) {
-        setJobDescription(publishError.jobDescription);
-        setStatus(publishError.jobDescription.status);
-      }
-      if (publishError.task) {
-        setPublishTrace(publishError.task.trace);
-      }
-      setError(e instanceof Error ? e.message : '发布 JD 失败');
+      setError(e instanceof Error ? e.message : '创建发布任务失败');
     } finally {
       setIsPublishing(false);
     }
