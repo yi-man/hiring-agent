@@ -27,7 +27,6 @@ const fetchJobDescriptionMock = jest.fn();
 const fetchJobDescriptionPublishTasksMock = jest.fn();
 const fetchJobDescriptionCreateRunsMock = jest.fn();
 const updateJobDescriptionResourceMock = jest.fn();
-const regenerateJobDescriptionMock = jest.fn();
 const publishJobDescriptionResourceMock = jest.fn();
 const createCandidateScreeningRunMock = jest.fn();
 const fetchCandidateScreeningRunMock = jest.fn();
@@ -59,7 +58,7 @@ jest.mock('@/lib/jd/client', () => ({
     fetchJobDescriptionPublishTasksMock(...args),
   fetchJobDescriptions: (...args: unknown[]) => fetchJobDescriptionsMock(...args),
   publishJobDescriptionResource: (...args: unknown[]) => publishJobDescriptionResourceMock(...args),
-  regenerateJobDescription: (...args: unknown[]) => regenerateJobDescriptionMock(...args),
+  startJobDescriptionRegenerateRun: jest.fn(),
   updateJobDescriptionResource: (...args: unknown[]) => updateJobDescriptionResourceMock(...args),
 }));
 
@@ -611,7 +610,6 @@ describe('candidate screening UI', () => {
     fetchJobDescriptionCreateRunsMock.mockReset();
     fetchJobDescriptionPublishTasksMock.mockReset();
     updateJobDescriptionResourceMock.mockReset();
-    regenerateJobDescriptionMock.mockReset();
     publishJobDescriptionResourceMock.mockReset();
     createCandidateScreeningRunMock.mockReset();
     fetchCandidateScreeningRunMock.mockReset();

@@ -3,7 +3,6 @@
  */
 import { GET as listJds, POST as createJd } from '@/app/api/jd/route';
 import { GET as getJd, PATCH as patchJd } from '@/app/api/jd/[id]/route';
-import { POST as regenerateJd } from '@/app/api/jd/[id]/regenerate/route';
 import { runJDAgent } from '@/lib/jd-agent/service';
 import type { JD } from '@/types';
 
@@ -339,103 +338,6 @@ describe('JD resource routes', () => {
         userId: 'u1',
         id: 'jd-1',
         content: { ...sampleJd, summary: '并发发布后不应允许修改' },
-      }),
-    );
-  });
-
-  it('regenerates an existing JD using company context and saves the result', async () => {
-    const editedJd = { ...sampleJd, summary: '页面当前编辑后的 JD' };
-    getJobDescriptionByIdMock.mockResolvedValueOnce({
-      id: 'jd-1',
-      content: sampleJd,
-      tone: 'tech',
-    });
-    updateMutableJobDescriptionMock.mockResolvedValueOnce({ id: 'jd-1', content: sampleJd });
-    const request = new Request('http://localhost/api/jd/jd-1/regenerate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ currentJd: editedJd, extraInstruction: '强调 AI 招聘经验' }),
-    });
-
-    const response = await regenerateJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
-
-    expect(response.status).toBe(200);
-    expect(runJDAgentMock).toHaveBeenCalledWith(
-      {
-        action: 'continue_generate',
-        currentJd: editedJd,
-        extraInstruction: '强调 AI 招聘经验',
-        tone: 'tech',
-      },
-      { userId: 'u1' },
-    );
-    expect(updateMutableJobDescriptionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'u1',
-        id: 'jd-1',
-        content: sampleJd,
-        evaluation: sampleAgentResponse.evaluation,
-        generationMeta: sampleAgentResponse.meta,
-      }),
-    );
-  });
-
-  it('rejects regeneration for published JDs', async () => {
-    getJobDescriptionByIdMock.mockResolvedValueOnce({
-      id: 'jd-1',
-      status: 'published',
-      content: sampleJd,
-      tone: 'tech',
-    });
-    const request = new Request('http://localhost/api/jd/jd-1/regenerate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ extraInstruction: '改成更热情' }),
-    });
-
-    const response = await regenerateJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
-    const body = await response.json();
-
-    expect(response.status).toBe(409);
-    expect(body.error).toBe('published job descriptions cannot be modified');
-    expect(runJDAgentMock).not.toHaveBeenCalled();
-    expect(updateJobDescriptionMock).not.toHaveBeenCalled();
-    expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
-  });
-
-  it('rejects regeneration when a JD is published before the atomic write', async () => {
-    getJobDescriptionByIdMock
-      .mockResolvedValueOnce({
-        id: 'jd-1',
-        status: 'created',
-        content: sampleJd,
-        tone: 'tech',
-      })
-      .mockResolvedValueOnce({
-        id: 'jd-1',
-        status: 'published',
-        content: sampleJd,
-        tone: 'tech',
-      });
-    updateMutableJobDescriptionMock.mockResolvedValueOnce(null);
-    const request = new Request('http://localhost/api/jd/jd-1/regenerate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ extraInstruction: '并发发布后不应覆盖内容' }),
-    });
-
-    const response = await regenerateJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
-    const body = await response.json();
-
-    expect(response.status).toBe(409);
-    expect(body.error).toBe('published job descriptions cannot be modified');
-    expect(runJDAgentMock).toHaveBeenCalled();
-    expect(updateMutableJobDescriptionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'u1',
-        id: 'jd-1',
-        status: 'created',
-        content: sampleJd,
       }),
     );
   });
