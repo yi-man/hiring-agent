@@ -18,7 +18,6 @@ const createConversationDocumentIndexJobMock = jest.fn();
 const markConversationDocumentIndexJobRunningMock = jest.fn();
 const markConversationDocumentIndexJobSuccessMock = jest.fn();
 const markConversationDocumentIndexJobFailedMock = jest.fn();
-const deleteDocumentPointsMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -66,10 +65,6 @@ jest.mock('@/lib/rag/ingest', () => ({
   ingestConversationDocument: (...args: unknown[]) => ingestConversationDocumentMock(...args),
 }));
 
-jest.mock('@/lib/rag/qdrant', () => ({
-  deleteDocumentPoints: (...args: unknown[]) => deleteDocumentPointsMock(...args),
-}));
-
 describe('conversation documents routes', () => {
   beforeEach(() => {
     requireAuthMock.mockReset();
@@ -83,7 +78,6 @@ describe('conversation documents routes', () => {
     markConversationDocumentIndexJobRunningMock.mockReset();
     markConversationDocumentIndexJobSuccessMock.mockReset();
     markConversationDocumentIndexJobFailedMock.mockReset();
-    deleteDocumentPointsMock.mockReset();
     ingestConversationDocumentMock.mockResolvedValue(undefined);
     createConversationDocumentIndexJobMock.mockResolvedValue({ id: 'job-1' });
     markConversationDocumentIndexJobRunningMock.mockResolvedValue({
@@ -95,7 +89,6 @@ describe('conversation documents routes', () => {
       status: 'success',
     });
     markConversationDocumentIndexJobFailedMock.mockResolvedValue({ id: 'job-1', status: 'failed' });
-    deleteDocumentPointsMock.mockResolvedValue(undefined);
   });
 
   it('returns 401 when uploading without auth', async () => {
@@ -343,33 +336,6 @@ describe('conversation documents routes', () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.deleted).toBe(true);
-    expect(deleteDocumentPointsMock).toHaveBeenCalledWith({
-      conversationId: 'c1',
-      documentId: 'd1',
-    });
     expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1');
-    const qdrantCallOrder = deleteDocumentPointsMock.mock.invocationCallOrder[0];
-    const dbCallOrder = deleteConversationDocumentMock.mock.invocationCallOrder[0];
-    expect(qdrantCallOrder).toBeLessThan(dbCallOrder);
-  });
-
-  it('still deletes document when vector cleanup fails', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
-    try {
-      requireAuthMock.mockResolvedValueOnce({ user: { id: 'u1' } });
-      conversationFindFirstMock.mockResolvedValueOnce({ id: 'c1' });
-      deleteDocumentPointsMock.mockRejectedValueOnce(new Error('qdrant unavailable'));
-      deleteConversationDocumentMock.mockResolvedValueOnce(true);
-
-      const res = await deleteDocument({} as Request, {
-        params: Promise.resolve({ id: 'c1', documentId: 'd1' }),
-      });
-      const body = await res.json();
-      expect(res.status).toBe(200);
-      expect(body.deleted).toBe(true);
-      expect(deleteConversationDocumentMock).toHaveBeenCalledWith('c1', 'd1');
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 });

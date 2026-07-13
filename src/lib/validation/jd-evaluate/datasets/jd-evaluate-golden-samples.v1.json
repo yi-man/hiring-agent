@@ -1,0 +1,548 @@
+{
+  "version": "jd-evaluate-golden-dataset-v1",
+  "description": "Seeded JD evaluate golden samples for jd-agent.evaluate calibration and low-cost regression.",
+  "samples": [
+    {
+      "id": "high-quality-backend-platform",
+      "anchor": "high_quality",
+      "label": "优质·后端平台",
+      "jd": {
+        "title": "高级后端工程师（交易中台）",
+        "summary": "加入交易中台团队，负责订单核心链路的服务拆分与稳定性治理，目标将峰值吞吐提升到 5 万 QPS，并建设可回放的故障演练体系，直接影响公司主营交易成功率。",
+        "responsibilities": [
+          "设计并落地订单域 Spring Boot 微服务拆分方案",
+          "治理 Redis 缓存一致性与热点 Key",
+          "建设 Prometheus/Grafana 告警与故障复盘流程",
+          "推动 PostgreSQL 分库分表与慢查询治理",
+          "主导核心链路压测与容量规划",
+          "参与 Code Review 并沉淀工程规范"
+        ],
+        "requirements": [
+          "5 年以上 Java 后端经验",
+          "精通 Spring Boot 与微服务治理",
+          "熟悉 Redis、消息队列与 PostgreSQL",
+          "有高并发交易或支付类系统经验",
+          "具备线上故障定位与稳定性 owner 经历",
+          "本科及以上学历，计算机相关专业"
+        ],
+        "bonus": ["有分布式事务或 Saga 实践", "熟悉混沌工程或故障演练"],
+        "highlights": [
+          "核心业务：交易中台直接影响主站下单成功率",
+          "技术挑战：峰值 5 万 QPS、可观测与可回放演练",
+          "成长路径：双月 OKR、技术分享与跨域轮岗"
+        ]
+      },
+      "companyContext": "公司为内容与交易结合的互联网平台，工程文化强调可观测性、故障复盘与 DRI。交易中台服务主站下单链路。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [5, 10],
+          "completeness": [5, 10],
+          "attractiveness": [5, 10],
+          "specificity": [5, 10]
+        },
+        "rewriteRequired": null
+      },
+      "rationale": "技术栈、场景、量化目标与亮点齐全，无明显空话。"
+    },
+    {
+      "id": "high-quality-frontend-player",
+      "anchor": "high_quality",
+      "label": "优质·前端播放器",
+      "jd": {
+        "title": "中高级前端工程师（播放体验）",
+        "summary": "负责音乐客户端 Web 播放器体验，目标将首屏可交互时间压到 1 秒内，并支撑千万级并发弹幕渲染，与算法推荐列表虚拟滚动深度协作。",
+        "responsibilities": [
+          "实现低延迟音频流播放控制（目标延迟 <50ms）",
+          "优化弹幕与评论区高并发渲染性能",
+          "建设播放器性能监控与回归看板",
+          "抽象跨端可复用播放组件",
+          "与后端制定播放质量指标口径",
+          "推动前端工程化与按需加载策略"
+        ],
+        "requirements": [
+          "3 年以上前端经验",
+          "精通 React 18 与 TypeScript",
+          "熟悉 Web Audio 或流媒体播放",
+          "有大型列表虚拟化与性能优化经验",
+          "熟悉 Webpack/Vite 与性能调试工具",
+          "具备线上问题排查能力"
+        ],
+        "bonus": ["有音视频或直播前端经验", "熟悉 WebWorker/WASM"],
+        "highlights": [
+          "直接影响数亿用户听歌体验",
+          "技术挑战：低延迟播放 + 千万级弹幕",
+          "清晰成长：组件库与性能专项晋升通道"
+        ]
+      },
+      "companyContext": "产品为音乐流媒体 App，前端团队负责播放器、社区与推荐列表体验。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [5, 10],
+          "completeness": [5, 10],
+          "attractiveness": [5, 10],
+          "specificity": [5, 10]
+        },
+        "rewriteRequired": null
+      },
+      "rationale": "职责与要求具体，含可量化体验目标；区间覆盖 LLM 轻度方差。"
+    },
+    {
+      "id": "high-quality-data-rag",
+      "anchor": "high_quality",
+      "label": "优质·RAG应用",
+      "jd": {
+        "title": "LLM 应用工程师（招聘助手）",
+        "summary": "负责招聘场景 RAG 与 Agent 能力建设，建设可回归的评估集，将答案可用率从基线提升到 85% 以上，并完成 Prompt 版本管理与线上反馈闭环。",
+        "responsibilities": [
+          "设计知识库切分、检索与重排策略",
+          "建设 100+ 条 golden QA 评估集与回归脚本",
+          "落地 Prompt 版本管理与发布门禁",
+          "优化 Agent 工具调用与失败兜底",
+          "分析线上 badcase 并迭代检索策略",
+          "与产品协作定义答案可用性指标"
+        ],
+        "requirements": [
+          "3 年以上 AI 应用或后端经验",
+          "熟悉 Python 与至少一种 LLM 应用框架（如 LangChain）",
+          "有向量检索或 RAG 生产上线经验",
+          "独立建设过评估集与离线回归脚本",
+          "能独立推进从 0 到 1 的功能上线并定义可用性指标",
+          "本科及以上学历，计算机或人工智能相关专业"
+        ],
+        "bonus": ["熟悉 pgvector 或同类向量库", "有招聘/客服垂直场景经验"],
+        "highlights": [
+          "业务价值：将招聘助手答案可用率提升到 85%+",
+          "技术挑战：检索重排、评估闭环与线上 badcase 治理",
+          "团队：小团队端到端负责 LLM 应用交付"
+        ]
+      },
+      "companyContext": "内部招聘助手使用用户知识库与会话文档做 RAG；向量检索使用 PostgreSQL pgvector。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [5, 10],
+          "completeness": [5, 10],
+          "attractiveness": [5, 10],
+          "specificity": [5, 10]
+        },
+        "rewriteRequired": null
+      },
+      "rationale": "包含评估闭环与可量化目标；区间略放宽以吸收 LLM 方差。"
+    },
+    {
+      "id": "high-quality-product-b2b",
+      "anchor": "high_quality",
+      "label": "优质·B端产品",
+      "jd": {
+        "title": "B 端产品经理（招聘工作台）",
+        "summary": "负责招聘工作台「JD 生成→筛选→改判」主链路产品设计，目标 2 个季度内将 HR 从需求录入到 JD 发布的中位时长从 45 分钟降到 30 分钟（-33%），并以功能采纳率 ≥60%、人工改判率 ≤15% 作为上线门禁。",
+        "responsibilities": [
+          "输出 JD 生成/重新生成完整用户旅程图与关键路径原型（含空态、超时、失败态）",
+          "设计筛选结果可解释卡片字段（维度分、证据摘录、改判原因枚举）",
+          "定义采纳率、改判率、满意度三类指标口径，并与研发对齐埋点事件表",
+          "每双周主持需求评审，维护版本节奏与优先级看板",
+          "撰写含验收标准的 PRD，组织上线后 2 周复盘并沉淀问题清单",
+          "对标 2 款竞品的 JD 工作台能力，输出差异化功能清单"
+        ],
+        "requirements": [
+          "3 年以上 B 端或人效工具产品经验，至少独立上线过 1 个完整模块",
+          "能独立完成用户访谈纪要、流程图与 PRD（含验收标准）",
+          "能用 SQL 或 BI 看板验证漏斗与留存类假设",
+          "推动过研发/设计/业务三方对齐并按版本交付",
+          "熟悉权限、审批流或工作台式复杂状态机产品",
+          "本科及以上学历"
+        ],
+        "bonus": [
+          "有 HR SaaS / ATS / 招聘产品经验",
+          "主导过含 LLM 能力的 B 端功能（需说明评估指标）"
+        ],
+        "highlights": [
+          "业务结果：中位发布时长目标下降 33%，有明确基线与门禁",
+          "数据闭环：采纳率/改判率双周复盘，不靠主观感觉迭代",
+          "成长路径：可承担招聘工作台产品负责人，带 1 名产品协助"
+        ]
+      },
+      "companyContext": "公司自研招聘助手，覆盖 JD 生成、候选人筛选与沟通；产品需与真实 LLM 评估和改判流程协作。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [5, 10],
+          "completeness": [5, 10],
+          "attractiveness": [5, 10],
+          "specificity": [5, 10]
+        },
+        "rewriteRequired": null
+      },
+      "rationale": "补齐量化基线、门禁与验收细节，降低 completeness 被低估的风险。"
+    },
+    {
+      "id": "acceptable-fullstack-crm",
+      "anchor": "acceptable",
+      "label": "合格·全栈CRM",
+      "jd": {
+        "title": "全栈工程师",
+        "summary": "负责 B 端 CRM 模块的前后端交付，使用 TypeScript、React 与 Node.js，保障迭代节奏与接口质量。",
+        "responsibilities": [
+          "开发 CRM 列表与详情页面",
+          "实现相关业务接口",
+          "参与前后端联调",
+          "修复线上缺陷",
+          "完善基础单测"
+        ],
+        "requirements": [
+          "2 年以上全栈或前端经验",
+          "熟悉 React 与 TypeScript",
+          "了解 Node.js 与 PostgreSQL",
+          "能独立完成模块交付",
+          "有良好沟通习惯"
+        ],
+        "bonus": ["有 CRM 经验优先"],
+        "highlights": ["参与核心业务模块", "技术栈统一", "团队氛围友好"]
+      },
+      "companyContext": "公司提供企业协作与 CRM 类 SaaS。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [3, 9],
+          "completeness": [3, 9],
+          "attractiveness": [3, 9],
+          "specificity": [3, 9]
+        },
+        "rewriteRequired": true
+      },
+      "rationale": "大体可用但存在“相关接口/友好”等偏泛表述，通常需要改写强化具体性。"
+    },
+    {
+      "id": "acceptable-devops-sre",
+      "anchor": "acceptable",
+      "label": "合格·运维SRE",
+      "jd": {
+        "title": "SRE 工程师",
+        "summary": "负责云原生基础设施稳定性，参与告警治理与成本优化，保障业务高峰可用。",
+        "responsibilities": [
+          "维护 Kubernetes 集群",
+          "优化告警噪音",
+          "参与故障响应",
+          "推进基础设施自动化",
+          "协助业务做容量评估"
+        ],
+        "requirements": [
+          "3 年以上运维或 SRE 经验",
+          "熟悉 Linux 与容器化",
+          "了解 Prometheus 监控",
+          "有值班与故障处理经验",
+          "能编写基础自动化脚本"
+        ],
+        "bonus": ["熟悉 Terraform"],
+        "highlights": ["接触大规模集群", "参与稳定性专项", "有值班津贴"]
+      },
+      "companyContext": null,
+      "expected": {
+        "scoreRanges": {
+          "clarity": [3, 9],
+          "completeness": [3, 9],
+          "attractiveness": [3, 9],
+          "specificity": [3, 9]
+        },
+        "rewriteRequired": true
+      },
+      "rationale": "方向正确但缺少量化目标与具体技术栈深度，属合格偏需改写。"
+    },
+    {
+      "id": "acceptable-sales-enterprise",
+      "anchor": "acceptable",
+      "label": "合格·企业销售",
+      "jd": {
+        "title": "企业客户经理",
+        "summary": "负责中大型客户开拓与续约，完成季度销售目标，维护客户关系并协同解决方案交付。",
+        "responsibilities": [
+          "开拓目标行业客户",
+          "跟进商机与投标",
+          "协调售前演示",
+          "维护续约与增购",
+          "输出周报与预测"
+        ],
+        "requirements": [
+          "2 年以上 ToB 销售经验",
+          "具备独立签单能力",
+          "良好沟通与抗压能力",
+          "熟悉 CRM 使用",
+          "可接受适度出差"
+        ],
+        "bonus": ["有 SaaS 销售经验"],
+        "highlights": ["高成长行业", "完善培训", "有竞争力的提成"]
+      },
+      "companyContext": "公司面向企业客户销售协作与招聘效率产品。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [3, 9],
+          "completeness": [3, 9],
+          "attractiveness": [3, 9],
+          "specificity": [3, 9]
+        },
+        "rewriteRequired": true
+      },
+      "rationale": "结构完整但亮点偏空（高成长/完善培训），通常 rewrite_required 为 true。"
+    },
+    {
+      "id": "acceptable-design-system",
+      "anchor": "acceptable",
+      "label": "合格·设计系统",
+      "jd": {
+        "title": "UI 设计师（设计系统）",
+        "summary": "参与设计系统组件建设与业务视觉支持，保证多业务线体验一致性。",
+        "responsibilities": [
+          "维护组件库视觉规范",
+          "支持业务需求出图",
+          "参与设计评审",
+          "与前端协作落地组件",
+          "沉淀设计文档"
+        ],
+        "requirements": [
+          "3 年以上 UI 经验",
+          "熟练使用 Figma",
+          "有组件库或设计系统经验",
+          "理解基础前端约束",
+          "良好协作能力"
+        ],
+        "bonus": ["有动效设计经验"],
+        "highlights": ["影响多业务线体验", "有设计系统沉淀", "跨端协作机会"]
+      },
+      "companyContext": "内部有统一设计系统，服务多个产品线。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [3, 9],
+          "completeness": [3, 9],
+          "attractiveness": [3, 9],
+          "specificity": [3, 9]
+        },
+        "rewriteRequired": true
+      },
+      "rationale": "合格水平，缺少可量化影响与更具体交付物，倾向需要改写。"
+    },
+    {
+      "id": "problematic-vague-frontend",
+      "anchor": "problematic",
+      "label": "问题·空话前端",
+      "jd": {
+        "title": "前端工程师",
+        "summary": "负责相关前端工作，参与公司业务发展，具备良好沟通能力与团队合作精神。",
+        "responsibilities": [
+          "负责相关工作",
+          "完成领导交办任务",
+          "参与日常开发",
+          "做好沟通协调",
+          "持续学习提升"
+        ],
+        "requirements": ["熟悉前端相关技术", "良好沟通能力", "有责任心", "能抗压", "本科及以上"],
+        "bonus": ["加分项面议"],
+        "highlights": ["发展空间大", "团队氛围好", "福利完善"]
+      },
+      "companyContext": null,
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 6],
+          "completeness": [1, 6],
+          "attractiveness": [1, 6],
+          "specificity": [1, 5]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["相关"]
+      },
+      "rationale": "典型模板空话，必须 rewrite，issues 应提到相关/空话类问题。"
+    },
+    {
+      "id": "problematic-template-backend",
+      "anchor": "problematic",
+      "label": "问题·模板后端",
+      "jd": {
+        "title": "Java 开发工程师",
+        "summary": "熟悉 Java 优先，工作认真负责，能快速融入团队。",
+        "responsibilities": ["参与项目开发", "编写代码", "修复 bug", "配合测试", "其他相关事宜"],
+        "requirements": ["熟悉 Java", "了解数据库", "良好沟通能力", "能接受加班", "有经验优先"],
+        "bonus": [],
+        "highlights": ["公司平台大", "机会多", "待遇优"]
+      },
+      "companyContext": null,
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 6],
+          "completeness": [1, 6],
+          "attractiveness": [1, 6],
+          "specificity": [1, 5]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["沟通"]
+      },
+      "rationale": "无具体技术场景，依赖“良好沟通能力”等低质量特征。"
+    },
+    {
+      "id": "problematic-empty-highlights",
+      "anchor": "problematic",
+      "label": "问题·无亮点产品",
+      "jd": {
+        "title": "产品经理",
+        "summary": "负责产品相关工作，推动项目落地。",
+        "responsibilities": ["收集需求", "写文档", "跟进开发", "组织会议", "汇报进度"],
+        "requirements": ["有产品经验", "会画原型", "沟通能力强", "逻辑清晰", "责任心强"],
+        "bonus": ["加分项若干"],
+        "highlights": ["发展空间大", "扁平管理", "大牛多"]
+      },
+      "companyContext": null,
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 6],
+          "completeness": [1, 6],
+          "attractiveness": [1, 6],
+          "specificity": [1, 5]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["发展空间"]
+      },
+      "rationale": "亮点全是空话，评估应点名无亮点/空话问题。"
+    },
+    {
+      "id": "problematic-fuzzy-data",
+      "anchor": "problematic",
+      "label": "问题·模糊数据岗",
+      "jd": {
+        "title": "数据分析师",
+        "summary": "做数据相关分析，支持业务决策。",
+        "responsibilities": ["分析数据", "出报表", "支持业务", "优化指标", "完成临时需求"],
+        "requirements": ["熟悉数据分析", "会用常用工具", "良好沟通能力", "细心负责", "学习能力强"],
+        "bonus": [],
+        "highlights": ["接触核心数据", "成长快", "氛围好"]
+      },
+      "companyContext": null,
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 6],
+          "completeness": [1, 6],
+          "attractiveness": [1, 6],
+          "specificity": [1, 5]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["模糊"]
+      },
+      "rationale": "技术与业务描述模糊，期望评估指出模糊/不具体。"
+    },
+    {
+      "id": "fabricated-unicorn-valuation",
+      "anchor": "fabricated_risk",
+      "label": "编造·估值融资",
+      "jd": {
+        "title": "后端工程师",
+        "summary": "加入估值 100 亿美元的独角兽公司核心交易团队，负责全球支付清算系统，享受顶级股权激励与年度两次全员旅游。",
+        "responsibilities": [
+          "建设全球支付清算核心服务",
+          "对接二十国银行通道",
+          "保障 99.999% 可用性",
+          "主导融资技术尽调材料",
+          "管理 30 人后端小组"
+        ],
+        "requirements": [
+          "8 年以上支付清算经验",
+          "主导过独角兽级系统",
+          "熟悉跨境合规",
+          "有融资路演技术支持经验",
+          "英语流利"
+        ],
+        "bonus": ["曾就职 FAANG"],
+        "highlights": ["公司估值 100 亿美元", "年度两次全员旅游", "顶级股权激励包"]
+      },
+      "companyContext": "本知识库仅为招聘助手合成演示资料，不包含任何真实融资、估值、股权或福利承诺。公司定位为内容与技术方向的虚构样例组织。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 10],
+          "completeness": [1, 10],
+          "attractiveness": [1, 10],
+          "specificity": [1, 10]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["估值"]
+      },
+      "rationale": "JD 编造估值/福利，上下文明确否认，评估必须指出未支持事实。"
+    },
+    {
+      "id": "fabricated-fake-headcount",
+      "anchor": "fabricated_risk",
+      "label": "编造·万人规模",
+      "jd": {
+        "title": "前端工程师",
+        "summary": "在拥有 2 万名工程师的超大型互联网公司工作，直接向 CTO 汇报，负责全公司统一前端框架。",
+        "responsibilities": [
+          "制定全公司前端技术战略",
+          "管理跨 50 个业务线的框架升级",
+          "对标硅谷顶级工程标准",
+          "建设万人规模工程效能平台"
+        ],
+        "requirements": ["10 年以上前端架构经验", "管理过千人工程组织", "有顶级大厂框架负责人经历"],
+        "bonus": [],
+        "highlights": ["2 万工程师平台", "向 CTO 汇报", "硅谷对标"]
+      },
+      "companyContext": "样例组织为中小型产品研发团队，文档未描述万人工程规模或向 CTO 汇报结构。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 10],
+          "completeness": [1, 10],
+          "attractiveness": [1, 10],
+          "specificity": [1, 10]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["万"]
+      },
+      "rationale": "组织规模与汇报线无上下文支持，应被标为编造风险。"
+    },
+    {
+      "id": "fabricated-unsupported-welfare",
+      "anchor": "fabricated_risk",
+      "label": "编造·福利承诺",
+      "jd": {
+        "title": "产品运营",
+        "summary": "加入后即可享受包吃包住、每年 30 天带薪年假、以及保证年薪百万的薪酬带宽。",
+        "responsibilities": ["负责用户增长活动", "分析留存数据", "协调渠道投放"],
+        "requirements": ["2 年运营经验", "熟悉数据分析"],
+        "bonus": [],
+        "highlights": ["包吃包住", "30 天年假", "年薪百万带宽"]
+      },
+      "companyContext": "知识库仅说明弹性办公与常规法定假期，未承诺包吃包住、30 天年假或年薪百万。",
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 10],
+          "completeness": [1, 10],
+          "attractiveness": [1, 10],
+          "specificity": [1, 10]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["年假"]
+      },
+      "rationale": "福利承诺超出上下文，评估应指出未支持事实。"
+    },
+    {
+      "id": "fabricated-empty-context-claims",
+      "anchor": "fabricated_risk",
+      "label": "编造·无上下文客户",
+      "jd": {
+        "title": "解决方案架构师",
+        "summary": "服务 Fortune 500 客户名单中的半数企业，落地私有化部署年收入贡献超过 3 亿人民币。",
+        "responsibilities": [
+          "主导世界 500 强客户方案",
+          "签署千万级合同技术附件",
+          "建设全球化交付中心"
+        ],
+        "requirements": ["10 年售前架构经验", "有世界 500 强交付案例"],
+        "bonus": [],
+        "highlights": ["覆盖半数 Fortune 500", "年收入贡献 3 亿"]
+      },
+      "companyContext": null,
+      "expected": {
+        "scoreRanges": {
+          "clarity": [1, 10],
+          "completeness": [1, 10],
+          "attractiveness": [1, 10],
+          "specificity": [1, 10]
+        },
+        "rewriteRequired": true,
+        "issueMustInclude": ["500"]
+      },
+      "rationale": "无公司上下文却宣称 Fortune 500/3 亿收入，应按未支持事实扣分并要求改写。"
+    }
+  ]
+}

@@ -124,7 +124,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return NextResponse.json(
         {
           error:
-            '文档仍在索引中。请稍后点击「刷新文档」，若长时间不变请重新上传或检查嵌入接口与 Qdrant。',
+            '文档仍在索引中。请稍后点击「刷新文档」，若长时间不变请重新上传或检查嵌入接口与数据库。',
           document: latestDocument,
         },
         { status: 409 },

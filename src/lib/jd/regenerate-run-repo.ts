@@ -1,0 +1,302 @@
+import { Prisma } from '@prisma/client';
+import { isJDContent } from '@/lib/jd/api';
+import { prisma } from '@/lib/prisma';
+import type { JD, JDTone } from '@/types';
+
+export type JobDescriptionRegenerateRunStatus = 'pending' | 'running' | 'success' | 'failed';
+export type JobDescriptionRegenerateRunStage =
+  | 'queued'
+  | 'input_preparation'
+  | 'llm_generation'
+  | 'saving'
+  | 'completed';
+export type JobDescriptionRegenerateRunEventLevel = 'info' | 'success' | 'warning' | 'error';
+
+type JobDescriptionRegenerateRunRecord = {
+  id: string;
+  userId: string;
+  jobDescriptionId: string;
+  tone: string;
+  extraInstruction: string;
+  currentJd: unknown;
+  status: string;
+  currentStage: string | null;
+  errorMessage: string | null;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type JobDescriptionRegenerateRunEventRecord = {
+  id: string;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  stage: string;
+  level: string;
+  message: string;
+  detail: unknown | null;
+  createdAt: Date;
+};
+
+export type JobDescriptionRegenerateRunDto = {
+  id: string;
+  userId: string;
+  jobDescriptionId: string;
+  tone: JDTone;
+  extraInstruction: string;
+  currentJd: JD;
+  status: JobDescriptionRegenerateRunStatus;
+  currentStage: JobDescriptionRegenerateRunStage | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type JobDescriptionRegenerateRunEventDto = {
+  id: string;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  stage: JobDescriptionRegenerateRunStage;
+  level: JobDescriptionRegenerateRunEventLevel;
+  message: string;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+};
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
+function toNullableJson(value: unknown | null): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  return value === null ? Prisma.JsonNull : toJson(value);
+}
+
+function normalizeTone(value: string): JDTone {
+  return value === 'startup' || value === 'formal' ? value : 'tech';
+}
+
+function normalizeStatus(value: string): JobDescriptionRegenerateRunStatus {
+  if (value === 'running' || value === 'success' || value === 'failed') return value;
+  return 'pending';
+}
+
+function normalizeStage(value: string | null): JobDescriptionRegenerateRunStage | null {
+  if (
+    value === 'queued' ||
+    value === 'input_preparation' ||
+    value === 'llm_generation' ||
+    value === 'saving' ||
+    value === 'completed'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeEventLevel(value: string): JobDescriptionRegenerateRunEventLevel {
+  if (value === 'success' || value === 'warning' || value === 'error') return value;
+  return 'info';
+}
+
+function normalizeDetail(value: unknown | null): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function clampLimit(limit: number | undefined): number {
+  return Math.max(1, Math.min(100, Math.trunc(limit ?? 20)));
+}
+
+function mapCurrentJd(value: unknown): JD {
+  if (!isJDContent(value)) {
+    throw new Error('corrupt currentJd in JobDescriptionRegenerateRun');
+  }
+  return value;
+}
+
+// Runs are executed in-process as fire-and-forget background work. If the
+// server restarts mid-generation a run can be left stuck in pending/running
+// forever, which would make the execution page poll indefinitely. This timeout
+// is generous enough to never interrupt a slow-but-live multi-step generation.
+export const STALE_REGENERATE_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+
+const STALE_REGENERATE_RUN_ERROR_MESSAGE =
+  'JD 重新生成任务超时未完成（服务可能已重启中断），已自动标记为失败，请重试。';
+
+function mapRun(row: JobDescriptionRegenerateRunRecord): JobDescriptionRegenerateRunDto {
+  return {
+    id: row.id,
+    userId: row.userId,
+    jobDescriptionId: row.jobDescriptionId,
+    tone: normalizeTone(row.tone),
+    extraInstruction: row.extraInstruction,
+    currentJd: mapCurrentJd(row.currentJd),
+    status: normalizeStatus(row.status),
+    currentStage: normalizeStage(row.currentStage),
+    errorMessage: row.errorMessage,
+    startedAt: row.startedAt?.toISOString() ?? null,
+    finishedAt: row.finishedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function mapEvent(
+  row: JobDescriptionRegenerateRunEventRecord,
+): JobDescriptionRegenerateRunEventDto {
+  return {
+    id: row.id,
+    userId: row.userId,
+    runId: row.runId,
+    jobDescriptionId: row.jobDescriptionId,
+    stage: normalizeStage(row.stage) ?? 'queued',
+    level: normalizeEventLevel(row.level),
+    message: row.message,
+    detail: normalizeDetail(row.detail),
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export async function createJobDescriptionRegenerateRun(params: {
+  userId: string;
+  jobDescriptionId: string;
+  tone: JDTone;
+  extraInstruction: string;
+  currentJd: JD;
+  status?: JobDescriptionRegenerateRunStatus;
+  currentStage?: JobDescriptionRegenerateRunStage | null;
+}): Promise<JobDescriptionRegenerateRunDto> {
+  const row = await prisma.jobDescriptionRegenerateRun.create({
+    data: {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      tone: params.tone,
+      extraInstruction: params.extraInstruction,
+      currentJd: toJson(params.currentJd),
+      status: params.status ?? 'pending',
+      currentStage: params.currentStage ?? null,
+    },
+  });
+  return mapRun(row);
+}
+
+export async function failStaleJobDescriptionRegenerateRuns(params: {
+  userId: string;
+  now?: Date;
+  timeoutMs?: number;
+}): Promise<number> {
+  const now = params.now ?? new Date();
+  const timeoutMs = params.timeoutMs ?? STALE_REGENERATE_RUN_TIMEOUT_MS;
+  const threshold = new Date(now.getTime() - timeoutMs);
+  const result = await prisma.jobDescriptionRegenerateRun.updateMany({
+    where: {
+      userId: params.userId,
+      status: { in: ['pending', 'running'] },
+      updatedAt: { lt: threshold },
+    },
+    data: {
+      status: 'failed',
+      errorMessage: STALE_REGENERATE_RUN_ERROR_MESSAGE,
+      finishedAt: now,
+    },
+  });
+  return result.count;
+}
+
+export async function getJobDescriptionRegenerateRun(params: {
+  userId: string;
+  runId: string;
+  jobDescriptionId?: string;
+}): Promise<JobDescriptionRegenerateRunDto | null> {
+  const row = await prisma.jobDescriptionRegenerateRun.findFirst({
+    where: {
+      id: params.runId,
+      userId: params.userId,
+      ...(params.jobDescriptionId ? { jobDescriptionId: params.jobDescriptionId } : {}),
+    },
+  });
+  return row ? mapRun(row) : null;
+}
+
+export async function listJobDescriptionRegenerateRuns(params: {
+  userId: string;
+  jobDescriptionId: string;
+  limit?: number;
+}): Promise<JobDescriptionRegenerateRunDto[]> {
+  const rows = await prisma.jobDescriptionRegenerateRun.findMany({
+    where: {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: clampLimit(params.limit),
+  });
+  return rows.map(mapRun);
+}
+
+export async function updateJobDescriptionRegenerateRun(params: {
+  userId: string;
+  runId: string;
+  status?: JobDescriptionRegenerateRunStatus;
+  currentStage?: JobDescriptionRegenerateRunStage | null;
+  errorMessage?: string | null;
+  startedAt?: Date | null;
+  finishedAt?: Date | null;
+}): Promise<JobDescriptionRegenerateRunDto | null> {
+  const data: Prisma.JobDescriptionRegenerateRunUncheckedUpdateManyInput = {};
+  if (params.status !== undefined) data.status = params.status;
+  if (params.currentStage !== undefined) data.currentStage = params.currentStage;
+  if (params.errorMessage !== undefined) data.errorMessage = params.errorMessage;
+  if (params.startedAt !== undefined) data.startedAt = params.startedAt;
+  if (params.finishedAt !== undefined) data.finishedAt = params.finishedAt;
+
+  const result = await prisma.jobDescriptionRegenerateRun.updateMany({
+    where: { id: params.runId, userId: params.userId },
+    data,
+  });
+  if (result.count === 0) {
+    return null;
+  }
+  return getJobDescriptionRegenerateRun({ userId: params.userId, runId: params.runId });
+}
+
+export async function createJobDescriptionRegenerateRunEvent(params: {
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  stage: JobDescriptionRegenerateRunStage;
+  level?: JobDescriptionRegenerateRunEventLevel;
+  message: string;
+  detail?: Record<string, unknown> | null;
+}): Promise<JobDescriptionRegenerateRunEventDto> {
+  const row = await prisma.jobDescriptionRegenerateRunEvent.create({
+    data: {
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescriptionId,
+      stage: params.stage,
+      level: params.level ?? 'info',
+      message: params.message,
+      detail: params.detail === undefined ? Prisma.JsonNull : toNullableJson(params.detail),
+    },
+  });
+  return mapEvent(row);
+}
+
+export async function listJobDescriptionRegenerateRunEvents(params: {
+  userId: string;
+  runId: string;
+  limit?: number;
+}): Promise<JobDescriptionRegenerateRunEventDto[]> {
+  const rows = await prisma.jobDescriptionRegenerateRunEvent.findMany({
+    where: { userId: params.userId, runId: params.runId },
+    orderBy: { createdAt: 'asc' },
+    take: clampLimit(params.limit),
+  });
+  return rows.map(mapEvent);
+}

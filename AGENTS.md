@@ -1,6 +1,6 @@
 ### Project: Hiring Agent（招聘助手）
 
-Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；集成 AI 对话、职位描述（JD）生成、LLM 可观测性、对话文档与 RAG（Prisma + PostgreSQL、Redis、可选 Qdrant）、本地账号认证与 shadcn/HeroUI 组件。
+Next.js 16 App Router SSR 应用，React 18、TypeScript 5.7、Tailwind CSS 4；集成 AI 对话、职位描述（JD）生成、LLM 可观测性、对话文档与 RAG（Prisma + PostgreSQL/pgvector、Redis）、本地账号认证与 shadcn/HeroUI 组件。
 
 ---
 

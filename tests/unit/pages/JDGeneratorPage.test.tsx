@@ -260,7 +260,83 @@ describe('JD pages', () => {
     );
   });
 
-  it('regenerates editable JD detail from the primary action area', async () => {
+  it('starts a regenerate run and navigates to the execution page', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: sampleJobDescription }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          run: {
+            id: 'regen-run-1',
+            userId: 'u1',
+            jobDescriptionId: 'jd-1',
+            tone: 'tech',
+            extraInstruction: '强调 AI 招聘经验',
+            currentJd: { ...sampleJobDescription.content, summary: '手动调整后的 JD' },
+            status: 'pending',
+            currentStage: 'queued',
+            errorMessage: null,
+            startedAt: null,
+            finishedAt: null,
+            createdAt: '2026-07-13T08:00:00.000Z',
+            updatedAt: '2026-07-13T08:00:00.000Z',
+          },
+        }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    const summary = await screen.findByLabelText('岗位摘要');
+    fireEvent.change(summary, { target: { value: '手动调整后的 JD' } });
+
+    fireEvent.change(screen.getByLabelText('追加要求'), {
+      target: { value: '强调 AI 招聘经验' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '重新生成' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/regenerate-runs',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            currentJd: { ...sampleJobDescription.content, summary: '手动调整后的 JD' },
+            extraInstruction: '强调 AI 招聘经验',
+          }),
+        }),
+      );
+    });
+    expect(pushMock).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\/jd-generator\/jd-1\/regenerate-runs\/regen-run-1\?returnTo=.*&returnLabel=.*/,
+      ),
+    );
+    const pushed = String(pushMock.mock.calls.at(-1)?.[0] ?? '');
+    expect(parsedHref(pushed).pathname).toBe('/jd-generator/jd-1/regenerate-runs/regen-run-1');
+    expectReturnContext(pushed, '/jd-generator/jd-1', '返回 JD');
+  });
+
+  it('shows recent regenerate runs with execution page links on the detail sidebar', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
@@ -277,45 +353,89 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          jobDescription: {
-            ...sampleJobDescription,
-            content: { ...sampleJobDescription.content, summary: '手动调整后的 JD' },
-          },
+          runs: [
+            {
+              id: 'create-run-1',
+              userId: 'u1',
+              jobDescriptionId: 'jd-1',
+              department: '技术部',
+              position: '前端工程师',
+              positionDescription: '负责增长业务体验建设',
+              salaryRange: '30-50K',
+              workLocations: ['上海张江'],
+              tone: 'tech',
+              status: 'success',
+              currentStage: 'completed',
+              errorMessage: null,
+              startedAt: '2026-07-13T07:00:00.000Z',
+              finishedAt: '2026-07-13T07:01:00.000Z',
+              createdAt: '2026-07-13T07:00:00.000Z',
+              updatedAt: '2026-07-13T07:01:00.000Z',
+            },
+          ],
         }),
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ jobDescription: sampleJobDescription }),
+        json: async () => ({
+          runs: [
+            {
+              id: 'regen-run-2',
+              userId: 'u1',
+              jobDescriptionId: 'jd-1',
+              tone: 'tech',
+              extraInstruction: '强调协作',
+              currentJd: sampleJobDescription.content,
+              status: 'running',
+              currentStage: 'llm_generation',
+              errorMessage: null,
+              startedAt: '2026-07-13T09:00:00.000Z',
+              finishedAt: null,
+              createdAt: '2026-07-13T09:00:00.000Z',
+              updatedAt: '2026-07-13T09:00:30.000Z',
+            },
+            {
+              id: 'regen-run-1',
+              userId: 'u1',
+              jobDescriptionId: 'jd-1',
+              tone: 'tech',
+              extraInstruction: '强调 AI',
+              currentJd: sampleJobDescription.content,
+              status: 'success',
+              currentStage: 'completed',
+              errorMessage: null,
+              startedAt: '2026-07-13T08:00:00.000Z',
+              finishedAt: '2026-07-13T08:01:00.000Z',
+              createdAt: '2026-07-13T08:00:00.000Z',
+              updatedAt: '2026-07-13T08:01:00.000Z',
+            },
+          ],
+        }),
       });
 
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
-    const summary = await screen.findByLabelText('岗位摘要');
-    fireEvent.change(summary, { target: { value: '手动调整后的 JD' } });
-
-    fireEvent.change(screen.getByLabelText('追加要求'), {
-      target: { value: '强调 AI 招聘经验' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '重新生成' }));
+    expect(await screen.findByText('重新生成记录')).toBeInTheDocument();
+    expect(screen.getByText('创建记录')).toBeInTheDocument();
+    expect(screen.getByText('生成中')).toBeInTheDocument();
+    expect(screen.getAllByText('已完成').length).toBeGreaterThanOrEqual(1);
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/jd/jd-1/regenerate',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({
-            currentJd: { ...sampleJobDescription.content, summary: '手动调整后的 JD' },
-            extraInstruction: '强调 AI 招聘经验',
-          }),
-        }),
-      );
+      expect(global.fetch).toHaveBeenCalledWith('/api/jd/jd-1/regenerate-runs?limit=3');
     });
-    expect(screen.getByText('company.md')).toBeInTheDocument();
-    const contextHref =
-      screen.getByRole('link', { name: '查看本次上下文' }).getAttribute('href') ?? '';
-    expect(parsedHref(contextHref).pathname).toBe('/jd-generator/jd-1/context');
-    expectReturnContext(contextHref, '/jd-generator/jd-1', '返回 JD');
-    expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
+
+    const regenLinks = screen.getAllByRole('link', { name: '查看执行页' });
+    const regenHrefs = regenLinks
+      .map((link) => link.getAttribute('href') ?? '')
+      .filter((href) => href.includes('/regenerate-runs/'));
+    expect(regenHrefs).toHaveLength(2);
+    expect(parsedHref(regenHrefs[0]!).pathname).toBe(
+      '/jd-generator/jd-1/regenerate-runs/regen-run-2',
+    );
+    expectReturnContext(regenHrefs[0]!, '/jd-generator/jd-1', '返回 JD');
+    expect(parsedHref(regenHrefs[1]!).pathname).toBe(
+      '/jd-generator/jd-1/regenerate-runs/regen-run-1',
+    );
   });
 
   it('JD detail returns to the supplied source context', async () => {
@@ -352,6 +472,14 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
       })
       .mockResolvedValueOnce({
         ok: true,

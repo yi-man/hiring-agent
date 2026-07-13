@@ -12,6 +12,10 @@ import type {
   JobDescriptionCreateRunDto,
   JobDescriptionCreateRunEventDto,
 } from './create-run-repo';
+import type {
+  JobDescriptionRegenerateRunDto,
+  JobDescriptionRegenerateRunEventDto,
+} from './regenerate-run-repo';
 
 async function readJson<T>(response: Response): Promise<T & { error?: string }> {
   return (await response.json().catch(() => ({}))) as T & { error?: string };
@@ -140,20 +144,60 @@ export async function updateJobDescriptionResource(
   return data.jobDescription;
 }
 
-export async function regenerateJobDescription(
-  id: string,
+export async function startJobDescriptionRegenerateRun(
+  jobDescriptionId: string,
   payload: RegenerateJobDescriptionRequest,
-): Promise<JobDescriptionDto> {
-  const response = await fetch(`/api/jd/${id}/regenerate`, {
+): Promise<JobDescriptionRegenerateRunDto> {
+  const response = await fetch(`/api/jd/${jobDescriptionId}/regenerate-runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await readJson<{ jobDescription?: JobDescriptionDto }>(response);
-  if (!response.ok || !data.jobDescription) {
-    throw new Error(data.error || '重新生成 JD 失败');
+  const data = await readJson<{ run?: JobDescriptionRegenerateRunDto }>(response);
+  if (!response.ok || !data.run) {
+    throw new Error(data.error || '创建 JD 重新生成任务失败');
   }
-  return data.jobDescription;
+  return data.run;
+}
+
+export async function fetchJobDescriptionRegenerateRuns(
+  jobDescriptionId: string,
+  options: { limit?: number } = {},
+): Promise<JobDescriptionRegenerateRunDto[]> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) {
+    params.set('limit', String(options.limit));
+  }
+  const query = params.toString();
+  const response = await fetch(
+    `/api/jd/${jobDescriptionId}/regenerate-runs${query ? `?${query}` : ''}`,
+  );
+  const data = await readJson<{ runs?: JobDescriptionRegenerateRunDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.runs)) {
+    throw new Error(data.error || '加载 JD 重新生成任务失败');
+  }
+  return data.runs;
+}
+
+export async function fetchJobDescriptionRegenerateRunWithEvents(
+  jobDescriptionId: string,
+  runId: string,
+): Promise<{
+  run: JobDescriptionRegenerateRunDto;
+  events: JobDescriptionRegenerateRunEventDto[];
+}> {
+  const response = await fetch(`/api/jd/${jobDescriptionId}/regenerate-runs/${runId}`);
+  const data = await readJson<{
+    run?: JobDescriptionRegenerateRunDto;
+    events?: JobDescriptionRegenerateRunEventDto[];
+  }>(response);
+  if (!response.ok || !data.run) {
+    throw new Error(data.error || '加载 JD 重新生成进度失败');
+  }
+  return {
+    run: data.run,
+    events: Array.isArray(data.events) ? data.events : [],
+  };
 }
 
 export type PublishJobDescriptionResponse = {

@@ -6,7 +6,6 @@ import {
   getConversationDocumentById,
 } from '@/lib/chat/repositories/document-repo';
 import { prisma } from '@/lib/prisma';
-import { deleteDocumentPoints } from '@/lib/rag/qdrant';
 
 async function findOwnedConversationId(conversationId: string, userId: string) {
   return prisma.conversation.findFirst({
@@ -80,13 +79,6 @@ export async function DELETE(
       return NextResponse.json({ error: 'conversation not found' }, { status: 404 });
     }
 
-    try {
-      await deleteDocumentPoints({ conversationId: id, documentId });
-    } catch (error) {
-      // Qdrant 不可用时仍删除数据库记录：列表与 chunk 正文消失，检索无法拼出上下文；
-      // 若向量点残留，Qdrant 可能仍命中但 hydrate 阶段找不到 chunk，行为等同不可检索。
-      console.warn('conversation document delete: qdrant cleanup failed', error);
-    }
     const deleted = await deleteConversationDocument(id, documentId);
     if (!deleted) {
       return NextResponse.json({ error: 'document not found' }, { status: 404 });
