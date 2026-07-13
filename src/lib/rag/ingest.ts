@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   claimConversationDocumentIngest,
   completeConversationDocumentIngest,
@@ -6,24 +7,8 @@ import {
   replaceConversationDocumentChunks,
 } from '@/lib/chat/repositories/document-repo';
 import { env } from '@/lib/env';
-import { embedDocuments } from '@/lib/rag/embed';
+import { embedDocuments, getConfiguredEmbeddingModel } from '@/lib/rag/embed';
 import { splitMarkdownToChunks } from '@/lib/rag/markdown';
-import {
-  createDeterministicQdrantPointId,
-  deleteDocumentPoints,
-  ensureCollection,
-  getQdrantClient,
-  qdrantCollectionName,
-} from '@/lib/rag/qdrant';
-
-type QdrantPointPayload = {
-  conversationId: string;
-  documentId: string;
-  chunkId: string;
-  chunkIndex: number;
-  filename: string;
-  version: number;
-};
 
 const CONCURRENT_INGEST_MAX_WAIT_MS = 90_000;
 const CONCURRENT_INGEST_POLL_MS = 400;
@@ -39,6 +24,21 @@ function looksLikeIngestClaimLease(errorMessage: string | null): boolean {
   }
   const parts = errorMessage.split(':');
   return parts.length >= 3 && /^\d+$/.test(parts[1] ?? '');
+}
+
+/**
+ * Stable chunk primary keys across re-ingest of the same document version/index.
+ */
+export function createDeterministicConversationChunkId(params: {
+  documentId: string;
+  version: number;
+  chunkIndex: number;
+}): string {
+  const hash = createHash('sha256')
+    .update(`${params.documentId}:${params.version}:${params.chunkIndex}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
 
 /**
@@ -64,7 +64,7 @@ async function awaitConcurrentIngestTerminal(
     await sleep(CONCURRENT_INGEST_POLL_MS);
   }
   throw new Error(
-    'document ingest timed out while waiting for indexer (still processing — check embeddings API, Qdrant, and DB)',
+    'document ingest timed out while waiting for indexer (still processing — check embeddings API and DB)',
   );
 }
 
@@ -112,56 +112,29 @@ export async function ingestConversationDocument(
     if (embeddings.length !== markdownChunks.length) {
       throw new Error('embedding count does not match markdown chunks');
     }
-    if (!embeddings[0] || embeddings[0].length === 0) {
+    const firstEmbedding = embeddings[0];
+    if (!firstEmbedding || embeddings.some((embedding) => embedding.length === 0)) {
       throw new Error('embedding vectors are empty');
     }
+    const vectorSize = firstEmbedding.length;
+    if (embeddings.some((embedding) => embedding.length !== vectorSize)) {
+      throw new Error('embedding vector dimensions do not match');
+    }
 
-    await ensureCollection({ vectorSize: embeddings[0].length });
-
-    const chunks = markdownChunks.map((chunk, index) => {
-      const qdrantPointId = createDeterministicQdrantPointId({
+    const chunkRows = markdownChunks.map((chunk, index) => ({
+      id: createDeterministicConversationChunkId({
         documentId: document.id,
         version: document.version,
         chunkIndex: chunk.index,
-      });
-      return {
-        chunkId: qdrantPointId,
-        qdrantPointId,
-        chunkIndex: chunk.index,
-        content: chunk.content,
-        vector: embeddings[index],
-      };
-    });
-
-    await deleteDocumentPoints({ conversationId, documentId: document.id });
-
-    const client = getQdrantClient();
-    await client.upsert(qdrantCollectionName, {
-      wait: true,
-      points: chunks.map((chunk) => ({
-        id: chunk.qdrantPointId,
-        vector: chunk.vector,
-        payload: {
-          conversationId,
-          documentId: document.id,
-          chunkId: chunk.chunkId,
-          chunkIndex: chunk.chunkIndex,
-          filename: document.filename,
-          version: document.version,
-        } satisfies QdrantPointPayload,
-      })),
-    });
-
-    const chunkRows = chunks.map((chunk) => ({
-      id: chunk.chunkId,
+      }),
       conversationId,
-      chunkIndex: chunk.chunkIndex,
+      chunkIndex: chunk.index,
       content: chunk.content,
       tokenEstimate: null,
-      qdrantPointId: chunk.qdrantPointId,
+      embedding: embeddings[index] ?? [],
     }));
 
-    await replaceConversationDocumentChunks(document.id, chunkRows);
+    await replaceConversationDocumentChunks(document.id, getConfiguredEmbeddingModel(), chunkRows);
 
     const completed = await completeConversationDocumentIngest(
       conversationId,

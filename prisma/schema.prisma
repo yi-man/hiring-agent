@@ -323,21 +323,24 @@ model ConversationDocument {
 }
 
 model ConversationDocumentChunk {
-  id             String               @id @default(uuid())
-  documentId     String               @map("document_id")
-  conversationId String               @map("conversation_id")
-  chunkIndex     Int                  @map("chunk_index")
-  content        String
-  tokenEstimate  Int?                 @map("token_estimate")
-  qdrantPointId  String?              @unique @map("qdrant_point_id")
-  createdAt      DateTime             @default(now()) @map("created_at")
-  document       ConversationDocument @relation(fields: [documentId, conversationId], references: [id, conversationId], onDelete: Cascade, onUpdate: Restrict)
-  conversation   Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  id                 String               @id @default(uuid())
+  documentId         String               @map("document_id")
+  conversationId     String               @map("conversation_id")
+  chunkIndex         Int                  @map("chunk_index")
+  content            String
+  tokenEstimate      Int?                 @map("token_estimate")
+  embeddingModel     String               @map("embedding_model")
+  embeddingDimension Int                  @map("embedding_dimension")
+  embedding          Unsupported("vector")?
+  createdAt          DateTime             @default(now()) @map("created_at")
+  document           ConversationDocument @relation(fields: [documentId, conversationId], references: [id, conversationId], onDelete: Cascade, onUpdate: Restrict)
+  conversation       Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([documentId, chunkIndex], map: "conversation_document_chunks_document_id_chunk_index_key")
   @@index([documentId], map: "idx_conversation_document_chunks_document_id")
   @@index([conversationId], map: "idx_conversation_document_chunks_conversation_id")
   @@index([conversationId, chunkIndex], map: "idx_conversation_document_chunks_conversation_chunk_index")
+  @@index([conversationId, embeddingModel, embeddingDimension], map: "idx_conversation_document_chunks_conversation_embedding")
   @@map("conversation_document_chunks")
 }
 

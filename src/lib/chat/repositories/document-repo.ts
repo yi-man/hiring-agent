@@ -1,7 +1,29 @@
+import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { vectorToPgLiteral } from '@/lib/rag/knowledge-repo';
 
 export type ConversationDocumentStatus = 'processing' | 'ready' | 'failed';
 export type ConversationDocumentIndexJobStatus = 'pending' | 'running' | 'success' | 'failed';
+
+export type ConversationChunkInsert = {
+  id?: string;
+  conversationId: string;
+  chunkIndex: number;
+  content: string;
+  tokenEstimate?: number | null;
+  embedding: number[];
+};
+
+export type ConversationChunkSearchResult = {
+  id: string;
+  documentId: string;
+  conversationId: string;
+  chunkIndex: number;
+  content: string;
+  filename: string;
+  score: number;
+};
 
 export async function createConversationDocument(params: {
   conversationId: string;
@@ -112,56 +134,90 @@ export async function failConversationDocumentIngest(
   return result.count > 0;
 }
 
-export async function bulkInsertDocumentChunks(
-  rows: Array<{
-    id?: string;
-    documentId: string;
-    conversationId: string;
-    chunkIndex: number;
-    content: string;
-    tokenEstimate?: number | null;
-    qdrantPointId?: string | null;
-  }>,
-): Promise<number> {
-  if (rows.length === 0) {
-    return 0;
-  }
-
-  const result = await prisma.conversationDocumentChunk.createMany({
-    data: rows.map((row) => ({
-      id: row.id,
-      documentId: row.documentId,
-      conversationId: row.conversationId,
-      chunkIndex: row.chunkIndex,
-      content: row.content,
-      tokenEstimate: row.tokenEstimate ?? null,
-      qdrantPointId: row.qdrantPointId ?? null,
-    })),
-  });
-
-  return result.count;
-}
-
 export async function replaceConversationDocumentChunks(
   documentId: string,
-  rows: Array<{
-    id?: string;
-    conversationId: string;
-    chunkIndex: number;
-    content: string;
-    tokenEstimate?: number | null;
-    qdrantPointId?: string | null;
-  }>,
+  embeddingModel: string,
+  rows: ConversationChunkInsert[],
 ): Promise<number> {
-  await prisma.conversationDocumentChunk.deleteMany({
-    where: { documentId },
+  await prisma.$transaction(async (tx) => {
+    await tx.conversationDocumentChunk.deleteMany({
+      where: { documentId },
+    });
+
+    for (const row of rows) {
+      const id = row.id ?? randomUUID();
+      const vectorLiteral = vectorToPgLiteral(row.embedding);
+      await tx.$executeRaw`
+        INSERT INTO "public"."conversation_document_chunks"
+          ("id", "document_id", "conversation_id", "chunk_index", "content", "token_estimate",
+           "embedding_model", "embedding_dimension", "embedding", "created_at")
+        VALUES
+          (${id}, ${documentId}, ${row.conversationId}, ${row.chunkIndex}, ${row.content},
+           ${row.tokenEstimate ?? null}, ${embeddingModel}, ${row.embedding.length},
+           ${vectorLiteral}::vector, CURRENT_TIMESTAMP)
+      `;
+    }
   });
-  return bulkInsertDocumentChunks(
-    rows.map((row) => ({
+
+  return rows.length;
+}
+
+export async function searchConversationDocumentChunks(params: {
+  conversationId: string;
+  queryVector: number[];
+  embeddingModel: string;
+  topK: number;
+  minScore?: number;
+  documentId?: string | null;
+}): Promise<ConversationChunkSearchResult[]> {
+  if (params.topK <= 0 || params.queryVector.length === 0) {
+    return [];
+  }
+
+  const vectorLiteral = vectorToPgLiteral(params.queryVector);
+  const documentFilter = params.documentId
+    ? Prisma.sql`AND c.document_id = ${params.documentId}`
+    : Prisma.empty;
+  const minScore = params.minScore ?? Number.NEGATIVE_INFINITY;
+
+  const rows = await prisma.$queryRaw<
+    Array<{
+      id: string;
+      documentId: string;
+      conversationId: string;
+      chunkIndex: number;
+      content: string;
+      filename: string;
+      score: number | string;
+    }>
+  >(Prisma.sql`
+    SELECT
+      c.id,
+      c.document_id AS "documentId",
+      c.conversation_id AS "conversationId",
+      c.chunk_index AS "chunkIndex",
+      c.content,
+      d.filename,
+      1 - (c.embedding <=> ${vectorLiteral}::vector) AS score
+    FROM "public"."conversation_document_chunks" c
+    INNER JOIN "public"."conversation_documents" d ON d.id = c.document_id
+    WHERE c.conversation_id = ${params.conversationId}
+      AND d.conversation_id = ${params.conversationId}
+      AND d.status = 'ready'
+      AND c.embedding IS NOT NULL
+      AND c.embedding_model = ${params.embeddingModel}
+      AND c.embedding_dimension = ${params.queryVector.length}
+      ${documentFilter}
+    ORDER BY c.embedding <=> ${vectorLiteral}::vector
+    LIMIT ${params.topK}
+  `);
+
+  return rows
+    .map((row) => ({
       ...row,
-      documentId,
-    })),
-  );
+      score: typeof row.score === 'number' ? row.score : Number(row.score),
+    }))
+    .filter((row) => Number.isFinite(row.score) && row.score >= minScore);
 }
 
 export async function listConversationDocuments(conversationId: string) {

@@ -1,21 +1,15 @@
 import { parseEnv } from '@/lib/env';
 
-jest.mock('@qdrant/js-client-rest', () => ({
-  QdrantClient: jest.fn(),
-}));
-
 describe('RAG env defaults', () => {
-  it('uses sane default values for rag and qdrant keys', () => {
+  it('uses sane default values for rag keys', () => {
     const parsed = parseEnv({});
 
-    expect(parsed.QDRANT_URL).toBe('http://127.0.0.1:6333');
-    expect(parsed.QDRANT_API_KEY).toBeUndefined();
-    expect(parsed.QDRANT_COLLECTION_NAME).toBe('conversation_markdown_chunks');
     expect(parsed.RAG_TOP_K).toBe(6);
     expect(parsed.RAG_MIN_SCORE).toBe(0);
     expect(parsed.RAG_CONTEXT_MAX_CHARS).toBe(6000);
     expect(parsed.OPENAI_EMBEDDING_USE_MULTIMODAL).toBe('auto');
     expect(parsed.OPENAI_EMBEDDING_MODEL).toBe('doubao-embedding-vision-250615');
+    expect((parsed as { QDRANT_URL?: string }).QDRANT_URL).toBeUndefined();
   });
 
   it('parses dedicated embedding provider configuration', () => {
@@ -44,129 +38,19 @@ describe('RAG env defaults', () => {
     expect(parsed.RAG_CONTEXT_MAX_CHARS).toBe(9000);
   });
 
-  it('falls back to default qdrant url when invalid', () => {
-    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-    const parsed = parseEnv({
-      QDRANT_URL: 'not-a-url',
-    });
-
-    expect(consoleErrorSpy).toHaveBeenCalled();
-    expect(parsed.QDRANT_URL).toBe('http://127.0.0.1:6333');
-    consoleErrorSpy.mockRestore();
-  });
-
   it('preserves valid keys when one key is invalid', () => {
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
     const parsed = parseEnv({
-      QDRANT_URL: 'not-a-url',
-      RAG_TOP_K: '11',
+      RAG_TOP_K: 'not-a-number',
       OPENAI_BASE_URL: 'https://example.com/v1',
       POSTGRES_HOST: 'db.internal',
     });
 
-    expect(parsed.QDRANT_URL).toBe('http://127.0.0.1:6333');
-    expect(parsed.RAG_TOP_K).toBe(11);
+    expect(parsed.RAG_TOP_K).toBe(6);
     expect(parsed.OPENAI_BASE_URL).toBe('https://example.com/v1');
     expect(parsed.POSTGRES_HOST).toBe('db.internal');
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
-  });
-});
-
-describe('qdrant retrieval infrastructure', () => {
-  const originalEnv = process.env;
-
-  beforeEach(() => {
-    jest.resetModules();
-    jest.clearAllMocks();
-    process.env = { ...originalEnv };
-  });
-
-  afterAll(() => {
-    process.env = originalEnv;
-  });
-
-  it('returns existing collection without creating', async () => {
-    const { QdrantClient } = await import('@qdrant/js-client-rest');
-    const mockClient = {
-      getCollection: jest.fn().mockResolvedValue({}),
-      createCollection: jest.fn(),
-    };
-    (QdrantClient as unknown as jest.Mock).mockImplementation(() => mockClient);
-
-    const rag = await import('@/lib/rag/qdrant');
-    await rag.ensureCollection({ vectorSize: 1536 });
-
-    expect(rag.qdrantCollectionName).toBe('conversation_markdown_chunks');
-    expect(QdrantClient).toHaveBeenCalledWith({
-      url: 'http://127.0.0.1:6333',
-      apiKey: undefined,
-    });
-    expect(mockClient.getCollection).toHaveBeenCalledWith('conversation_markdown_chunks');
-    expect(mockClient.createCollection).not.toHaveBeenCalled();
-  });
-
-  it('creates collection when qdrant returns 404', async () => {
-    const { QdrantClient } = await import('@qdrant/js-client-rest');
-    const mockClient = {
-      getCollection: jest.fn().mockRejectedValue({ status: 404 }),
-      createCollection: jest.fn().mockResolvedValue({}),
-    };
-    (QdrantClient as unknown as jest.Mock).mockImplementation(() => mockClient);
-
-    const rag = await import('@/lib/rag/qdrant');
-    await rag.ensureCollection({ vectorSize: 3072, distance: 'Dot' });
-
-    expect(mockClient.createCollection).toHaveBeenCalledWith('conversation_markdown_chunks', {
-      vectors: {
-        size: 3072,
-        distance: 'Dot',
-      },
-    });
-  });
-
-  it('rethrows unexpected qdrant errors', async () => {
-    const { QdrantClient } = await import('@qdrant/js-client-rest');
-    const fatalError = new Error('qdrant unavailable');
-    const mockClient = {
-      getCollection: jest.fn().mockRejectedValue(fatalError),
-      createCollection: jest.fn(),
-    };
-    (QdrantClient as unknown as jest.Mock).mockImplementation(() => mockClient);
-
-    const rag = await import('@/lib/rag/qdrant');
-    await expect(rag.ensureCollection({ vectorSize: 1536 })).rejects.toThrow('qdrant unavailable');
-    expect(mockClient.createCollection).not.toHaveBeenCalled();
-  });
-
-  it('treats create conflict as success by rechecking collection', async () => {
-    const { QdrantClient } = await import('@qdrant/js-client-rest');
-    const mockClient = {
-      getCollection: jest.fn().mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({}),
-      createCollection: jest.fn().mockRejectedValue({ status: 409 }),
-    };
-    (QdrantClient as unknown as jest.Mock).mockImplementation(() => mockClient);
-
-    const rag = await import('@/lib/rag/qdrant');
-    await expect(rag.ensureCollection({ vectorSize: 1536 })).resolves.toBeUndefined();
-    expect(mockClient.getCollection).toHaveBeenCalledTimes(2);
-    expect(mockClient.createCollection).toHaveBeenCalledTimes(1);
-  });
-
-  it('rethrows create conflict when post-conflict recheck fails', async () => {
-    const { QdrantClient } = await import('@qdrant/js-client-rest');
-    const conflictError = { status: 409 };
-    const mockClient = {
-      getCollection: jest
-        .fn()
-        .mockRejectedValueOnce({ status: 404 })
-        .mockRejectedValueOnce({ status: 404 }),
-      createCollection: jest.fn().mockRejectedValue(conflictError),
-    };
-    (QdrantClient as unknown as jest.Mock).mockImplementation(() => mockClient);
-
-    const rag = await import('@/lib/rag/qdrant');
-    await expect(rag.ensureCollection({ vectorSize: 1536 })).rejects.toEqual({ status: 404 });
   });
 });
 
@@ -324,25 +208,16 @@ describe('retrieveConversationContext', () => {
     process.env = originalEnv;
   });
 
-  it('searches with conversationId filter and score threshold', async () => {
+  it('searches conversation chunks with model and min score', async () => {
     const searchMock = jest.fn().mockResolvedValue([
       {
-        id: 'p1',
-        score: 0.92,
-        payload: {
-          conversationId: 'conv-1',
-          documentId: 'doc-1',
-          chunkId: 'chunk-1',
-          chunkIndex: 0,
-          filename: 'policy.md',
-        },
-      },
-    ]);
-    const findManyMock = jest.fn().mockResolvedValue([
-      {
         id: 'chunk-1',
-        qdrantPointId: 'p1',
+        documentId: 'doc-1',
+        conversationId: 'conv-1',
+        chunkIndex: 0,
         content: 'PTO is 20 days.',
+        filename: 'policy.md',
+        score: 0.92,
       },
     ]);
 
@@ -355,19 +230,10 @@ describe('retrieveConversationContext', () => {
     }));
     jest.doMock('@/lib/rag/embed', () => ({
       embedQuery: jest.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+      getConfiguredEmbeddingModel: () => 'text-embedding-v3',
     }));
-    jest.doMock('@/lib/rag/qdrant', () => ({
-      qdrantCollectionName: 'conversation_markdown_chunks',
-      getQdrantClient: () => ({
-        search: searchMock,
-      }),
-    }));
-    jest.doMock('@/lib/prisma', () => ({
-      prisma: {
-        conversationDocumentChunk: {
-          findMany: findManyMock,
-        },
-      },
+    jest.doMock('@/lib/chat/repositories/document-repo', () => ({
+      searchConversationDocumentChunks: (...args: unknown[]) => searchMock(...args),
     }));
 
     const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
@@ -377,29 +243,20 @@ describe('retrieveConversationContext', () => {
       topK: 3,
     });
 
-    expect(searchMock).toHaveBeenCalledWith(
-      'conversation_markdown_chunks',
-      expect.objectContaining({
-        limit: 3,
-        score_threshold: 0.6,
-        filter: {
-          must: [{ key: 'conversationId', match: { value: 'conv-1' } }],
-        },
-      }),
-    );
-    expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          conversationId: 'conv-1',
-        }),
-      }),
-    );
+    expect(searchMock).toHaveBeenCalledWith({
+      conversationId: 'conv-1',
+      queryVector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-v3',
+      topK: 3,
+      minScore: 0.6,
+      documentId: null,
+    });
     expect(result.contextText).toContain('[source filename="policy.md" chunkIndex=0]');
     expect(result.contextText).toContain('PTO is 20 days.');
     expect(result.matches).toHaveLength(1);
   });
 
-  it('adds documentId to qdrant filter when scoped', async () => {
+  it('passes documentId scope to search when provided', async () => {
     const searchMock = jest.fn().mockResolvedValue([]);
     jest.doMock('@/lib/env', () => ({
       env: {
@@ -410,19 +267,10 @@ describe('retrieveConversationContext', () => {
     }));
     jest.doMock('@/lib/rag/embed', () => ({
       embedQuery: jest.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+      getConfiguredEmbeddingModel: () => 'text-embedding-v3',
     }));
-    jest.doMock('@/lib/rag/qdrant', () => ({
-      qdrantCollectionName: 'conversation_markdown_chunks',
-      getQdrantClient: () => ({
-        search: searchMock,
-      }),
-    }));
-    jest.doMock('@/lib/prisma', () => ({
-      prisma: {
-        conversationDocumentChunk: {
-          findMany: jest.fn().mockResolvedValue([]),
-        },
-      },
+    jest.doMock('@/lib/chat/repositories/document-repo', () => ({
+      searchConversationDocumentChunks: (...args: unknown[]) => searchMock(...args),
     }));
 
     const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
@@ -434,69 +282,31 @@ describe('retrieveConversationContext', () => {
     });
 
     expect(searchMock).toHaveBeenCalledWith(
-      'conversation_markdown_chunks',
       expect.objectContaining({
-        filter: {
-          must: [
-            { key: 'conversationId', match: { value: 'conv-1' } },
-            { key: 'documentId', match: { value: 'doc-x' } },
-          ],
-        },
+        documentId: 'doc-x',
       }),
     );
   });
 
-  it('enforces minScore and context max chars when building output', async () => {
+  it('enforces context max chars when building output', async () => {
     const searchMock = jest.fn().mockResolvedValue([
       {
-        id: 'p-low',
-        score: 0.2,
-        payload: {
-          conversationId: 'conv-1',
-          documentId: 'doc-low',
-          chunkId: 'chunk-low',
-          chunkIndex: 0,
-          filename: 'low.md',
-        },
-      },
-      {
-        id: 'p-a',
-        score: 0.95,
-        payload: {
-          conversationId: 'conv-1',
-          documentId: 'doc-a',
-          chunkId: 'chunk-a',
-          chunkIndex: 0,
-          filename: 'a.md',
-        },
-      },
-      {
-        id: 'p-b',
-        score: 0.9,
-        payload: {
-          conversationId: 'conv-1',
-          documentId: 'doc-b',
-          chunkId: 'chunk-b',
-          chunkIndex: 1,
-          filename: 'b.md',
-        },
-      },
-    ]);
-    const findManyMock = jest.fn().mockResolvedValue([
-      {
-        id: 'chunk-low',
-        qdrantPointId: 'p-low',
-        content: 'ignored',
-      },
-      {
         id: 'chunk-a',
-        qdrantPointId: 'p-a',
+        documentId: 'doc-a',
+        conversationId: 'conv-1',
+        chunkIndex: 0,
         content: '12345',
+        filename: 'a.md',
+        score: 0.95,
       },
       {
         id: 'chunk-b',
-        qdrantPointId: 'p-b',
+        documentId: 'doc-b',
+        conversationId: 'conv-1',
+        chunkIndex: 1,
         content: '67890',
+        filename: 'b.md',
+        score: 0.9,
       },
     ]);
 
@@ -509,19 +319,10 @@ describe('retrieveConversationContext', () => {
     }));
     jest.doMock('@/lib/rag/embed', () => ({
       embedQuery: jest.fn().mockResolvedValue([0.4, 0.5]),
+      getConfiguredEmbeddingModel: () => 'text-embedding-v3',
     }));
-    jest.doMock('@/lib/rag/qdrant', () => ({
-      qdrantCollectionName: 'conversation_markdown_chunks',
-      getQdrantClient: () => ({
-        search: searchMock,
-      }),
-    }));
-    jest.doMock('@/lib/prisma', () => ({
-      prisma: {
-        conversationDocumentChunk: {
-          findMany: findManyMock,
-        },
-      },
+    jest.doMock('@/lib/chat/repositories/document-repo', () => ({
+      searchConversationDocumentChunks: (...args: unknown[]) => searchMock(...args),
     }));
 
     const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
@@ -539,38 +340,22 @@ describe('retrieveConversationContext', () => {
   it('skips oversized hit and still includes later smaller hit', async () => {
     const searchMock = jest.fn().mockResolvedValue([
       {
-        id: 'p-big',
-        score: 0.99,
-        payload: {
-          conversationId: 'conv-1',
-          documentId: 'doc-big',
-          chunkId: 'chunk-big',
-          chunkIndex: 0,
-          filename: 'big.md',
-        },
-      },
-      {
-        id: 'p-small',
-        score: 0.95,
-        payload: {
-          conversationId: 'conv-1',
-          documentId: 'doc-small',
-          chunkId: 'chunk-small',
-          chunkIndex: 1,
-          filename: 'small.md',
-        },
-      },
-    ]);
-    const findManyMock = jest.fn().mockResolvedValue([
-      {
         id: 'chunk-big',
-        qdrantPointId: 'p-big',
+        documentId: 'doc-big',
+        conversationId: 'conv-1',
+        chunkIndex: 0,
         content: '1234567890',
+        filename: 'big.md',
+        score: 0.99,
       },
       {
         id: 'chunk-small',
-        qdrantPointId: 'p-small',
+        documentId: 'doc-small',
+        conversationId: 'conv-1',
+        chunkIndex: 1,
         content: 'ok',
+        filename: 'small.md',
+        score: 0.95,
       },
     ]);
 
@@ -582,20 +367,11 @@ describe('retrieveConversationContext', () => {
       },
     }));
     jest.doMock('@/lib/rag/embed', () => ({
-      embedQuery: jest.fn().mockResolvedValue([0.7, 0.8]),
+      embedQuery: jest.fn().mockResolvedValue([0.4, 0.5]),
+      getConfiguredEmbeddingModel: () => 'text-embedding-v3',
     }));
-    jest.doMock('@/lib/rag/qdrant', () => ({
-      qdrantCollectionName: 'conversation_markdown_chunks',
-      getQdrantClient: () => ({
-        search: searchMock,
-      }),
-    }));
-    jest.doMock('@/lib/prisma', () => ({
-      prisma: {
-        conversationDocumentChunk: {
-          findMany: findManyMock,
-        },
-      },
+    jest.doMock('@/lib/chat/repositories/document-repo', () => ({
+      searchConversationDocumentChunks: (...args: unknown[]) => searchMock(...args),
     }));
 
     const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
@@ -610,74 +386,56 @@ describe('retrieveConversationContext', () => {
     expect(result.matches[0]?.chunkId).toBe('chunk-small');
   });
 
-  it('returns empty context when Qdrant has no hits (no DB keyword fallback)', async () => {
+  it('returns empty context when search has no hits', async () => {
     const searchMock = jest.fn().mockResolvedValue([]);
-    const findManyMock = jest.fn();
-
     jest.doMock('@/lib/env', () => ({
       env: {
         RAG_TOP_K: 6,
-        RAG_MIN_SCORE: 0.5,
+        RAG_MIN_SCORE: 0.6,
         RAG_CONTEXT_MAX_CHARS: 1000,
       },
     }));
     jest.doMock('@/lib/rag/embed', () => ({
       embedQuery: jest.fn().mockResolvedValue([0.1, 0.2]),
+      getConfiguredEmbeddingModel: () => 'text-embedding-v3',
     }));
-    jest.doMock('@/lib/rag/qdrant', () => ({
-      qdrantCollectionName: 'conversation_markdown_chunks',
-      getQdrantClient: () => ({
-        search: searchMock,
-      }),
-    }));
-    jest.doMock('@/lib/prisma', () => ({
-      prisma: {
-        conversationDocumentChunk: {
-          findMany: findManyMock,
-        },
-      },
-    }));
-
-    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
-    const result = await retrieveConversationContext({
-      conversationId: 'conv-1',
-      query: 'anything',
-      topK: 3,
-    });
-
-    expect(result.contextText).toBe('');
-    expect(result.matches).toEqual([]);
-    expect(findManyMock).not.toHaveBeenCalled();
-  });
-
-  it('propagates embedding API errors', async () => {
-    jest.doMock('@/lib/env', () => ({
-      env: {
-        RAG_TOP_K: 6,
-        RAG_MIN_SCORE: 0.5,
-        RAG_CONTEXT_MAX_CHARS: 1000,
-      },
-    }));
-    jest.doMock('@/lib/rag/embed', () => ({
-      embedQuery: jest.fn().mockRejectedValue(new Error('upstream embedding error')),
-    }));
-    jest.doMock('@/lib/rag/qdrant', () => ({
-      qdrantCollectionName: 'conversation_markdown_chunks',
-      getQdrantClient: () => ({
-        search: jest.fn(),
-      }),
-    }));
-    jest.doMock('@/lib/prisma', () => ({
-      prisma: {
-        conversationDocumentChunk: {
-          findMany: jest.fn(),
-        },
-      },
+    jest.doMock('@/lib/chat/repositories/document-repo', () => ({
+      searchConversationDocumentChunks: (...args: unknown[]) => searchMock(...args),
     }));
 
     const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
     await expect(
-      retrieveConversationContext({ conversationId: 'conv-1', query: 'q', topK: 3 }),
-    ).rejects.toThrow(/upstream embedding error/);
+      retrieveConversationContext({
+        conversationId: 'conv-1',
+        query: 'anything',
+      }),
+    ).resolves.toEqual({ contextText: '', matches: [] });
+  });
+
+  it('returns empty when query is blank', async () => {
+    const searchMock = jest.fn();
+    jest.doMock('@/lib/env', () => ({
+      env: {
+        RAG_TOP_K: 6,
+        RAG_MIN_SCORE: 0.6,
+        RAG_CONTEXT_MAX_CHARS: 1000,
+      },
+    }));
+    jest.doMock('@/lib/rag/embed', () => ({
+      embedQuery: jest.fn(),
+      getConfiguredEmbeddingModel: () => 'text-embedding-v3',
+    }));
+    jest.doMock('@/lib/chat/repositories/document-repo', () => ({
+      searchConversationDocumentChunks: (...args: unknown[]) => searchMock(...args),
+    }));
+
+    const { retrieveConversationContext } = await import('@/lib/rag/retrieval');
+    await expect(
+      retrieveConversationContext({
+        conversationId: 'conv-1',
+        query: '   ',
+      }),
+    ).resolves.toEqual({ contextText: '', matches: [] });
+    expect(searchMock).not.toHaveBeenCalled();
   });
 });
