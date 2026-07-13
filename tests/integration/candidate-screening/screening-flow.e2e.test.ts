@@ -658,6 +658,23 @@ describe('candidate screening integration flow with real postgres and boss-like 
       const second = await getCandidateScreeningRun({ userId, runId: secondRun.id });
 
       expect(second?.skillId).toBe(first?.skillId);
+      const secondEvents = await listCandidateScreeningRunEvents({ userId, runId: secondRun.id });
+      expect(secondEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            stage: 'searching_live',
+            level: 'info',
+            message: `复用 Workflow：screen_candidates v1 (${first?.skillId})`,
+            detail: expect.objectContaining({
+              workflowStep: 'reuse_workflow',
+              skillId: first?.skillId,
+              workflowName: 'screen_candidates',
+              workflowVersion: 1,
+              reused: true,
+            }),
+          }),
+        ]),
+      );
       expect(
         await prisma.publishSkill.count({
           where: { name: 'screen_candidates', platform: 'boss-like' },

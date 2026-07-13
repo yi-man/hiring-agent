@@ -451,6 +451,19 @@ describe('CandidateScreeningWorkflowSession', () => {
     expect(dependencies.createExploredSkill).not.toHaveBeenCalled();
     expect(dependencies.getActiveSkill).toHaveBeenCalledTimes(1);
     expect(session.skill).toEqual(skill);
+    expect(dependencies.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        message: '复用 Workflow：screen_candidates v1 (screen-v1)',
+        detail: expect.objectContaining({
+          workflowStep: 'reuse_workflow',
+          skillId: 'screen-v1',
+          workflowName: 'screen_candidates',
+          workflowVersion: 1,
+          reused: true,
+        }),
+      }),
+    );
   });
 
   it('loads an exact stored workflow version without consulting the active workflow', async () => {
@@ -883,6 +896,9 @@ describe('CandidateScreeningWorkflowSession', () => {
     await session.loadOrExplore({ searchPlan, stage: 'executing_actions' });
 
     await expect(session.chatCandidate(candidate, actionPlan)).resolves.toEqual(failedResult);
+    expect(dependencies.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ skillId: 'screen-v1', currentWorkflowStep: null }),
+    );
     expect(dependencies.createRunEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         candidateId: 'candidate-1',
@@ -930,6 +946,7 @@ describe('CandidateScreeningWorkflowSession', () => {
       getActiveSkill: jest.fn().mockResolvedValue(skill),
       createRunEvent: jest
         .fn()
+        .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(null)

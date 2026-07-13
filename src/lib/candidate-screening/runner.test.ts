@@ -1638,6 +1638,7 @@ describe('candidate screening runner', () => {
     expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
       expect.objectContaining({
         status: 'success',
+        currentWorkflowStep: null,
         stats: expect.objectContaining({
           fetched: 2,
           stored: 1,
@@ -2991,6 +2992,7 @@ describe('candidate screening runner', () => {
       expect.objectContaining({
         status: 'success',
         currentStage: 'finalizing',
+        currentWorkflowStep: null,
         stats: expect.objectContaining({ failed: 1 }),
       }),
     );

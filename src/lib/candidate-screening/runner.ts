@@ -1578,6 +1578,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       currentStage: 'finalizing',
       errorMessage: null,
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(state.stats),
     });
     return {};
@@ -1662,6 +1663,7 @@ export const runCandidateScreeningGraph = async (params: {
       status: 'failed',
       errorMessage: getErrorMessage(error),
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(stats),
     });
   } finally {
@@ -2084,6 +2086,7 @@ export async function executeScreeningRunActions(params: {
       currentStage: 'finalizing',
       errorMessage: null,
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(stats),
     });
   } catch (error) {
@@ -2094,6 +2097,7 @@ export async function executeScreeningRunActions(params: {
       status: 'failed',
       errorMessage: getErrorMessage(error),
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(stats),
     });
   } finally {

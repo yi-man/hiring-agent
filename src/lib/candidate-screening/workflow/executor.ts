@@ -115,6 +115,9 @@ type ResolvedDependencies = Omit<
 type WorkflowEventDetail = {
   workflowStep: string;
   skillId: string;
+  workflowName?: string;
+  workflowVersion?: number;
+  reused?: true;
   previousSkillId?: string;
   retry?: true;
   retryState?: 'start' | 'success' | 'failure';
@@ -402,6 +405,9 @@ export function createCandidateScreeningWorkflowSession(
   function eventDetail(params: {
     workflowStep: string;
     skillId?: string;
+    workflowName?: string;
+    workflowVersion?: number;
+    reused?: boolean;
     previousSkillId?: string;
     retry?: boolean;
     retryState?: 'start' | 'success' | 'failure';
@@ -418,6 +424,9 @@ export function createCandidateScreeningWorkflowSession(
     return {
       workflowStep: params.workflowStep,
       skillId: params.skillId ?? requireSkill().id,
+      ...(params.workflowName ? { workflowName: params.workflowName } : {}),
+      ...(params.workflowVersion !== undefined ? { workflowVersion: params.workflowVersion } : {}),
+      ...(params.reused ? { reused: true } : {}),
       ...(params.previousSkillId ? { previousSkillId: params.previousSkillId } : {}),
       ...(params.retry ? { retry: true } : {}),
       ...(params.retryState ? { retryState: params.retryState } : {}),
@@ -477,6 +486,11 @@ export function createCandidateScreeningWorkflowSession(
         candidateName: params.candidateName,
       }),
     });
+  }
+
+  async function clearCurrentWorkflowStep(): Promise<void> {
+    const currentSkill = requireSkill();
+    await updateRun({ skillId: currentSkill.id, currentWorkflowStep: null });
   }
 
   async function captureBrowserFailure(
@@ -674,11 +688,20 @@ export function createCandidateScreeningWorkflowSession(
           targetError: targetError ?? undefined,
           browserTrace: actionResult.browserTrace,
         });
-        if (retry || !targetError) return value;
+        if (retry || !targetError) {
+          await clearCurrentWorkflowStep();
+          return value;
+        }
         try {
-          if (!(await repairTarget(targetError, failureContext))) return value;
+          if (!(await repairTarget(targetError, failureContext))) {
+            await clearCurrentWorkflowStep();
+            return value;
+          }
         } catch (error) {
-          if (error instanceof ScreeningWorkflowRepairResolutionError) return value;
+          if (error instanceof ScreeningWorkflowRepairResolutionError) {
+            await clearCurrentWorkflowStep();
+            return value;
+          }
           throw error;
         }
         retry = true;
@@ -770,6 +793,17 @@ export function createCandidateScreeningWorkflowSession(
     });
     if (active) {
       skill = screeningSkill(active);
+      await recordEvent({
+        level: 'info',
+        message: `复用 Workflow：${skill.name} v${skill.version} (${skill.id})`,
+        detail: eventDetail({
+          workflowStep: 'reuse_workflow',
+          skillId: skill.id,
+          workflowName: skill.name,
+          workflowVersion: skill.version,
+          reused: true,
+        }),
+      });
     } else {
       const exploreContext = resolveWorkflowExploreContext(dependencies.adapter);
       const explored = await dependencies.exploreSkill({
