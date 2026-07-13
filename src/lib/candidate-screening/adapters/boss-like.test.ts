@@ -359,7 +359,7 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
-  it('opens detail pages when list cards have short resume text', async () => {
+  it('keeps legacy direct callers enriching short resume text when deferEnrichment is omitted', async () => {
     const executor = new FakeBrowserExecutor([shortResumeListFixture, detailFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
@@ -374,6 +374,32 @@ describe('BossLikeCandidateSourceAdapter', () => {
         platformCandidateId: '1',
         resumeText: 'Java Spring Boot 高并发 微服务 分布式 系统设计',
       }),
+    ]);
+  });
+
+  it('defers short resume enrichment when the caller requests it', async () => {
+    const executor = new FakeBrowserExecutor([shortResumeListFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const batches = await collectAsyncBatches(
+      adapter.searchCandidates(searchPlan, {
+        maxCandidates: 1,
+        batchSize: 1,
+        deferEnrichment: true,
+      }),
+    );
+
+    expect(executor.calls).not.toContain('navigate:http://localhost:6183/employer/resumes/1');
+    expect(batches).toEqual([
+      {
+        candidates: [
+          expect.objectContaining({
+            platformCandidateId: '1',
+            resumeText: 'Java',
+          }),
+        ],
+        cursor: '1',
+      },
     ]);
   });
 

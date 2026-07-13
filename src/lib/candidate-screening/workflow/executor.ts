@@ -25,6 +25,7 @@ import type {
   StoredCandidateRef,
 } from '../adapters/types';
 import { CandidateAdapterTargetError } from '../adapters/types';
+import { hasShortResumeText } from '../adapters/boss-like';
 import type { RawCandidate } from '../ingest';
 import type {
   CandidateActionPlan,
@@ -538,6 +539,14 @@ export function createCandidateScreeningWorkflowSession(
     }
   }
 
+  async function enrichCandidate(candidate: RawCandidate): Promise<RawCandidate> {
+    return runAction({
+      action: 'enrich_candidate',
+      candidateName: candidate.name,
+      invoke: (workflow) => dependencies.adapter.enrichCandidate(candidate, workflow),
+    });
+  }
+
   async function* runSearchCandidates(
     plan: SearchPlan,
     options: SearchOptions,
@@ -552,11 +561,17 @@ export function createCandidateScreeningWorkflowSession(
       try {
         const source = dependencies.adapter.searchCandidates(
           plan,
-          options,
+          { ...options, deferEnrichment: true },
           targetsForStep(started.step),
         );
         for await (const batch of source) {
-          yield batch;
+          const candidates: RawCandidate[] = [];
+          for (const candidate of batch.candidates) {
+            candidates.push(
+              hasShortResumeText(candidate) ? await enrichCandidate(candidate) : candidate,
+            );
+          }
+          yield { ...batch, candidates };
         }
         await finishAction({ stepId: started.step.id, retry });
         return;
@@ -609,12 +624,7 @@ export function createCandidateScreeningWorkflowSession(
     },
     loadOrExplore,
     searchCandidates: runSearchCandidates,
-    enrichCandidate: (candidate) =>
-      runAction({
-        action: 'enrich_candidate',
-        candidateName: candidate.name,
-        invoke: (workflow) => dependencies.adapter.enrichCandidate(candidate, workflow),
-      }),
+    enrichCandidate,
     chatCandidate: (candidate, plan) =>
       runAction({
         action: 'chat_candidate',

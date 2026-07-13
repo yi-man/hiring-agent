@@ -119,7 +119,7 @@ function isLoginSnapshot(html: string | null): boolean {
   return /登录|login|用户名|密码|password/i.test(html) && !/<article\b/i.test(html);
 }
 
-function hasShortResumeText(candidate: RawCandidate): boolean {
+export function hasShortResumeText(candidate: RawCandidate): boolean {
   return candidate.resumeText.trim().length < SHORT_RESUME_TEXT_MIN_LENGTH;
 }
 
@@ -330,8 +330,10 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
         if (seen.has(key)) continue;
         seen.add(key);
 
-        const enrichedCandidate = await this.enrichCandidate(candidate, workflow);
-        batch.push(enrichedCandidate);
+        const candidateForBatch = options.deferEnrichment
+          ? candidate
+          : await this.enrichCandidate(candidate, workflow);
+        batch.push(candidateForBatch);
         emittedCount += 1;
 
         if (batch.length >= batchSize) {

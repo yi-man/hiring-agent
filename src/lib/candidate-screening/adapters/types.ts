@@ -11,6 +11,11 @@ export type RawCandidateBatch = {
 export type SearchOptions = {
   maxCandidates: number;
   batchSize: number;
+  /**
+   * Lets a workflow session run short-resume detail enrichment as its own
+   * target-aware browser step. Direct callers retain the legacy behavior.
+   */
+  deferEnrichment?: boolean;
 };
 
 export type StoredCandidateRef = {

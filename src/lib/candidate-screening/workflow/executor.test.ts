@@ -36,6 +36,16 @@ const rawCandidate: RawCandidate = {
   profileUrl: '/employer/resumes/1',
 };
 
+const shortResumeCandidate: RawCandidate = {
+  ...rawCandidate,
+  resumeText: 'React',
+};
+
+const enrichedCandidate: RawCandidate = {
+  ...shortResumeCandidate,
+  resumeText: 'React TypeScript browser automation accessible UI testing',
+};
+
 const oldTarget: TargetDescriptor = {
   kind: 'button',
   role: 'button',
@@ -57,6 +67,14 @@ const repairedComposerTarget: TargetDescriptor = {
   name: '确认发送',
   exact: true,
   stableAttrs: { testId: 'candidate-send-submit' },
+};
+
+const repairedDetailTarget: TargetDescriptor = {
+  kind: 'container',
+  name: '候选人简历详情',
+  exact: true,
+  stableAttrs: { testId: 'candidate-resume-detail' },
+  scope: { kind: 'page' },
 };
 
 const repairedListSnapshot: StructuredDomSnapshot = {
@@ -122,6 +140,48 @@ const repairedComposerSnapshot: StructuredDomSnapshot = {
           accessibleName: '确认发送',
           name: 'candidate-send-submit',
           testId: 'candidate-send-submit',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+    },
+  ],
+  links: [],
+  textBlocks: [],
+};
+
+const repairedDetailSnapshot: StructuredDomSnapshot = {
+  url: 'http://localhost:6183/employer/resumes/1',
+  title: '候选人详情',
+  pageState: 'list',
+  headings: [
+    {
+      tag: 'h1',
+      text: '候选人简历详情',
+      testId: 'candidate-resume-detail',
+      visible: true,
+      enabled: true,
+      editable: false,
+    },
+  ],
+  forms: [
+    {
+      name: '候选人操作',
+      fields: [],
+      buttons: [
+        {
+          tag: 'button',
+          role: 'button',
+          accessibleName: '打招呼',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+        {
+          tag: 'button',
+          role: 'button',
+          accessibleName: '收藏',
           visible: true,
           enabled: true,
           editable: false,
@@ -309,7 +369,7 @@ describe('CandidateScreeningWorkflowSession', () => {
     );
     expect(dependencies.adapter.searchCandidates).toHaveBeenCalledWith(
       searchPlan,
-      { maxCandidates: 1, batchSize: 1 },
+      { maxCandidates: 1, batchSize: 1, deferEnrichment: true },
       expect.objectContaining({
         targets: expect.objectContaining({ searchSubmit: oldTarget }),
       }),
@@ -349,6 +409,82 @@ describe('CandidateScreeningWorkflowSession', () => {
     expect(dependencies.createExploredSkill).not.toHaveBeenCalled();
     expect(dependencies.getActiveSkill).toHaveBeenCalledTimes(1);
     expect(session.skill).toEqual(skill);
+  });
+
+  it('defers a short resume to enrich_candidate, repairs a drifted detail target once, and yields the enriched candidate', async () => {
+    const skill = makeSkill();
+    const dependencies = makeDependencies({ getActiveSkill: jest.fn().mockResolvedValue(skill) });
+    const oldDetailTarget = workflowTarget(skill, 'enrich_candidate', 'detailContent');
+    dependencies.adapter.searchCandidates.mockImplementationOnce(() =>
+      batches({ candidates: [shortResumeCandidate] }),
+    );
+    dependencies.adapter.enrichCandidate
+      .mockRejectedValueOnce(
+        new CandidateAdapterTargetError({
+          result: {
+            success: false,
+            error: `not_found_target: ${oldDetailTarget.name}`,
+          },
+          target: oldDetailTarget,
+          targetKey: 'detailContent',
+        }),
+      )
+      .mockResolvedValueOnce(enrichedCandidate);
+    dependencies.executor.snapshotStructured.mockResolvedValue(repairedDetailSnapshot);
+    dependencies.executor.resolveTarget.mockResolvedValue(uniqueTargetReport(repairedDetailTarget));
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    const result = await collectBatches(
+      session.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }),
+    );
+
+    expect(result).toEqual([{ candidates: [enrichedCandidate] }]);
+    expect(dependencies.adapter.searchCandidates).toHaveBeenCalledWith(
+      searchPlan,
+      { maxCandidates: 1, batchSize: 1, deferEnrichment: true },
+      expect.objectContaining({
+        targets: expect.objectContaining({ searchSubmit: oldTarget }),
+      }),
+    );
+    expect(dependencies.createNextSkillVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousSkill: expect.objectContaining({ id: 'screen-v1' }),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'enrich_candidate',
+            params: expect.objectContaining({
+              targets: expect.objectContaining({
+                detailContent: expect.objectContaining({
+                  name: repairedDetailTarget.name,
+                  stableAttrs: expect.objectContaining(repairedDetailTarget.stableAttrs),
+                }),
+              }),
+            }),
+          }),
+        ]),
+        meta: expect.objectContaining({
+          failed_step_id: 'enrich_candidate',
+          repaired_from_skill_id: 'screen-v1',
+        }),
+      }),
+    );
+    expect(dependencies.executor.resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: repairedDetailTarget.name,
+        stableAttrs: expect.objectContaining(repairedDetailTarget.stableAttrs),
+      }),
+      expect.objectContaining({ action: 'wait_for_text' }),
+    );
+    expect(dependencies.adapter.enrichCandidate).toHaveBeenCalledTimes(2);
+    expect(dependencies.adapter.enrichCandidate).toHaveBeenNthCalledWith(
+      2,
+      shortResumeCandidate,
+      expect.objectContaining({
+        targets: expect.objectContaining({
+          detailContent: expect.objectContaining({ name: repairedDetailTarget.name }),
+        }),
+      }),
+    );
   });
 
   it('repairs one unique failed target, persists v2, and retries the step exactly once', async () => {
