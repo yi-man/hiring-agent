@@ -280,6 +280,10 @@ describe('JD pages', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         status: 202,
         json: async () => ({
           run: {
@@ -332,6 +336,108 @@ describe('JD pages', () => {
     expectReturnContext(pushed, '/jd-generator/jd-1', '返回 JD');
   });
 
+  it('shows recent regenerate runs with execution page links on the detail sidebar', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: sampleJobDescription }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          runs: [
+            {
+              id: 'create-run-1',
+              userId: 'u1',
+              jobDescriptionId: 'jd-1',
+              department: '技术部',
+              position: '前端工程师',
+              positionDescription: '负责增长业务体验建设',
+              salaryRange: '30-50K',
+              workLocations: ['上海张江'],
+              tone: 'tech',
+              status: 'success',
+              currentStage: 'completed',
+              errorMessage: null,
+              startedAt: '2026-07-13T07:00:00.000Z',
+              finishedAt: '2026-07-13T07:01:00.000Z',
+              createdAt: '2026-07-13T07:00:00.000Z',
+              updatedAt: '2026-07-13T07:01:00.000Z',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          runs: [
+            {
+              id: 'regen-run-2',
+              userId: 'u1',
+              jobDescriptionId: 'jd-1',
+              tone: 'tech',
+              extraInstruction: '强调协作',
+              currentJd: sampleJobDescription.content,
+              status: 'running',
+              currentStage: 'llm_generation',
+              errorMessage: null,
+              startedAt: '2026-07-13T09:00:00.000Z',
+              finishedAt: null,
+              createdAt: '2026-07-13T09:00:00.000Z',
+              updatedAt: '2026-07-13T09:00:30.000Z',
+            },
+            {
+              id: 'regen-run-1',
+              userId: 'u1',
+              jobDescriptionId: 'jd-1',
+              tone: 'tech',
+              extraInstruction: '强调 AI',
+              currentJd: sampleJobDescription.content,
+              status: 'success',
+              currentStage: 'completed',
+              errorMessage: null,
+              startedAt: '2026-07-13T08:00:00.000Z',
+              finishedAt: '2026-07-13T08:01:00.000Z',
+              createdAt: '2026-07-13T08:00:00.000Z',
+              updatedAt: '2026-07-13T08:01:00.000Z',
+            },
+          ],
+        }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    expect(await screen.findByText('重新生成记录')).toBeInTheDocument();
+    expect(screen.getByText('创建记录')).toBeInTheDocument();
+    expect(screen.getByText('生成中')).toBeInTheDocument();
+    expect(screen.getAllByText('已完成').length).toBeGreaterThanOrEqual(1);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/jd/jd-1/regenerate-runs?limit=3');
+    });
+
+    const regenLinks = screen.getAllByRole('link', { name: '查看执行页' });
+    const regenHrefs = regenLinks
+      .map((link) => link.getAttribute('href') ?? '')
+      .filter((href) => href.includes('/regenerate-runs/'));
+    expect(regenHrefs).toHaveLength(2);
+    expect(parsedHref(regenHrefs[0]!).pathname).toBe(
+      '/jd-generator/jd-1/regenerate-runs/regen-run-2',
+    );
+    expectReturnContext(regenHrefs[0]!, '/jd-generator/jd-1', '返回 JD');
+    expect(parsedHref(regenHrefs[1]!).pathname).toBe(
+      '/jd-generator/jd-1/regenerate-runs/regen-run-1',
+    );
+  });
+
   it('JD detail returns to the supplied source context', async () => {
     mockSearchParams = new URLSearchParams('returnTo=/&returnLabel=返回工作台');
     (global.fetch as jest.Mock)
@@ -366,6 +472,14 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
       })
       .mockResolvedValueOnce({
         ok: true,

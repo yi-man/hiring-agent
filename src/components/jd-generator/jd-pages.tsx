@@ -28,6 +28,7 @@ import {
   fetchJobDescriptionCreateRuns,
   fetchJobDescription,
   fetchJobDescriptionPublishTasks,
+  fetchJobDescriptionRegenerateRuns,
   fetchJobDescriptions,
   publishJobDescriptionResource,
   startJobDescriptionCreateRun,
@@ -35,6 +36,7 @@ import {
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
+import type { JobDescriptionRegenerateRunDto } from '@/lib/jd/regenerate-run-repo';
 import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
 import { JD_STATUSES } from '@/types';
 import {
@@ -967,17 +969,19 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [publishTasks, setPublishTasks] = useState<PublishTaskDto[]>([]);
   const [publishTrace, setPublishTrace] = useState<PublishTaskResult['trace'] | null>(null);
   const [createRuns, setCreateRuns] = useState<JobDescriptionCreateRunDto[]>([]);
+  const [regenerateRuns, setRegenerateRuns] = useState<JobDescriptionRegenerateRunDto[]>([]);
   const [error, setError] = useState('');
 
   async function loadJobDescription() {
     setIsLoading(true);
     setError('');
     try {
-      const [data, tasks, profile, creationRuns] = await Promise.all([
+      const [data, tasks, profile, creationRuns, regenerationRuns] = await Promise.all([
         fetchJobDescription(jobDescriptionId),
         fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
         fetchCompanyProfile().catch(() => null),
         fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
+        fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
       ]);
       setJobDescription(data);
       setForm(jdToForm(data.content));
@@ -985,6 +989,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setPublishTasks(tasks);
       setPublishTrace(tasks.find((task) => task.trace)?.trace ?? null);
       setCreateRuns(creationRuns);
+      setRegenerateRuns(regenerationRuns);
       setCompanyProfile(profile);
       setPublishCompany(profile?.name ?? '');
       setPublishSalary(data.salaryRange ?? '');
@@ -1357,6 +1362,43 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     <Eye className="h-3.5 w-3.5" aria-hidden />
                     查看执行页
                   </Link>
+                </div>
+              </div>
+            ) : null}
+
+            {regenerateRuns.length > 0 ? (
+              <div className="border-border space-y-2 border-t pt-3">
+                <div className="flex items-center gap-2">
+                  <RefreshCw className="text-muted-foreground h-4 w-4" aria-hidden />
+                  <div className="text-foreground text-sm font-medium">重新生成记录</div>
+                </div>
+                <div className="space-y-2">
+                  {regenerateRuns.map((run) => (
+                    <div
+                      key={run.id}
+                      className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-foreground font-medium">
+                          {formatUpdatedAt(run.updatedAt)}
+                        </span>
+                        <CreateRunStatusChip status={run.status} />
+                      </div>
+                      {run.errorMessage ? (
+                        <p className="text-destructive mt-1 break-words">{run.errorMessage}</p>
+                      ) : null}
+                      <Link
+                        className="text-primary mt-2 inline-flex items-center gap-1 font-medium hover:underline"
+                        href={withReturnTarget(
+                          `/jd-generator/${jobDescription.id}/regenerate-runs/${run.id}`,
+                          detailReturnTarget,
+                        )}
+                      >
+                        <Eye className="h-3.5 w-3.5" aria-hidden />
+                        查看执行页
+                      </Link>
+                    </div>
+                  ))}
                 </div>
               </div>
             ) : null}

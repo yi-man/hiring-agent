@@ -160,6 +160,25 @@ export async function startJobDescriptionRegenerateRun(
   return data.run;
 }
 
+export async function fetchJobDescriptionRegenerateRuns(
+  jobDescriptionId: string,
+  options: { limit?: number } = {},
+): Promise<JobDescriptionRegenerateRunDto[]> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) {
+    params.set('limit', String(options.limit));
+  }
+  const query = params.toString();
+  const response = await fetch(
+    `/api/jd/${jobDescriptionId}/regenerate-runs${query ? `?${query}` : ''}`,
+  );
+  const data = await readJson<{ runs?: JobDescriptionRegenerateRunDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.runs)) {
+    throw new Error(data.error || '加载 JD 重新生成任务失败');
+  }
+  return data.runs;
+}
+
 export async function fetchJobDescriptionRegenerateRunWithEvents(
   jobDescriptionId: string,
   runId: string,

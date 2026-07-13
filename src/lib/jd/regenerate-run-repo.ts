@@ -223,6 +223,22 @@ export async function getJobDescriptionRegenerateRun(params: {
   return row ? mapRun(row) : null;
 }
 
+export async function listJobDescriptionRegenerateRuns(params: {
+  userId: string;
+  jobDescriptionId: string;
+  limit?: number;
+}): Promise<JobDescriptionRegenerateRunDto[]> {
+  const rows = await prisma.jobDescriptionRegenerateRun.findMany({
+    where: {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: clampLimit(params.limit),
+  });
+  return rows.map(mapRun);
+}
+
 export async function updateJobDescriptionRegenerateRun(params: {
   userId: string;
   runId: string;
