@@ -6,17 +6,17 @@
 
 ## Decisions (locked)
 
-| Topic                  | Choice                                                                                                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phase 1 scope          | **Evaluate only** — fixed JD (+ optional company context) → assert score ranges, `rewrite_required`, optional issue keywords                                  |
-| Out of scope (phase 1) | `generate`, `improve`, `continue_generate` / regenerate closed loop, `pickBetter`, UI workbench                                                               |
-| Layout                 | Mirror `src/lib/validation/resume-scoring/` under `src/lib/validation/jd-evaluate/`                                                                           |
-| Sample size            | **16** samples — **4 anchors × 4 samples**                                                                                                                    |
-| Anchors                | Quality tiers of the **JD draft**, not job-family categories: `high_quality` / `acceptable` / `problematic` / `fabricated_risk`                               |
-| Runtime                | Dataset module + CLI (`dataset` list/show/export) always; optional **`run`** true-LLM regression (requires Key), **not** required in default CI               |
-| Pass criteria          | Per-dimension score in expected range; `rewrite_required` exact match; optional `issueMustInclude` substring hits on concatenated issues/evidence/suggestions |
-| Versioning             | `datasetVersion` in JSON + report `promptVersion` from `PROMPT_VERSION` (`jd_v3.3` today)                                                                     |
-| Company context        | Samples may include `companyContext: string \| null`; runner passes it into evaluate the same way production does                                             |
+| Topic                  | Choice                                                                                                                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 scope          | **Evaluate only** — fixed JD (+ optional company context) → assert score ranges, `rewrite_required`, optional issue keywords                                            |
+| Out of scope (phase 1) | `generate`, `improve`, `continue_generate` / regenerate closed loop, `pickBetter`, UI workbench                                                                         |
+| Layout                 | Mirror `src/lib/validation/resume-scoring/` under `src/lib/validation/jd-evaluate/`                                                                                     |
+| Sample size            | **16** samples — **4 anchors × 4 samples**                                                                                                                              |
+| Anchors                | Quality tiers of the **JD draft**, not job-family categories: `high_quality` / `acceptable` / `problematic` / `fabricated_risk`                                         |
+| Runtime                | Dataset module + CLI (`dataset` list/show/export) always; optional **`run`** true-LLM regression (requires Key), **not** required in default CI                         |
+| Pass criteria          | Per-dimension score in expected range; `rewrite_required` exact match **or `null` to skip** (LLM variance on strong drafts); optional `issueMustInclude` substring hits |
+| Versioning             | `datasetVersion` in JSON + report `promptVersion` from `PROMPT_VERSION` (`jd_v3.3` today)                                                                               |
+| Company context        | Samples may include `companyContext: string \| null`; runner passes it into evaluate the same way production does                                                       |
 
 ## Problem
 
@@ -75,7 +75,7 @@ type JdEvaluateGoldenSample = {
       attractiveness: ScoreRange;
       specificity: ScoreRange;
     };
-    rewriteRequired: boolean;
+    rewriteRequired: boolean | null; // null = do not assert (LLM variance)
     /** Optional: each string must appear in joined issues+evidence+suggestions (case-sensitive substring) */
     issueMustInclude?: string[];
   };
@@ -117,13 +117,13 @@ Package script (mirror resume):
 
 CLI:
 
-| Command                   | Behavior                                                                                                                                                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dataset`                 | Overview: version, counts per anchor                                                                                                                                     |
-| `dataset show <anchor>`   | Print samples for one anchor                                                                                                                                             |
-| `dataset export <anchor>` | JSON dump for external / notebook use                                                                                                                                    |
-| `run` / `run <anchor>`    | Call real evaluate LLM; print pass/fail report (needs embedding/LLM env as production evaluate does — **company context is passed through**, no RAG retrieval in runner) |
-| `usage`                   | Help text                                                                                                                                                                |
+| Command                   | Behavior                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataset`                 | Overview: version, counts per anchor                                                                                                                          |
+| `dataset show <anchor>`   | Print samples for one anchor                                                                                                                                  |
+| `dataset export <anchor>` | JSON dump for external / notebook use                                                                                                                         |
+| `run` / `run <anchor>`    | Call real evaluate LLM; print pass/fail report (needs LLM API env only — **company context is passed through as fixture text**, no RAG / embedding in runner) |
+| `usage`                   | Help text                                                                                                                                                     |
 
 Default CI: only Jest structural tests on the dataset module (no live LLM). Document that `run` is manual / optional workflow when changing `jd-agent.evaluate` or model.
 
