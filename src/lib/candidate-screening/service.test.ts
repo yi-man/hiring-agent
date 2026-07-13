@@ -92,6 +92,7 @@ function makeRun(overrides: Partial<CandidateScreeningRunDto> = {}): CandidateSc
     status: 'pending',
     currentStage: null,
     skillId: null,
+    workflow: null,
     currentWorkflowStep: null,
     searchPlan: null,
     evaluationSchema: null,

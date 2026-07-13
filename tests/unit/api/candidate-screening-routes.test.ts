@@ -150,6 +150,7 @@ const sampleRun: CandidateScreeningRunDto = {
   status: 'running',
   currentStage: 'evaluating',
   skillId: 'screen-candidates-v2',
+  workflow: { name: 'screen_candidates', version: 2 },
   currentWorkflowStep: 'chat_candidate',
   searchPlan: null,
   evaluationSchema: null,
@@ -532,6 +533,7 @@ describe('candidate screening API routes', () => {
     expect(body.run).toEqual(sampleRun);
     expect(body.run).toMatchObject({
       skillId: 'screen-candidates-v2',
+      workflow: { name: 'screen_candidates', version: 2 },
       currentWorkflowStep: 'chat_candidate',
     });
     expect(body.events).toEqual([sampleRunEvent]);

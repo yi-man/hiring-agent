@@ -632,13 +632,16 @@ export function CandidateScreeningRunLog({
               <GitBranch className="text-muted-foreground h-4 w-4" aria-hidden />
               筛选浏览器 Workflow
             </div>
-            {run.skillId ? (
+            {run.skillId && run.workflow ? (
               <Link
                 href={`/workflows/${run.skillId}`}
                 className="group flex items-center justify-between gap-3"
                 aria-label="查看 Workflow 详情"
               >
                 <div>
+                  <div className="text-foreground text-sm font-medium">
+                    {run.workflow.name} · v{run.workflow.version}
+                  </div>
                   <div className="text-foreground text-sm font-medium group-hover:underline">
                     查看 Workflow 详情
                   </div>
@@ -649,6 +652,11 @@ export function CandidateScreeningRunLog({
                 </div>
                 <ArrowRight className="text-muted-foreground h-4 w-4" aria-hidden />
               </Link>
+            ) : run.skillId ? (
+              <div>
+                <p className="text-muted-foreground text-sm">关联的 Workflow 已不可用</p>
+                <div className="text-muted-foreground mt-1 text-xs">Skill ID: {run.skillId}</div>
+              </div>
             ) : (
               <p className="text-muted-foreground text-sm">历史任务未关联 Workflow</p>
             )}

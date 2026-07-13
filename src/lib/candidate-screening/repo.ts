@@ -196,6 +196,7 @@ export type CandidateScreeningRunDto = {
   status: CandidateScreeningRunStatus;
   currentStage: CandidateScreeningRunStage | null;
   skillId: string | null;
+  workflow: CandidateScreeningWorkflowDto | null;
   currentWorkflowStep: string | null;
   searchPlan: SearchPlan | null;
   evaluationSchema: EvaluationSchema | null;
@@ -205,6 +206,11 @@ export type CandidateScreeningRunDto = {
   finishedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CandidateScreeningWorkflowDto = {
+  name: string;
+  version: number;
 };
 
 export type CandidateScreeningRunEventDto = {
@@ -620,7 +626,10 @@ function clampEventLimit(value: number | undefined): number {
   return Math.max(1, Math.min(MAX_EVENT_LIMIT, Math.trunc(value)));
 }
 
-function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
+function mapRun(
+  row: CandidateScreeningRunRecord,
+  workflow: CandidateScreeningWorkflowDto | null = null,
+): CandidateScreeningRunDto {
   return {
     id: row.id,
     userId: row.userId,
@@ -630,6 +639,7 @@ function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
     status: row.status as CandidateScreeningRunStatus,
     currentStage: row.currentStage as CandidateScreeningRunStage | null,
     skillId: row.skillId,
+    workflow,
     currentWorkflowStep: row.currentWorkflowStep,
     searchPlan: row.searchPlan ? (row.searchPlan as SearchPlan) : null,
     evaluationSchema: row.evaluationSchema ? (row.evaluationSchema as EvaluationSchema) : null,
@@ -639,6 +649,24 @@ function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
     finishedAt: iso(row.finishedAt),
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
+  };
+}
+
+async function hydrateRunWorkflow(
+  run: CandidateScreeningRunDto,
+): Promise<CandidateScreeningRunDto> {
+  if (!run.skillId) {
+    return run;
+  }
+
+  const workflow = await prisma.publishSkill.findUnique({
+    where: { id: run.skillId },
+    select: { name: true, version: true },
+  });
+
+  return {
+    ...run,
+    workflow: workflow ? { name: workflow.name, version: workflow.version } : null,
   };
 }
 
@@ -922,7 +950,7 @@ export async function createCandidateScreeningRun(
   const row = await prisma.candidateScreeningRun.create({
     data,
   });
-  return mapRun(row);
+  return hydrateRunWorkflow(mapRun(row));
 }
 
 export async function listCandidateScreeningRuns(params: {
@@ -935,7 +963,7 @@ export async function listCandidateScreeningRuns(params: {
     orderBy: { createdAt: 'desc' },
     take: params.limit,
   });
-  return rows.map(mapRun);
+  return Promise.all(rows.map((row) => hydrateRunWorkflow(mapRun(row))));
 }
 
 export async function getCandidateScreeningRun(params: {
@@ -945,7 +973,7 @@ export async function getCandidateScreeningRun(params: {
   const row = await prisma.candidateScreeningRun.findFirst({
     where: { id: params.runId, userId: params.userId },
   });
-  return row ? mapRun(row) : null;
+  return row ? hydrateRunWorkflow(mapRun(row)) : null;
 }
 
 export async function updateCandidateScreeningRun(

@@ -7,6 +7,7 @@ import {
   createCandidateScreeningRun,
   createOrReuseCandidateResume,
   findCandidateResumeByHash,
+  getCandidateScreeningRun,
   getCandidateTrackingOverview,
   listCandidateInterviewRecords,
   listCandidateResumeLibrary,
@@ -46,6 +47,9 @@ type PrismaMock = {
   candidateScreeningRunEvent: {
     create: jest.Mock;
     findMany: jest.Mock;
+  };
+  publishSkill: {
+    findUnique: jest.Mock;
   };
   candidateScreeningResult: {
     create: jest.Mock;
@@ -92,6 +96,9 @@ jest.mock('@/lib/prisma', () => ({
     candidateScreeningRunEvent: {
       create: jest.fn(),
       findMany: jest.fn(),
+    },
+    publishSkill: {
+      findUnique: jest.fn(),
     },
     candidateScreeningResult: {
       create: jest.fn(),
@@ -237,6 +244,7 @@ describe('candidate screening repository', () => {
     prismaMock.candidateScreeningRun.updateMany.mockReset();
     prismaMock.candidateScreeningRunEvent.create.mockReset();
     prismaMock.candidateScreeningRunEvent.findMany.mockReset();
+    prismaMock.publishSkill.findUnique.mockReset();
     prismaMock.candidateScreeningResult.create.mockReset();
     prismaMock.candidateScreeningResult.findFirst.mockReset();
     prismaMock.candidateScreeningResult.findMany.mockReset();
@@ -358,6 +366,79 @@ describe('candidate screening repository', () => {
         currentWorkflowStep: 'search_candidates',
       }),
     );
+  });
+
+  it('returns the exact persisted workflow metadata for a linked screening run', async () => {
+    prismaMock.candidateScreeningRun.findFirst.mockResolvedValueOnce({
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'running',
+      currentStage: 'searching_live',
+      skillId: 'screen-candidates-v2',
+      currentWorkflowStep: 'search_candidates',
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt,
+      updatedAt,
+    });
+    prismaMock.publishSkill.findUnique.mockResolvedValueOnce({
+      id: 'screen-candidates-v2',
+      name: 'screen_candidates',
+      version: 2,
+    });
+
+    const run = await getCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+    });
+
+    expect(run).toEqual(
+      expect.objectContaining({
+        skillId: 'screen-candidates-v2',
+        workflow: { name: 'screen_candidates', version: 2 },
+      }),
+    );
+    expect(prismaMock.publishSkill.findUnique).toHaveBeenCalledWith({
+      where: { id: 'screen-candidates-v2' },
+      select: { name: true, version: true },
+    });
+  });
+
+  it('keeps a missing linked workflow nullable for compatibility', async () => {
+    prismaMock.candidateScreeningRun.findFirst.mockResolvedValueOnce({
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'success',
+      currentStage: 'finalizing',
+      skillId: 'removed-workflow',
+      currentWorkflowStep: null,
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt,
+      updatedAt,
+    });
+    prismaMock.publishSkill.findUnique.mockResolvedValueOnce(null);
+
+    const run = await getCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+    });
+
+    expect(run).toEqual(expect.objectContaining({ skillId: 'removed-workflow', workflow: null }));
   });
 
   it('updates workflow fields only when they are provided', async () => {

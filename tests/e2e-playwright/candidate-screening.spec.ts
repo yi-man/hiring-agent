@@ -213,6 +213,9 @@ test.describe('candidate screening UI', () => {
                 mode: 'execution',
                 status: 'pending',
                 currentStage: 'planning',
+                skillId: null,
+                workflow: null,
+                currentWorkflowStep: null,
                 searchPlan: null,
                 evaluationSchema: null,
                 stats: null,
@@ -239,8 +242,9 @@ test.describe('candidate screening UI', () => {
               mode: 'execution',
               status: 'success',
               currentStage: 'finalizing',
-              skillId: 'screen-candidates-v1',
-              currentWorkflowStep: 'search_candidates',
+              skillId: 'screen-candidates-v2',
+              workflow: { name: 'screen_candidates', version: 2 },
+              currentWorkflowStep: null,
               searchPlan: null,
               evaluationSchema: null,
               stats: {
@@ -275,6 +279,7 @@ test.describe('candidate screening UI', () => {
               status: 'success',
               currentStage: 'finalizing',
               skillId: null,
+              workflow: null,
               currentWorkflowStep: null,
               searchPlan: null,
               evaluationSchema: null,
@@ -323,10 +328,11 @@ test.describe('candidate screening UI', () => {
       );
       await expect(page.getByText('筛选执行日志')).toBeVisible();
       await expect(page.getByText('筛选浏览器 Workflow')).toBeVisible();
-      await expect(page.getByText('当前步骤：search_candidates')).toBeVisible();
+      await expect(page.getByText('screen_candidates · v2')).toBeVisible();
+      await expect(page.getByText('当前步骤：等待浏览器操作')).toBeVisible();
       await expect(page.getByRole('link', { name: '查看 Workflow 详情' })).toHaveAttribute(
         'href',
-        '/workflows/screen-candidates-v1',
+        '/workflows/screen-candidates-v2',
       );
       await expect(page.getByRole('button', { name: '全部候选人' })).toHaveAttribute(
         'href',
