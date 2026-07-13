@@ -15,6 +15,7 @@ import {
   replaceCandidateResumeChunks,
   searchCandidateResumeChunks,
   updateCandidateInterviewProgress,
+  updateCandidateScreeningRun,
   upsertCandidateScreeningResult,
   upsertCandidateWithIdentity,
 } from './repo';
@@ -357,6 +358,32 @@ describe('candidate screening repository', () => {
         currentWorkflowStep: 'search_candidates',
       }),
     );
+  });
+
+  it('updates workflow fields only when they are provided', async () => {
+    prismaMock.candidateScreeningRun.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    await updateCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+      skillId: 'screen-candidates-v1',
+      currentWorkflowStep: 'search_candidates',
+    });
+    await updateCandidateScreeningRun({ userId: 'u1', runId: 'run-1' });
+
+    expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'run-1', userId: 'u1' },
+      data: {
+        skillId: 'screen-candidates-v1',
+        currentWorkflowStep: 'search_candidates',
+      },
+    });
+    expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'run-1', userId: 'u1' },
+      data: {},
+    });
   });
 
   it('creates and lists run events scoped to user and run', async () => {

@@ -559,8 +559,8 @@ model CandidateScreeningRun {
   mode             String                       @default("dry_run")
   status           String                       @default("pending")
   currentStage     String?                      @map("current_stage")
-  skillId             String?                      @map("skill_id")
-  currentWorkflowStep String?                   @map("current_workflow_step")
+  skillId          String?                      @map("skill_id")
+  currentWorkflowStep String?                      @map("current_workflow_step")
   searchPlan       Json?                        @map("search_plan")
   evaluationSchema Json?                        @map("evaluation_schema")
   stats            Json?
