@@ -320,12 +320,20 @@ class BossLikeBrowserConversationReplyAdapter implements CandidateSourceAdapter 
     private readonly message: UnreadCandidateMessage,
   ) {}
 
+  getBrowserExecutor() {
+    return this.owner.getBrowserExecutor();
+  }
+
   async loginIfNeeded(): Promise<void> {
     await this.owner.loginIfNeeded();
   }
 
   async *searchCandidates() {
     return;
+  }
+
+  async enrichCandidate(candidate: RawCandidate): Promise<RawCandidate> {
+    return candidate;
   }
 
   async collectCandidate() {

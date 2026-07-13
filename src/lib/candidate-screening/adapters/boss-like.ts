@@ -5,8 +5,10 @@ import type {
 } from '@/lib/browser/types';
 import type { RawCandidate } from '../ingest';
 import type { CandidateActionPlan, CandidateScreeningPlatform, SearchPlan } from '../types';
+import type { BossLikeScreeningTargets } from '../workflow/types';
 import type {
   ActionExecutionResult,
+  CandidateBrowserActionOptions,
   CandidateSourceAdapter,
   RawCandidateBatch,
   SearchOptions,
@@ -219,7 +221,11 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     };
   }
 
-  async loginIfNeeded(): Promise<void> {
+  getBrowserExecutor(): BrowserExecutor {
+    return this.executor;
+  }
+
+  async loginIfNeeded(options?: CandidateBrowserActionOptions): Promise<void> {
     await requireSuccessfulStep(this.executor.navigate(this.resumeListUrl()), 'open resume list');
 
     const snapshot = (await this.executor.snapshot?.()) ?? null;
@@ -231,14 +237,17 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     if (!isLoginPage) return;
 
     await requireSuccessfulStep(
-      this.executor.fill('用户名', this.credentials.username),
+      this.executor.fill(this.targetFor(options, 'username', '用户名'), this.credentials.username),
       'fill username',
     );
     await requireSuccessfulStep(
-      this.executor.fill('密码', this.credentials.password),
+      this.executor.fill(this.targetFor(options, 'password', '密码'), this.credentials.password),
       'fill password',
     );
-    await requireSuccessfulStep(this.executor.click('登录'), 'submit login');
+    await requireSuccessfulStep(
+      this.executor.click(this.targetFor(options, 'loginButton', '登录')),
+      'submit login',
+    );
     await requireSuccessfulStep(
       this.executor.waitForUrl(this.resumeListUrl()),
       'wait for resume list',
@@ -248,6 +257,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   async *searchCandidates(
     plan: SearchPlan,
     options: SearchOptions,
+    workflow?: CandidateBrowserActionOptions,
   ): AsyncIterable<RawCandidateBatch> {
     const seen = new Set<string>();
     const keywords = createSearchKeywords(plan);
@@ -260,8 +270,14 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
       if (emittedCount >= maxCandidates) break;
 
       await requireSuccessfulStep(this.executor.navigate(this.resumeListUrl()), 'open resume list');
-      await requireSuccessfulStep(this.executor.fill('搜索候选人', keyword), 'fill search keyword');
-      await requireSuccessfulStep(this.executor.click('搜索'), 'submit candidate search');
+      await requireSuccessfulStep(
+        this.executor.fill(this.targetFor(workflow, 'searchInput', '搜索候选人'), keyword),
+        'fill search keyword',
+      );
+      await requireSuccessfulStep(
+        this.executor.click(this.targetFor(workflow, 'searchSubmit', '搜索')),
+        'submit candidate search',
+      );
       await this.waitForResumeContent();
 
       const html = await this.readRawSnapshotForSearch();
@@ -274,7 +290,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
         if (seen.has(key)) continue;
         seen.add(key);
 
-        const enrichedCandidate = await this.enrichCandidateWhenNeeded(candidate);
+        const enrichedCandidate = await this.enrichCandidate(candidate, workflow);
         batch.push(enrichedCandidate);
         emittedCount += 1;
 
@@ -290,7 +306,36 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     }
   }
 
-  async collectCandidate(candidate: StoredCandidateRef): Promise<ActionExecutionResult> {
+  async enrichCandidate(
+    candidate: RawCandidate,
+    options?: CandidateBrowserActionOptions,
+  ): Promise<RawCandidate> {
+    if (!hasShortResumeText(candidate)) return candidate;
+
+    const profileUrlResolution = this.resolveProfileUrl(candidate.profileUrl);
+    if (!profileUrlResolution.profileUrl) return candidate;
+
+    await requireSuccessfulStep(
+      this.executor.navigate(profileUrlResolution.profileUrl),
+      'open candidate detail',
+    );
+    await this.waitForDetailContent(options);
+    const detailHtml = await this.readRawSnapshotForSearch();
+    const detailCandidates = extractBossLikeCandidatesFromHtml(detailHtml);
+    const detailCandidate =
+      detailCandidates.find(
+        (detail) =>
+          detail.platformCandidateId === candidate.platformCandidateId ||
+          detail.profileUrl === candidate.profileUrl,
+      ) ?? detailCandidates[0];
+
+    return detailCandidate ? mergeCandidateWithDetail(candidate, detailCandidate) : candidate;
+  }
+
+  async collectCandidate(
+    candidate: StoredCandidateRef,
+    options?: CandidateBrowserActionOptions,
+  ): Promise<ActionExecutionResult> {
     const profileUrlResolution = this.resolveProfileUrl(candidate.profileUrl);
     const browserTrace = {
       action: 'collect',
@@ -312,7 +357,10 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
         this.executor.navigate(profileUrlResolution.profileUrl),
         'open candidate profile',
       );
-      await requireSuccessfulStep(this.executor.click('收藏'), 'collect candidate');
+      await requireSuccessfulStep(
+        this.executor.click(this.targetFor(options, 'collectButton', '收藏')),
+        'collect candidate',
+      );
       return { success: true, browserTrace };
     } catch (error) {
       return { success: false, error: asErrorMessage(error), browserTrace };
@@ -322,6 +370,7 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   async chatCandidate(
     candidate: StoredCandidateRef,
     plan: CandidateActionPlan,
+    options?: CandidateBrowserActionOptions,
   ): Promise<ActionExecutionResult> {
     const profileUrlResolution = this.resolveProfileUrl(candidate.profileUrl);
     const message = plan.message?.trim();
@@ -352,9 +401,18 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
         this.executor.navigate(profileUrlResolution.profileUrl),
         'open candidate profile',
       );
-      await requireSuccessfulStep(this.executor.click('打招呼'), 'open chat composer');
-      await requireSuccessfulStep(this.executor.fill('消息', message), 'fill chat message');
-      await requireSuccessfulStep(this.executor.click('发送'), 'send chat message');
+      await requireSuccessfulStep(
+        this.executor.click(this.targetFor(options, 'greetButton', '打招呼')),
+        'open chat composer',
+      );
+      await requireSuccessfulStep(
+        this.executor.fill(this.targetFor(options, 'messageInput', '消息'), message),
+        'fill chat message',
+      );
+      await requireSuccessfulStep(
+        this.executor.click(this.targetFor(options, 'sendButton', '发送')),
+        'send chat message',
+      );
       return { success: true, browserTrace: { ...browserTrace, messageLength: message.length } };
     } catch (error) {
       return { success: false, error: asErrorMessage(error), browserTrace };
@@ -371,6 +429,14 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
 
   private resolveProfileUrl(profileUrl?: string | null): BossLikeProfileUrlResolution {
     return resolveBossLikeProfileUrl(profileUrl, this.baseUrl);
+  }
+
+  private targetFor(
+    options: CandidateBrowserActionOptions | undefined,
+    key: keyof BossLikeScreeningTargets,
+    fallback: string,
+  ) {
+    return options?.targets?.[key] ?? fallback;
   }
 
   private async waitForResumeContent(): Promise<void> {
@@ -404,25 +470,10 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     return html;
   }
 
-  private async enrichCandidateWhenNeeded(candidate: RawCandidate): Promise<RawCandidate> {
-    if (!hasShortResumeText(candidate)) return candidate;
-
-    const profileUrlResolution = this.resolveProfileUrl(candidate.profileUrl);
-    if (!profileUrlResolution.profileUrl) return candidate;
-
-    await requireSuccessfulStep(
-      this.executor.navigate(profileUrlResolution.profileUrl),
-      'open candidate detail',
-    );
-    const detailHtml = await this.readRawSnapshotForSearch();
-    const detailCandidates = extractBossLikeCandidatesFromHtml(detailHtml);
-    const detailCandidate =
-      detailCandidates.find(
-        (detail) =>
-          detail.platformCandidateId === candidate.platformCandidateId ||
-          detail.profileUrl === candidate.profileUrl,
-      ) ?? detailCandidates[0];
-
-    return detailCandidate ? mergeCandidateWithDetail(candidate, detailCandidate) : candidate;
+  private async waitForDetailContent(options?: CandidateBrowserActionOptions): Promise<void> {
+    if (!this.executor.waitForText) return;
+    const target = this.targetFor(options, 'detailContent', '候选人详情');
+    const text = typeof target === 'string' ? target : target.name;
+    await requireSuccessfulStep(this.executor.waitForText(text), 'wait for candidate detail');
   }
 }

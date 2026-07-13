@@ -531,6 +531,62 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
+  it('uses discovered screening targets for search and greeting actions', async () => {
+    const executor = new FakeBrowserExecutor([resumeListFixture, detailFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+    const targets = {
+      searchInput: {
+        kind: 'field' as const,
+        role: 'textbox' as const,
+        name: '人才关键词',
+        exact: true,
+      },
+      searchSubmit: {
+        kind: 'button' as const,
+        role: 'button' as const,
+        name: '开始检索',
+        exact: true,
+      },
+      greetButton: {
+        kind: 'button' as const,
+        role: 'button' as const,
+        name: '立即沟通',
+        exact: true,
+      },
+      messageInput: {
+        kind: 'field' as const,
+        role: 'textbox' as const,
+        name: '沟通内容',
+        exact: true,
+      },
+      sendButton: {
+        kind: 'button' as const,
+        role: 'button' as const,
+        name: '确认发送',
+        exact: true,
+      },
+    };
+
+    await collectAsyncBatches(
+      adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }, { targets }),
+    );
+    await adapter.chatCandidate(
+      { candidateId: '1', displayName: '王小明', profileUrl: '/employer/resumes/1' },
+      chatPlan,
+      { targets },
+    );
+
+    expect(executor.calls).toEqual(
+      expect.arrayContaining([
+        'fill:人才关键词:Java',
+        'click:开始检索',
+        'click:立即沟通',
+        'fill:沟通内容:你好，我们正在招聘高级后端工程师，方便聊聊吗？',
+        'click:确认发送',
+      ]),
+    );
+  });
+
   it('rejects unsafe collect and chat profile URLs without navigating', async () => {
     for (const profileUrl of unsafeProfileUrls) {
       const collectExecutor = new FakeBrowserExecutor();

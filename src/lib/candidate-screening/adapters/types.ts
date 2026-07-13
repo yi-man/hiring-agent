@@ -1,5 +1,7 @@
+import type { BrowserExecutor } from '@/lib/browser/types';
 import type { RawCandidate } from '../ingest';
 import type { CandidateActionPlan, CandidateScreeningPlatform, SearchPlan } from '../types';
+import type { BossLikeScreeningTargets } from '../workflow/types';
 
 export type RawCandidateBatch = {
   candidates: RawCandidate[];
@@ -23,14 +25,31 @@ export type ActionExecutionResult = {
   browserTrace?: Record<string, unknown>;
 };
 
+export type CandidateBrowserActionOptions = {
+  targets?: Partial<BossLikeScreeningTargets>;
+};
+
 export type CandidateSourceAdapter = {
   platform: CandidateScreeningPlatform;
-  loginIfNeeded(): Promise<void>;
-  searchCandidates(plan: SearchPlan, options: SearchOptions): AsyncIterable<RawCandidateBatch>;
-  collectCandidate(candidate: StoredCandidateRef): Promise<ActionExecutionResult>;
+  getBrowserExecutor(): BrowserExecutor;
+  loginIfNeeded(options?: CandidateBrowserActionOptions): Promise<void>;
+  searchCandidates(
+    plan: SearchPlan,
+    options: SearchOptions,
+    workflow?: CandidateBrowserActionOptions,
+  ): AsyncIterable<RawCandidateBatch>;
+  enrichCandidate(
+    candidate: RawCandidate,
+    options?: CandidateBrowserActionOptions,
+  ): Promise<RawCandidate>;
+  collectCandidate(
+    candidate: StoredCandidateRef,
+    options?: CandidateBrowserActionOptions,
+  ): Promise<ActionExecutionResult>;
   chatCandidate(
     candidate: StoredCandidateRef,
     plan: CandidateActionPlan,
+    options?: CandidateBrowserActionOptions,
   ): Promise<ActionExecutionResult>;
   close(): Promise<void>;
 };

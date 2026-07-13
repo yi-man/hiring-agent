@@ -2,6 +2,7 @@
 
 import { handleCandidateMessage } from './service';
 import type { CandidateConversationRepository } from './repo';
+import type { RawCandidate } from '@/lib/candidate-screening/ingest';
 
 const createdAt = '2026-06-30T12:00:00.000Z';
 
@@ -102,8 +103,10 @@ describe('candidate communication service', () => {
     });
     const adapter = {
       platform: 'boss-like' as const,
+      getBrowserExecutor: jest.fn(),
       loginIfNeeded: jest.fn().mockResolvedValue(undefined),
       searchCandidates: jest.fn(),
+      enrichCandidate: jest.fn(async (candidate: RawCandidate) => candidate),
       collectCandidate: jest.fn(),
       chatCandidate,
       close: jest.fn().mockResolvedValue(undefined),
