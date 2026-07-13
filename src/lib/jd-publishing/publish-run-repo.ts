@@ -96,7 +96,7 @@ function normalizeStatus(value: string): JobDescriptionPublishRunStatus {
 }
 
 function normalizeStage(value: string | null): JobDescriptionPublishRunStage | null {
-  if (value === 'publishing' || value === 'completed') return value;
+  if (value === 'queued' || value === 'publishing' || value === 'completed') return value;
   return null;
 }
 

@@ -391,6 +391,12 @@ describe('JD pages', () => {
         }),
       );
     });
+
+    await waitFor(() => {
+      expect(pushMock).toHaveBeenCalledWith(
+        expect.stringContaining('/jd-generator/publish-runs/run-1'),
+      );
+    });
   });
 
   it('keeps the generic publish action enabled for ready-to-publish JD detail', async () => {
