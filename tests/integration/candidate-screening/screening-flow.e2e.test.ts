@@ -6,11 +6,16 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
   assertPostgresReachable,
+  assertRedisReachable,
   ensureIntegrationSchema,
   requireIntegrationEnv,
 } from '../chat/test-env';
 import { BossLikeCandidateSourceAdapter } from '@/lib/candidate-screening/adapters/boss-like';
-import { createCandidateScreeningRun } from '@/lib/candidate-screening/repo';
+import {
+  createCandidateScreeningRun,
+  getCandidateScreeningRun,
+  listCandidateScreeningRunEvents,
+} from '@/lib/candidate-screening/repo';
 import {
   runCandidateScreening,
   type ScreeningRunnerDependencies,
@@ -19,6 +24,7 @@ import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-ex
 import { createJobDescription } from '@/lib/jd/job-description-repo';
 import { prisma } from '@/lib/prisma';
 import type { JD, JobDescriptionDto } from '@/types';
+import type { CreateScreeningRunRequest } from '@/lib/candidate-screening/types';
 
 const embedDocumentsMock = jest.fn();
 const embedQueryMock = jest.fn();
@@ -32,6 +38,7 @@ jest.mock('@/lib/rag/embed', () => ({
 type BossLikeServer = {
   baseUrl: string;
   requests: string[];
+  setSearchButtonLabel: (label: string) => void;
   close: () => Promise<void>;
 };
 
@@ -114,15 +121,17 @@ function renderLoginPage(): string {
 </html>`;
 }
 
-function renderResumeListPage(): string {
+function renderResumeListPage(searchButtonLabel: string): string {
   return `<!doctype html>
 <html lang="zh-CN">
   <head><meta charset="utf-8" /><title>候选人库</title></head>
   <body>
     <main>
       <h1>候选人库</h1>
-      <label>搜索候选人 <input name="keyword" type="search" /></label>
-      <button type="button">搜索</button>
+      <form method="get" action="/employer/resumes">
+        <label>搜索候选人 <input name="keyword" type="search" /></label>
+        <button type="submit">${escapeHtml(searchButtonLabel)}</button>
+      </form>
       <p>简历</p>
       <section>${candidateFixtures().join('\n')}</section>
     </main>
@@ -141,22 +150,30 @@ function renderResumeDetailPage(id: string): string {
     <main>
       <h1>候选人详情</h1>
       ${article}
-      <button type="button">收藏</button>
+      <button type="button" id="collect">收藏</button>
       <button type="button" id="open-chat">打招呼</button>
       <form method="post" action="/employer/resumes/${escapeHtml(id)}/messages">
         <label>消息 <textarea name="message"></textarea></label>
         <button type="submit">发送</button>
       </form>
     </main>
+    <script>
+      document.querySelector('#collect').addEventListener('click', () => {
+        const request = new XMLHttpRequest();
+        request.open('POST', '/employer/resumes/${escapeHtml(id)}/collect', false);
+        request.send();
+      });
+    </script>
   </body>
 </html>`;
 }
 
 async function startBossLikeServer(): Promise<BossLikeServer> {
   const requests: string[] = [];
+  let searchButtonLabel = '搜索';
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-    requests.push(`${request.method ?? 'GET'} ${url.pathname}`);
+    requests.push(`${request.method ?? 'GET'} ${url.pathname}${url.search}`);
     response.setHeader('content-type', 'text/html; charset=utf-8');
 
     if (url.pathname === '/employer/login') {
@@ -164,7 +181,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
       return;
     }
     if (url.pathname === '/employer/resumes') {
-      response.end(renderResumeListPage());
+      response.end(renderResumeListPage(searchButtonLabel));
       return;
     }
     const messageMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)\/messages$/);
@@ -172,6 +189,14 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
       request.resume();
       request.on('end', () => {
         response.end('<!doctype html><html><body>Message sent</body></html>');
+      });
+      return;
+    }
+    const collectMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)\/collect$/);
+    if (request.method === 'POST' && collectMatch) {
+      request.resume();
+      request.on('end', () => {
+        response.end('<!doctype html><html><body>Candidate collected</body></html>');
       });
       return;
     }
@@ -193,6 +218,9 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
+    setSearchButtonLabel: (label) => {
+      searchButtonLabel = label;
+    },
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -250,6 +278,12 @@ async function cleanupIntegrationUser(userId: string): Promise<void> {
   await prisma.user.deleteMany({ where: { id: userId } });
 }
 
+async function cleanupScreeningWorkflows(): Promise<void> {
+  await prisma.publishSkill.deleteMany({
+    where: { name: 'screen_candidates', platform: 'boss-like' },
+  });
+}
+
 const evaluateCandidate: ScreeningRunnerDependencies['evaluateCandidate'] = async ({
   candidateName,
 }) => ({
@@ -276,14 +310,71 @@ const evaluateCandidate: ScreeningRunnerDependencies['evaluateCandidate'] = asyn
   },
 });
 
+const evaluateCandidateWithChatAndCollect: ScreeningRunnerDependencies['evaluateCandidate'] =
+  async (params) => {
+    const evaluation = await evaluateCandidate(params);
+    return {
+      ...evaluation,
+      decision: {
+        ...evaluation.decision,
+        action: params.candidateName.includes('Ada') ? 'chat' : 'collect',
+      },
+    };
+  };
+
+const browserExecutionRequest: CreateScreeningRunRequest = {
+  platform: 'boss-like',
+  mode: 'execution',
+  maxCandidates: 2,
+  batchSize: 2,
+  allowAlreadyContacted: true,
+};
+
+async function createRunAndExecute(params: {
+  userId: string;
+  jobDescription: JobDescriptionDto;
+  bossLike: BossLikeServer;
+  request: CreateScreeningRunRequest;
+  evaluate: ScreeningRunnerDependencies['evaluateCandidate'];
+}) {
+  const run = await createCandidateScreeningRun({
+    userId: params.userId,
+    jobDescriptionId: params.jobDescription.id,
+    platform: params.request.platform,
+    mode: params.request.mode,
+    status: 'pending',
+  });
+
+  await runCandidateScreening({
+    runId: run.id,
+    userId: params.userId,
+    jobDescription: params.jobDescription,
+    request: params.request,
+    dependencies: {
+      createAdapter: () =>
+        new BossLikeCandidateSourceAdapter({
+          baseUrl: params.bossLike.baseUrl,
+          executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+          username: 'admin',
+          password: 'boss123',
+        }),
+      evaluateCandidate: params.evaluate,
+    },
+  });
+
+  return run;
+}
+
 describe('candidate screening integration flow with real postgres and boss-like browser fixture', () => {
   beforeAll(async () => {
     requireIntegrationEnv('POSTGRES_HOST');
     requireIntegrationEnv('POSTGRES_PORT');
     requireIntegrationEnv('POSTGRES_USER');
     requireIntegrationEnv('POSTGRES_DATABASE');
+    requireIntegrationEnv('REDIS_URL');
     await ensureIntegrationSchema();
     await assertPostgresReachable();
+    await assertRedisReachable();
   }, 60000);
 
   beforeEach(() => {
@@ -419,6 +510,153 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
     } finally {
       await cleanupIntegrationUser(userId);
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('explores and persists screen_candidates v1, then reuses it with browser action traces', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+
+    try {
+      await cleanupScreeningWorkflows();
+      const jobDescription = await createPublishedJobDescription(userId);
+      const firstRun = await createRunAndExecute({
+        userId,
+        jobDescription,
+        bossLike,
+        request: browserExecutionRequest,
+        evaluate: evaluateCandidateWithChatAndCollect,
+      });
+      const first = await getCandidateScreeningRun({ userId, runId: firstRun.id });
+      const workflow = await prisma.publishSkill.findUnique({
+        where: { id: first?.skillId ?? '' },
+      });
+      const firstEvents = await listCandidateScreeningRunEvents({ userId, runId: firstRun.id });
+      const firstActionLogs = await prisma.candidateActionLog.findMany({
+        where: { userId, runId: firstRun.id },
+        orderBy: { action: 'asc' },
+      });
+      const firstResults = await prisma.candidateScreeningResult.findMany({
+        where: { userId, runId: firstRun.id },
+      });
+
+      expect(first?.skillId).toBeTruthy();
+      expect(workflow).toEqual(
+        expect.objectContaining({ name: 'screen_candidates', version: 1, isActive: true }),
+      );
+      expect(firstEvents.map((event) => event.message)).toEqual(
+        expect.arrayContaining([
+          'Workflow 探索完成',
+          'Workflow 完成：search_candidates',
+          'Workflow 完成：chat_candidate',
+          'Workflow 完成：collect_candidate',
+        ]),
+      );
+      expect(firstResults).toHaveLength(2);
+      expect(firstActionLogs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            action: 'chat',
+            status: 'success',
+            browserTrace: expect.objectContaining({ action: 'chat' }),
+          }),
+          expect.objectContaining({
+            action: 'collect',
+            status: 'success',
+            browserTrace: expect.objectContaining({ action: 'collect' }),
+          }),
+        ]),
+      );
+      expect(bossLike.requests).toContain('GET /employer/resumes');
+      expect(
+        bossLike.requests.some((request) => request.startsWith('GET /employer/resumes?keyword=')),
+      ).toBe(true);
+      expect(bossLike.requests).toContain(`GET /employer/resumes/${adaResumeId}`);
+      expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
+      expect(bossLike.requests).toContain(`POST /employer/resumes/${graceResumeId}/collect`);
+
+      const secondRun = await createRunAndExecute({
+        userId,
+        jobDescription,
+        bossLike,
+        request: browserExecutionRequest,
+        evaluate: evaluateCandidateWithChatAndCollect,
+      });
+      const second = await getCandidateScreeningRun({ userId, runId: secondRun.id });
+
+      expect(second?.skillId).toBe(first?.skillId);
+      expect(
+        await prisma.publishSkill.count({
+          where: { name: 'screen_candidates', platform: 'boss-like' },
+        }),
+      ).toBe(1);
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('repairs a drifted search target once and records v2', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+
+    try {
+      await cleanupScreeningWorkflows();
+      const jobDescription = await createPublishedJobDescription(userId);
+      const firstRun = await createRunAndExecute({
+        userId,
+        jobDescription,
+        bossLike,
+        request: browserExecutionRequest,
+        evaluate: evaluateCandidateWithChatAndCollect,
+      });
+      const first = await getCandidateScreeningRun({ userId, runId: firstRun.id });
+      const firstWorkflowId = first?.skillId;
+
+      expect(firstWorkflowId).toBeTruthy();
+      bossLike.setSearchButtonLabel('开始检索');
+
+      const run = await createRunAndExecute({
+        userId,
+        jobDescription,
+        bossLike,
+        request: browserExecutionRequest,
+        evaluate: evaluateCandidateWithChatAndCollect,
+      });
+      const persisted = await getCandidateScreeningRun({ userId, runId: run.id });
+      const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
+      const repairedWorkflow = await prisma.publishSkill.findUnique({
+        where: { id: persisted?.skillId ?? '' },
+      });
+      const retryEvents = events.filter(
+        (event) => event.message === 'Workflow 重试：search_candidates',
+      );
+      const retrySuccessEvents = events.filter(
+        (event) => event.message === 'Workflow 重试成功：search_candidates',
+      );
+
+      expect(persisted?.skillId).not.toBe(firstWorkflowId);
+      expect(repairedWorkflow).toEqual(
+        expect.objectContaining({ name: 'screen_candidates', version: 2, isActive: true }),
+      );
+      expect(events.map((event) => event.message)).toEqual(
+        expect.arrayContaining([
+          'Workflow 修复并升级到 v2',
+          'Workflow 重试成功：search_candidates',
+        ]),
+      );
+      expect(retryEvents).toHaveLength(1);
+      expect(retrySuccessEvents).toHaveLength(1);
+      expect(
+        await prisma.publishSkill.count({
+          where: { name: 'screen_candidates', platform: 'boss-like' },
+        }),
+      ).toBe(2);
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
       await bossLike.close();
     }
   }, 120000);
