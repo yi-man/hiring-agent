@@ -73,6 +73,10 @@ const DETAIL_CONTENT_REQUIREMENT: CandidateRequirement = {
   key: 'detailContent',
   patterns: [/候选人详情/, /简历详情/, /候选人/, /简历/],
 };
+const DETAIL_READINESS_REQUIREMENT: CandidateRequirement = {
+  key: 'detailReadiness',
+  patterns: [/^经验见简历(?:\s+经验见简历)?$/],
+};
 const GREET_BUTTON_REQUIREMENT: CandidateRequirement = {
   key: 'greetButton',
   patterns: [/打招呼/, /沟通/, /聊天/, /联系/],
@@ -126,10 +130,11 @@ function candidateScore(candidate: DomCandidate, patterns: RegExp[]): number {
 function selectCandidate(params: {
   candidates: DomCandidate[];
   requirement: CandidateRequirement;
+  includeDisabled?: boolean;
 }): DomCandidate {
   const matches = params.candidates
     .filter((candidate) => candidate.visible)
-    .filter((candidate) => candidate.enabled)
+    .filter((candidate) => params.includeDisabled || candidate.enabled)
     .filter((candidate) => candidateMatches(candidate, params.requirement.patterns))
     .map((candidate) => ({
       candidate,
@@ -199,12 +204,12 @@ function buttonTargetFromCandidate(params: {
   };
 }
 
-function containerTargetFromCandidate(params: {
+function textTargetFromCandidate(params: {
   candidate: DomCandidate;
   fallbackName: string;
 }): TargetDescriptor {
   return {
-    kind: 'container',
+    kind: 'text',
     name: targetNameFromCandidate(params.candidate, params.fallbackName),
     exact: true,
     stableAttrs: stableAttrsFromCandidate(params.candidate),
@@ -328,22 +333,27 @@ function buildDetailTargets(
   snapshot: StructuredDomSnapshot,
 ): Pick<BossLikeScreeningTargets, 'detailContent' | 'greetButton' | 'collectButton'> {
   const defaults = defaultBossLikeScreeningTargets();
-  let detailContent: TargetDescriptor = {
-    kind: 'text',
-    name: '候选人详情',
-    exact: true,
-    scope: { kind: 'page' },
-  };
+  let detailContent = defaults.detailContent;
   try {
-    detailContent = containerTargetFromCandidate({
+    detailContent = textTargetFromCandidate({
       candidate: selectCandidate({
         candidates: [...snapshot.headings, ...snapshot.textBlocks],
-        requirement: DETAIL_CONTENT_REQUIREMENT,
+        requirement: DETAIL_READINESS_REQUIREMENT,
       }),
-      fallbackName: '候选人详情',
+      fallbackName: '经验见简历',
     });
   } catch {
-    // A form-less detail page can still validate the semantic default through resolveTarget.
+    try {
+      detailContent = textTargetFromCandidate({
+        candidate: selectCandidate({
+          candidates: [...snapshot.headings, ...snapshot.textBlocks],
+          requirement: DETAIL_CONTENT_REQUIREMENT,
+        }),
+        fallbackName: '候选人详情',
+      });
+    } catch {
+      // A form-less detail page can still validate the semantic default through resolveTarget.
+    }
   }
 
   let greetButton = defaults.greetButton;
@@ -414,6 +424,7 @@ function buildComposerTargets(
       candidate: selectCandidate({
         candidates: form.buttons,
         requirement: SEND_BUTTON_REQUIREMENT,
+        includeDisabled: true,
       }),
       fallbackName: '发送',
       scope,
@@ -660,6 +671,15 @@ export async function exploreBossLikeScreeningWorkflow(
   }
 
   ensureSuccess('open candidate detail', await executor.navigate(profileUrl));
+  if (
+    !(await executor.check({
+      type: 'dom_exists',
+      selector: 'main article',
+      timeout: 5_000,
+    }))
+  ) {
+    throw new Error('screening_explore_candidate_detail_not_ready');
+  }
   const detailTargets = buildDetailTargets(
     await requireStructuredSnapshot(executor, 'candidate_detail'),
   );
@@ -692,12 +712,8 @@ export async function exploreBossLikeScreeningWorkflow(
     target: composerTargets.messageInput,
     action: 'fill',
   });
-  await requireUniqueTarget({
-    executor,
-    key: 'sendButton',
-    target: composerTargets.sendButton,
-    action: 'click',
-  });
+  // The real composer keeps Send disabled until messageInput is filled. Runtime execution fills it
+  // before clicking Send, so discovery records the button without validating its disabled state.
 
   return buildBossLikeScreeningSkill(
     {

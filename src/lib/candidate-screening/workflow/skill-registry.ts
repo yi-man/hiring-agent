@@ -26,7 +26,7 @@ export function defaultBossLikeScreeningTargets(): BossLikeScreeningTargets {
     loginButton: buttonTarget('登录'),
     searchInput: fieldTarget('搜索候选人'),
     searchSubmit: buttonTarget('搜索'),
-    detailContent: { kind: 'container', name: '候选人详情', exact: true },
+    detailContent: { kind: 'text', name: '候选人详情', exact: true },
     greetButton: buttonTarget('打招呼'),
     messageInput: fieldTarget('消息'),
     sendButton: buttonTarget('发送'),

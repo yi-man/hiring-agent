@@ -48,6 +48,7 @@ function candidate(params: {
   name: string;
   editable?: boolean;
   stableName?: string;
+  enabled?: boolean;
 }) {
   return {
     tag: params.tag,
@@ -57,7 +58,7 @@ function candidate(params: {
     text: params.editable ? undefined : params.name,
     name: params.stableName,
     visible: true,
-    enabled: true,
+    enabled: params.enabled ?? true,
     editable: params.editable ?? false,
   };
 }
@@ -339,6 +340,121 @@ class NestedEmptySearchResultsExploringExecutor extends ExploringScreeningExecut
   }
 }
 
+class DelayedArticleDetailExploringExecutor extends ExploringScreeningExecutor {
+  private detailReady = false;
+
+  async navigate(url: string): Promise<BrowserStepResult> {
+    const result = await super.navigate(url);
+    if (url === `${baseUrl}/employer/resumes/1`) this.detailReady = false;
+    return result;
+  }
+
+  async check(check: BrowserStepCheck): Promise<boolean> {
+    const result = await super.check(check);
+    if (check.type === 'dom_exists' && check.selector === 'main article') {
+      this.detailReady = true;
+    }
+    return result;
+  }
+
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    const detailVisited = this.calls.includes(`navigate:${baseUrl}/employer/resumes/1`);
+    const composerOpened = this.calls.includes('click:打招呼');
+    if (detailVisited && !composerOpened && !this.detailReady) {
+      return {
+        url: `${baseUrl}/employer/resumes/1`,
+        title: 'Boss Like - 招聘平台',
+        pageState: 'list',
+        headings: [],
+        forms: [],
+        links: [],
+        textBlocks: [candidate({ tag: 'div', name: '加载中...' })],
+      };
+    }
+    if (detailVisited && !composerOpened) {
+      return {
+        url: `${baseUrl}/employer/resumes/1`,
+        title: 'Boss Like - 招聘平台',
+        pageState: 'list',
+        headings: [candidate({ tag: 'h2', name: '本地验收候选人' })],
+        forms: [],
+        links: [],
+        textBlocks: [
+          candidate({ tag: 'article', name: '候选人档案' }),
+          candidate({ tag: 'p', name: '候选人' }),
+          candidate({ tag: 'p', name: '经验见简历' }),
+        ],
+      };
+    }
+    return super.snapshotStructured();
+  }
+
+  async resolveTarget(target: BrowserTargetInput): Promise<LocatorMatchReport> {
+    const name = targetName(target);
+    this.calls.push(`resolve:${name}`);
+    return {
+      target: typeof target === 'string' ? { kind: 'text', name: target, exact: false } : target,
+      status: name === '候选人详情' ? 'not_found' : 'unique',
+      strategy: 'fixture',
+      candidateCount: name === '候选人详情' ? 0 : 1,
+      confidence: name === '候选人详情' ? 0 : 1,
+      candidates: [],
+    };
+  }
+}
+
+class DisabledSendButtonExploringExecutor extends ExploringScreeningExecutor {
+  async snapshotStructured(): Promise<StructuredDomSnapshot> {
+    if (this.calls.includes('click:打招呼') || this.calls.includes('click:沟通')) {
+      return {
+        url: `${baseUrl}/employer/resumes/1`,
+        title: '沟通',
+        pageState: 'list',
+        headings: [],
+        forms: [
+          {
+            name: '沟通候选人',
+            fields: [
+              candidate({
+                tag: 'textarea',
+                role: 'textbox',
+                name: '消息',
+                editable: true,
+                stableName: 'message',
+              }),
+            ],
+            buttons: [
+              candidate({
+                tag: 'button',
+                role: 'button',
+                name: '发送',
+                stableName: 'send',
+                enabled: false,
+              }),
+            ],
+          },
+        ],
+        links: [],
+        textBlocks: [],
+      };
+    }
+    return super.snapshotStructured();
+  }
+
+  async resolveTarget(target: BrowserTargetInput): Promise<LocatorMatchReport> {
+    const name = targetName(target);
+    this.calls.push(`resolve:${name}`);
+    return {
+      target: typeof target === 'string' ? { kind: 'text', name: target, exact: false } : target,
+      status: name === '发送' ? 'not_found' : 'unique',
+      strategy: 'fixture',
+      candidateCount: name === '发送' ? 0 : 1,
+      confidence: name === '发送' ? 0 : 1,
+      candidates: [],
+    };
+  }
+}
+
 describe('exploreBossLikeScreeningWorkflow', () => {
   it('explores list and detail targets without sending or collecting', async () => {
     const executor = new ExploringScreeningExecutor();
@@ -428,6 +544,55 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     ).resolves.toBeNull();
   });
 
+  it('waits for a rendered candidate article before learning its detail readiness target', async () => {
+    const executor = new DelayedArticleDetailExploringExecutor();
+
+    const skill = await exploreBossLikeScreeningWorkflow({
+      executor,
+      baseUrl,
+      credentials,
+      searchPlan,
+    });
+    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+
+    const enrichStep = skill.steps.find((step) => step.id === 'enrich_candidate');
+    expect(enrichStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          targets: expect.objectContaining({
+            detailContent: expect.objectContaining({ kind: 'text', name: '经验见简历' }),
+          }),
+        }),
+      }),
+    );
+    expect(executor.calls).toContain('check:main article');
+  });
+
+  it('records a disabled composer send button without validating it before the message is filled', async () => {
+    const executor = new DisabledSendButtonExploringExecutor();
+
+    const skill = await exploreBossLikeScreeningWorkflow({
+      executor,
+      baseUrl,
+      credentials,
+      searchPlan,
+    });
+    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+
+    const chatStep = skill.steps.find((step) => step.id === 'chat_candidate');
+    expect(chatStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          targets: expect.objectContaining({
+            messageInput: expect.objectContaining({ name: '消息' }),
+            sendButton: expect.objectContaining({ name: '发送' }),
+          }),
+        }),
+      }),
+    );
+    expect(executor.calls).not.toEqual(expect.arrayContaining(['resolve:发送', 'click:发送']));
+  });
+
   it('explores a form-less search page through unique semantic global targets', async () => {
     const executor = new FormlessSearchExploringExecutor();
 
@@ -475,7 +640,6 @@ describe('exploreBossLikeScreeningWorkflow', () => {
               kind: 'text',
               name: '候选人详情',
               exact: true,
-              scope: { kind: 'page' },
             },
           }),
         }),
