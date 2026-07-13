@@ -489,21 +489,7 @@ describe('JD pages', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          jobDescription: { ...sampleJobDescription, status: 'published' },
-          task: {
-            taskId: 'task-1',
-            skillId: 'boss-like-publish-jd',
-            status: 'success',
-            trace: {
-              taskId: 'task-1',
-              skillId: 'boss-like-publish-jd',
-              status: 'success',
-              steps: [],
-              createdAt: '2026-07-06T03:00:00.000Z',
-            },
-          },
-        }),
+        json: async () => ({ run: { id: 'run-1' } }),
       });
 
     render(<JDDetailView jobDescriptionId="jd-1" />);
@@ -515,7 +501,7 @@ describe('JD pages', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/jd/jd-1/publish',
+        '/api/jd/publish-runs',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
@@ -524,8 +510,15 @@ describe('JD pages', () => {
             salary: '30-50K',
             location: '上海张江、远程',
             keywords: ['TypeScript', 'React'],
+            id: 'jd-1',
           }),
         }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(pushMock).toHaveBeenCalledWith(
+        expect.stringContaining('/jd-generator/publish-runs/run-1'),
       );
     });
   });

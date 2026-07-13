@@ -13,6 +13,10 @@ import type {
   JobDescriptionCreateRunEventDto,
 } from './create-run-repo';
 import type {
+  JobDescriptionPublishRunDto,
+  JobDescriptionPublishRunEventDto,
+} from '@/lib/jd-publishing/publish-run-repo';
+import type {
   JobDescriptionRegenerateRunDto,
   JobDescriptionRegenerateRunEventDto,
 } from './regenerate-run-repo';
@@ -232,4 +236,38 @@ export async function fetchJobDescriptionPublishTasks(id: string): Promise<Publi
     throw new Error(data.error || '加载发布记录失败');
   }
   return data.tasks;
+}
+
+export async function startJobDescriptionPublishRun(
+  id: string,
+  payload: PublishJobDescriptionSettings,
+): Promise<JobDescriptionPublishRunDto> {
+  const response = await fetch('/api/jd/publish-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, id }),
+  });
+  const data = await readJson<{ run?: JobDescriptionPublishRunDto }>(response);
+  if (!response.ok || !data.run) {
+    throw new Error(data.error || '创建发布任务失败');
+  }
+  return data.run;
+}
+
+export async function fetchJobDescriptionPublishRunWithEvents(runId: string): Promise<{
+  run: JobDescriptionPublishRunDto;
+  events: JobDescriptionPublishRunEventDto[];
+}> {
+  const response = await fetch(`/api/jd/publish-runs/${runId}`);
+  const data = await readJson<{
+    run?: JobDescriptionPublishRunDto;
+    events?: JobDescriptionPublishRunEventDto[];
+  }>(response);
+  if (!response.ok || !data.run) {
+    throw new Error(data.error || '加载发布进度失败');
+  }
+  return {
+    run: data.run,
+    events: Array.isArray(data.events) ? data.events : [],
+  };
 }

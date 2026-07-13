@@ -40,6 +40,8 @@ model User {
   jobDescriptionCreateRunEvents     JobDescriptionCreateRunEvent[]
   jobDescriptionRegenerateRuns      JobDescriptionRegenerateRun[]
   jobDescriptionRegenerateRunEvents JobDescriptionRegenerateRunEvent[]
+  jobDescriptionPublishRuns         JobDescriptionPublishRun[]
+  jobDescriptionPublishRunEvents    JobDescriptionPublishRunEvent[]
   jobPublishTasks                   JobPublishTask[]
   knowledgeDocuments                KnowledgeDocument[]
   knowledgeDocumentChunks           KnowledgeDocumentChunk[]
@@ -109,6 +111,7 @@ model JobDescription {
   createRuns                     JobDescriptionCreateRun[]
   regenerateRuns                 JobDescriptionRegenerateRun[]
   publishTasks                   JobPublishTask[]
+  publishRuns                    JobDescriptionPublishRun[]
   candidateScreeningRuns         CandidateScreeningRun[]
   candidateScreeningResults      CandidateScreeningResult[]
   candidateActionLogs            CandidateActionLog[]
@@ -213,6 +216,48 @@ model JobDescriptionRegenerateRunEvent {
   @@index([userId, runId, createdAt], map: "idx_jd_regenerate_run_events_user_run_created")
   @@index([runId, createdAt], map: "idx_jd_regenerate_run_events_run_created")
   @@map("job_description_regenerate_run_events")
+}
+
+model JobDescriptionPublishRun {
+  id               String                         @id @default(uuid())
+  userId           String                         @map("user_id")
+  jobDescriptionId String                         @map("job_description_id")
+  platform         String
+  status           String                         @default("pending")
+  currentStage     String?                        @map("current_stage")
+  errorMessage     String?                        @map("error_message")
+  publishTaskId    String?                        @map("publish_task_id")
+  skillId          String?                        @map("skill_id")
+  startedAt        DateTime?                      @map("started_at")
+  finishedAt       DateTime?                      @map("finished_at")
+  createdAt        DateTime                       @default(now()) @map("created_at")
+  updatedAt        DateTime                       @updatedAt @map("updated_at")
+  user             User                           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription                 @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  events           JobDescriptionPublishRunEvent[]
+
+  @@unique([id, userId], map: "job_description_publish_runs_id_user_id_key")
+  @@index([userId, createdAt(sort: Desc)], map: "idx_jd_publish_runs_user_created")
+  @@index([userId, jobDescriptionId, createdAt(sort: Desc)], map: "idx_jd_publish_runs_user_jd_created")
+  @@index([status, updatedAt(sort: Desc)], map: "idx_jd_publish_runs_status_updated")
+  @@map("job_description_publish_runs")
+}
+
+model JobDescriptionPublishRunEvent {
+  id        String                       @id @default(uuid())
+  userId    String                       @map("user_id")
+  runId     String                       @map("run_id")
+  stage     String
+  level     String                       @default("info")
+  message   String
+  detail    Json?
+  createdAt DateTime                     @default(now()) @map("created_at")
+  user      User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  run       JobDescriptionPublishRun     @relation(fields: [runId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([userId, runId, createdAt], map: "idx_jd_publish_run_events_user_run_created")
+  @@index([runId, createdAt], map: "idx_jd_publish_run_events_run_created")
+  @@map("job_description_publish_run_events")
 }
 
 model PublishSkill {
