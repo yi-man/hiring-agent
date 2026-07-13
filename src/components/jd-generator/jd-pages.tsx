@@ -30,8 +30,8 @@ import {
   fetchJobDescriptionPublishTasks,
   fetchJobDescriptions,
   publishJobDescriptionResource,
-  regenerateJobDescription,
   startJobDescriptionCreateRun,
+  startJobDescriptionRegenerateRun,
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
@@ -1013,17 +1013,18 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     setIsRegenerating(true);
     setError('');
     try {
-      const next = await regenerateJobDescription(jobDescription.id, {
+      const run = await startJobDescriptionRegenerateRun(jobDescription.id, {
         currentJd: formToJd(form),
         extraInstruction: extraInstruction.trim(),
       });
-      setJobDescription(next);
-      setForm(jdToForm(next.content));
-      setStatus(next.status);
-      setExtraInstruction('');
+      router.push(
+        withReturnTarget(`/jd-generator/${jobDescription.id}/regenerate-runs/${run.id}`, {
+          href: currentPathWithSearch(`/jd-generator/${jobDescription.id}`, searchParams),
+          label: '返回 JD',
+        }),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '重新生成 JD 失败');
-    } finally {
       setIsRegenerating(false);
     }
   }
@@ -1558,7 +1559,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 onClick={() => void handleRegenerate()}
               >
                 <Sparkles className="h-4 w-4" aria-hidden />
-                {isRegenerating ? '生成中' : '重新生成'}
+                {isRegenerating ? '提交中' : '重新生成'}
               </Button>
             </section>
           ) : null}

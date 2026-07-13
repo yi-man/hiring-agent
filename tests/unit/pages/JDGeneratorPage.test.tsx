@@ -260,7 +260,7 @@ describe('JD pages', () => {
     );
   });
 
-  it('regenerates editable JD detail from the primary action area', async () => {
+  it('starts a regenerate run and navigates to the execution page', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
@@ -276,16 +276,28 @@ describe('JD pages', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          jobDescription: {
-            ...sampleJobDescription,
-            content: { ...sampleJobDescription.content, summary: '手动调整后的 JD' },
-          },
-        }),
+        json: async () => ({ runs: [] }),
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ jobDescription: sampleJobDescription }),
+        status: 202,
+        json: async () => ({
+          run: {
+            id: 'regen-run-1',
+            userId: 'u1',
+            jobDescriptionId: 'jd-1',
+            tone: 'tech',
+            extraInstruction: '强调 AI 招聘经验',
+            currentJd: { ...sampleJobDescription.content, summary: '手动调整后的 JD' },
+            status: 'pending',
+            currentStage: 'queued',
+            errorMessage: null,
+            startedAt: null,
+            finishedAt: null,
+            createdAt: '2026-07-13T08:00:00.000Z',
+            updatedAt: '2026-07-13T08:00:00.000Z',
+          },
+        }),
       });
 
     render(<JDDetailView jobDescriptionId="jd-1" />);
@@ -300,7 +312,7 @@ describe('JD pages', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/jd/jd-1/regenerate',
+        '/api/jd/jd-1/regenerate-runs',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
@@ -310,12 +322,14 @@ describe('JD pages', () => {
         }),
       );
     });
-    expect(screen.getByText('company.md')).toBeInTheDocument();
-    const contextHref =
-      screen.getByRole('link', { name: '查看本次上下文' }).getAttribute('href') ?? '';
-    expect(parsedHref(contextHref).pathname).toBe('/jd-generator/jd-1/context');
-    expectReturnContext(contextHref, '/jd-generator/jd-1', '返回 JD');
-    expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
+    expect(pushMock).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\/jd-generator\/jd-1\/regenerate-runs\/regen-run-1\?returnTo=.*&returnLabel=.*/,
+      ),
+    );
+    const pushed = String(pushMock.mock.calls.at(-1)?.[0] ?? '');
+    expect(parsedHref(pushed).pathname).toBe('/jd-generator/jd-1/regenerate-runs/regen-run-1');
+    expectReturnContext(pushed, '/jd-generator/jd-1', '返回 JD');
   });
 
   it('JD detail returns to the supplied source context', async () => {
