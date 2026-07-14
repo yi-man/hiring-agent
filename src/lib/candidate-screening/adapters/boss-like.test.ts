@@ -9,7 +9,11 @@ import type {
   StructuredDomSnapshot,
 } from '@/lib/browser/types';
 import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
-import { BossLikeCandidateSourceAdapter, extractBossLikeCandidatesFromHtml } from './boss-like';
+import {
+  BossLikeCandidateSourceAdapter,
+  extractBossLikeCandidatesFromHtml,
+  mergeBossLikeCandidateWithDetail,
+} from './boss-like';
 import { createCandidateSourceAdapter } from './factory';
 import type { RawCandidateBatch } from './types';
 import type { CandidateActionPlan, SearchPlan } from '../types';
@@ -384,6 +388,19 @@ describe('BossLikeCandidateSourceAdapter', () => {
         resumeText: 'Java Spring Boot 高并发 微服务',
       },
     ]);
+  });
+
+  it('merges a profile observation with its list candidate without browser actions', () => {
+    const listCandidate = extractBossLikeCandidatesFromHtml(shortResumeListFixture)[0]!;
+    const detailCandidate = extractBossLikeCandidatesFromHtml(detailFixture)[0]!;
+
+    expect(mergeBossLikeCandidateWithDetail(listCandidate, detailCandidate)).toEqual(
+      expect.objectContaining({
+        platformCandidateId: '1',
+        name: '王小明',
+        resumeText: 'Java Spring Boot 高并发 微服务 分布式 系统设计',
+      }),
+    );
   });
 
   it('keeps legacy direct callers enriching short resume text when deferEnrichment is omitted', async () => {

@@ -12,6 +12,7 @@ import {
 } from '../chat/test-env';
 import { BossLikeCandidateSourceAdapter } from '@/lib/candidate-screening/adapters/boss-like';
 import { createCandidateScreeningWorkflowSession } from '@/lib/candidate-screening/workflow/executor';
+import { exploreBossLikeScreeningWorkflow } from '@/lib/candidate-screening/workflow/explore';
 import { buildBossLikeScreeningSkill } from '@/lib/candidate-screening/workflow/skill-registry';
 import {
   createCandidateScreeningRun,
@@ -454,8 +455,65 @@ describe('candidate screening integration flow with real postgres and boss-like 
         success: true,
       });
       expect(await executor.click('发送')).toMatchObject({ success: true });
+      expect(await executor.waitForUrl(`/employer/resumes/${adaResumeId}/messages`)).toMatchObject({
+        success: true,
+      });
       expect(await executor.waitForText('Message sent')).toMatchObject({ success: true });
       expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
+    } finally {
+      await executor.close();
+      await bossLike.close();
+    }
+  }, 30000);
+
+  it('treats repeated candidate text as a search readiness condition, not a unique target', async () => {
+    const bossLike = await startBossLikeServer();
+    const executor = new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 });
+
+    try {
+      await expect(executor.navigate(`${bossLike.baseUrl}/employer/resumes`)).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+      await expect(executor.fill('用户名', 'admin')).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+      await expect(executor.fill('密码', 'boss123')).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+      await expect(executor.click('登录')).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+      await expect(executor.waitForUrl('/employer/resumes')).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+      await expect(executor.waitForText('候选人')).resolves.toEqual(
+        expect.objectContaining({ success: true }),
+      );
+    } finally {
+      await executor.close();
+      await bossLike.close();
+    }
+  }, 30000);
+
+  it('accepts unchanged candidate HTML after the keyword query navigation completes', async () => {
+    const bossLike = await startBossLikeServer();
+    const executor = new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 });
+
+    try {
+      const explored = await exploreBossLikeScreeningWorkflow({
+        executor,
+        baseUrl: bossLike.baseUrl,
+        credentials: { username: 'admin', password: 'boss123' },
+        searchPlan: workflowSearchPlan,
+      });
+
+      expect(explored).toEqual(
+        expect.objectContaining({
+          firstKeyword: 'Java',
+          firstListHtml: expect.stringContaining(`data-candidate-id="${adaResumeId}"`),
+        }),
+      );
+      expect(bossLike.requests).toContain('GET /employer/resumes?keyword=Java');
     } finally {
       await executor.close();
       await bossLike.close();
@@ -533,30 +591,34 @@ describe('candidate screening integration flow with real postgres and boss-like 
         where: { id: persisted?.skillId ?? '' },
       });
       const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
-      const chatStep = repairedWorkflow?.steps.find(
-        (step) => step.id === 'chat_candidate' && step.type === 'action',
+      const messageStep = repairedWorkflow?.steps.find(
+        (step) => step.id === 'contact_fill_message' && step.type === 'action',
       );
-      const targets = chatStep?.params.targets as Record<string, unknown> | undefined;
+      const sendStep = repairedWorkflow?.steps.find(
+        (step) => step.id === 'contact_send' && step.type === 'action',
+      );
 
-      expect(result.success).toBe(true);
+      expect(result).toEqual(expect.objectContaining({ success: true }));
       expect(persisted?.skillId).not.toBe(staleSkill.id);
-      expect(targets).toEqual(
+      expect(messageStep).toEqual(
         expect.objectContaining({
-          messageInput: expect.objectContaining({
-            name: '消息',
-            scope: { kind: 'form' },
+          params: expect.objectContaining({
+            target: expect.objectContaining({ name: '消息', scope: { kind: 'form' } }),
           }),
-          sendButton: expect.objectContaining({
-            name: '发送',
-            scope: { kind: 'form' },
+        }),
+      );
+      expect(sendStep).toEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            target: expect.objectContaining({ name: '发送', scope: { kind: 'form' } }),
           }),
         }),
       );
       expect(events.map((event) => event.message)).toEqual(
         expect.arrayContaining([
           'Workflow 修复并升级到 v2',
-          'Workflow 重试：chat_candidate',
-          'Workflow 重试成功：chat_candidate',
+          'Workflow 重试步骤：contact_open',
+          'Workflow 重试成功：contact_open',
         ]),
       );
       expect(bossLike.requests).toContain(`POST /employer/resumes/${graceResumeId}/messages`);
@@ -640,21 +702,40 @@ describe('candidate screening integration flow with real postgres and boss-like 
         where: { id: persisted?.skillId ?? '' },
       });
       const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
-      const chatStep = repairedWorkflow?.steps.find(
-        (step) => step.id === 'chat_candidate' && step.type === 'action',
+      const greetingStep = repairedWorkflow?.steps.find(
+        (step) => step.id === 'contact_open_greeting' && step.type === 'action',
       );
-      const targets = chatStep?.params.targets as Record<string, unknown> | undefined;
+      const messageStep = repairedWorkflow?.steps.find(
+        (step) => step.id === 'contact_fill_message' && step.type === 'action',
+      );
+      const sendStep = repairedWorkflow?.steps.find(
+        (step) => step.id === 'contact_send' && step.type === 'action',
+      );
 
       expect(result.success).toBe(true);
-      expect(targets).toEqual(
+      expect(greetingStep).toEqual(
         expect.objectContaining({
-          greetButton: expect.objectContaining({ name: '开始沟通' }),
-          messageInput: expect.objectContaining({ scope: { kind: 'form' } }),
-          sendButton: expect.objectContaining({ scope: { kind: 'form' } }),
+          params: expect.objectContaining({
+            target: expect.objectContaining({ name: '开始沟通' }),
+          }),
+        }),
+      );
+      expect(messageStep).toEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            target: expect.objectContaining({ scope: { kind: 'form' } }),
+          }),
+        }),
+      );
+      expect(sendStep).toEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            target: expect.objectContaining({ scope: { kind: 'form' } }),
+          }),
         }),
       );
       expect(events.map((event) => event.message)).toEqual(
-        expect.arrayContaining(['Workflow 修复并升级到 v2', 'Workflow 重试成功：chat_candidate']),
+        expect.arrayContaining(['Workflow 修复并升级到 v2', 'Workflow 重试成功：contact_open']),
       );
       expect(bossLike.requests).toContain(`POST /employer/resumes/${graceResumeId}/messages`);
     } finally {
@@ -828,9 +909,10 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(firstEvents.map((event) => event.message)).toEqual(
         expect.arrayContaining([
           'Workflow 探索完成',
-          'Workflow 完成：search_candidates',
-          'Workflow 完成：chat_candidate',
-          'Workflow 完成：collect_candidate',
+          '复用探索搜索观察：Java',
+          'Workflow 完成：detail_open',
+          'Workflow 完成：contact_open',
+          'Workflow 完成：collect_open',
         ]),
       );
       expect(firstResults).toHaveLength(2);
@@ -853,12 +935,23 @@ describe('candidate screening integration flow with real postgres and boss-like 
           expect.objectContaining({
             action: 'chat',
             status: 'success',
-            browserTrace: expect.objectContaining({ action: 'chat' }),
+            browserTrace: expect.objectContaining({
+              traceSteps: expect.arrayContaining([
+                expect.objectContaining({ stepId: 'contact_open' }),
+                expect.objectContaining({ stepId: 'contact_send' }),
+                expect.objectContaining({ stepId: 'collect_click' }),
+              ]),
+            }),
           }),
           expect.objectContaining({
             action: 'collect',
             status: 'success',
-            browserTrace: expect.objectContaining({ action: 'collect' }),
+            browserTrace: expect.objectContaining({
+              traceSteps: expect.arrayContaining([
+                expect.objectContaining({ stepId: 'collect_open' }),
+                expect.objectContaining({ stepId: 'collect_click' }),
+              ]),
+            }),
           }),
         ]),
       );
@@ -1088,10 +1181,10 @@ describe('candidate screening integration flow with real postgres and boss-like 
         where: { id: persisted?.skillId ?? '' },
       });
       const retryEvents = events.filter(
-        (event) => event.message === 'Workflow 重试：search_candidates',
+        (event) => event.message === 'Workflow 重试步骤：search_submit',
       );
       const retrySuccessEvents = events.filter(
-        (event) => event.message === 'Workflow 重试成功：search_candidates',
+        (event) => event.message === 'Workflow 重试成功：search_submit',
       );
 
       expect(persisted?.skillId).not.toBe(firstWorkflowId);
@@ -1099,10 +1192,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
         expect.objectContaining({ name: 'screen_candidates', version: 2, isActive: true }),
       );
       expect(events.map((event) => event.message)).toEqual(
-        expect.arrayContaining([
-          'Workflow 修复并升级到 v2',
-          'Workflow 重试成功：search_candidates',
-        ]),
+        expect.arrayContaining(['Workflow 修复并升级到 v2', 'Workflow 重试成功：search_submit']),
       );
       expect(retryEvents).toHaveLength(1);
       expect(retrySuccessEvents).toHaveLength(1);

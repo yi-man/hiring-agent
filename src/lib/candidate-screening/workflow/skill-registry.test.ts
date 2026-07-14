@@ -27,7 +27,7 @@ describe('boss-like screening workflow skill', () => {
       'wait_for_url',
       'fill',
       'click',
-      'wait_for_text',
+      'wait_for_url',
       'observe',
       'navigate',
       'wait_for_text',
@@ -36,14 +36,20 @@ describe('boss-like screening workflow skill', () => {
       'click',
       'fill',
       'click',
-      'wait_for_text',
+      'wait_for_url',
       'navigate',
       'click',
     ]);
     expect(skill.meta).toMatchObject({ dsl_version: 'browser-v2', created_from: 'explore' });
     expect(stepById(skill, 'contact_wait_success')).toMatchObject({
-      action: 'wait_for_text',
-      next: 'collect_click',
+      action: 'wait_for_url',
+      params: { url: '{{input.profileUrl}}/messages' },
+      next: 'collect_open',
+    });
+    expect(stepById(skill, 'search_wait')).toMatchObject({
+      action: 'wait_for_url',
+      params: { url: '{{input.searchUrl}}' },
+      next: 'search_observe',
     });
     expect(new Set(actionSteps.map((step) => step.id)).size).toBe(19);
     expect(stepById(skill, 'auth_required')).toMatchObject({

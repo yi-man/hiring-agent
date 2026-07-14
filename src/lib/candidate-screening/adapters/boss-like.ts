@@ -137,7 +137,10 @@ function firstNonEmpty(value: string | null | undefined, fallback: string | null
   return fallback ?? null;
 }
 
-function mergeCandidateWithDetail(candidate: RawCandidate, detail: RawCandidate): RawCandidate {
+export function mergeBossLikeCandidateWithDetail(
+  candidate: RawCandidate,
+  detail: RawCandidate,
+): RawCandidate {
   return {
     platformCandidateId: firstNonEmpty(detail.platformCandidateId, candidate.platformCandidateId),
     profileUrl: firstNonEmpty(detail.profileUrl, candidate.profileUrl),
@@ -381,7 +384,9 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
           detail.profileUrl === candidate.profileUrl,
       ) ?? detailCandidates[0];
 
-    return detailCandidate ? mergeCandidateWithDetail(candidate, detailCandidate) : candidate;
+    return detailCandidate
+      ? mergeBossLikeCandidateWithDetail(candidate, detailCandidate)
+      : candidate;
   }
 
   async collectCandidate(

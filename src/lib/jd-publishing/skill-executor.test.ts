@@ -155,6 +155,35 @@ describe('runPublishingSkill', () => {
     expect(result.traceSteps.map((step) => step.stepId)).toEqual(['fill_title']);
   });
 
+  it('notifies callers before each non-terminal workflow step', async () => {
+    const onStep = jest.fn();
+
+    await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'fill_title',
+          type: 'action',
+          action: 'fill',
+          params: { locator: '职位名称', value: '{{input.title}}' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      currentStepId: 'fill_title',
+      executor: new RecordingExecutor(),
+      context: contextWithTitle,
+      onStep,
+    });
+
+    expect(onStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stepId: 'fill_title',
+        step: expect.objectContaining({ type: 'action' }),
+      }),
+    );
+    expect(onStep).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an observe step without the supported format and save key', async () => {
     const result = await executePublishingStep({
       stepId: 'observe_list',

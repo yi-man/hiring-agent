@@ -55,6 +55,7 @@ export function buildBossLikeScreeningSkill(
     inputSchema: {
       baseUrl: 'string',
       keyword: 'string',
+      searchUrl: 'string',
       profileUrl: 'string',
       message: 'string',
     },
@@ -124,8 +125,8 @@ export function buildBossLikeScreeningSkill(
       {
         id: SCREENING_STEP_IDS.searchWait,
         type: 'action',
-        action: 'wait_for_text',
-        params: { text: '候选人' },
+        action: 'wait_for_url',
+        params: { url: '{{input.searchUrl}}' },
         next: SCREENING_STEP_IDS.searchObserve,
       },
       {
@@ -192,9 +193,9 @@ export function buildBossLikeScreeningSkill(
       {
         id: SCREENING_STEP_IDS.contactWaitSuccess,
         type: 'action',
-        action: 'wait_for_text',
-        params: { text: '发送成功' },
-        next: SCREENING_STEP_IDS.collectClick,
+        action: 'wait_for_url',
+        params: { url: '{{input.profileUrl}}/messages' },
+        next: SCREENING_STEP_IDS.collectOpen,
       },
       {
         id: SCREENING_STEP_IDS.collectOpen,

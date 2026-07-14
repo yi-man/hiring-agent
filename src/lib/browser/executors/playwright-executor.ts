@@ -221,7 +221,12 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
   }
 
   async waitForText(text: string): Promise<BrowserStepResult> {
-    return this.waitForTarget({ kind: 'text', name: text, exact: false });
+    return this.wrap(async () => {
+      const page = await this.getPage();
+      if (!(await waitForAnyVisibleText(page, text, this.timeoutMs))) {
+        throw new Error(`wait_for_text timed out: ${text}`);
+      }
+    });
   }
 
   async waitForTarget(target: BrowserTargetInput): Promise<BrowserStepResult> {

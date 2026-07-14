@@ -1,16 +1,23 @@
 import type {
+  BrowserExecutor,
   BrowserResolveOptions,
-  BrowserStepResult,
   BrowserTargetInput,
   LocatorMatchReport,
   StructuredDomSnapshot,
 } from '@/lib/browser/types';
+import { runBrowserWorkflow as runSharedBrowserWorkflow } from '@/lib/jd-publishing/skill-executor';
 import {
   createExploredPublishSkill,
   createNextActivePublishSkillVersion,
   getActivePublishSkillByName,
 } from '@/lib/jd-publishing/publish-repo';
-import type { PublishSkill, PublishSkillMeta, PublishStep } from '@/lib/jd-publishing/types';
+import type {
+  BrowserWorkflowRunResult,
+  PublishExecutionContext,
+  PublishSkill,
+  PublishSkillMeta,
+  PublishStep,
+} from '@/lib/jd-publishing/types';
 import { getPublishedWorkflowDetail } from '@/lib/workflows/published-workflows';
 import {
   createCandidateScreeningRunEvent,
@@ -20,14 +27,16 @@ import {
 } from '../repo';
 import type {
   ActionExecutionResult,
-  CandidateBrowserActionOptions,
   CandidateSourceAdapter,
   RawCandidateBatch,
   SearchOptions,
   StoredCandidateRef,
 } from '../adapters/types';
-import { CandidateAdapterTargetError } from '../adapters/types';
-import { hasShortResumeText } from '../adapters/boss-like';
+import {
+  extractBossLikeCandidatesFromHtml,
+  mergeBossLikeCandidateWithDetail,
+  resolveBossLikeProfileUrl,
+} from '../adapters/boss-like';
 import type { RawCandidate } from '../ingest';
 import type {
   CandidateActionPlan,
@@ -37,16 +46,15 @@ import type {
 } from '../types';
 import {
   exploreBossLikeScreeningWorkflow,
+  repairBossLikeScreeningSteps,
   repairBossLikeScreeningTargetFromSnapshot,
 } from './explore';
-import type { BossLikeScreeningTargets, ScreeningWorkflowSkill } from './types';
-
-type ScreeningWorkflowAction =
-  | 'ensure_login'
-  | 'search_candidates'
-  | 'enrich_candidate'
-  | 'chat_candidate'
-  | 'collect_candidate';
+import { SCREENING_STEP_IDS } from './types';
+import type {
+  BossLikeScreeningExploration,
+  BossLikeScreeningTargets,
+  ScreeningWorkflowSkill,
+} from './types';
 
 type WorkflowRunRepository = {
   updateRun: (params: UpdateRunParams) => ReturnType<typeof updateCandidateScreeningRun>;
@@ -54,6 +62,8 @@ type WorkflowRunRepository = {
     params: CreateRunEventParams,
   ) => ReturnType<typeof createCandidateScreeningRunEvent>;
 };
+
+type ExploredScreeningWorkflow = BossLikeScreeningExploration & ScreeningWorkflowSkill;
 
 type ExploreScreeningWorkflow = (params: {
   adapter: CandidateSourceAdapter;
@@ -63,7 +73,7 @@ type ExploreScreeningWorkflow = (params: {
     username: string;
     password: string;
   };
-}) => Promise<ScreeningWorkflowSkill | null>;
+}) => Promise<ExploredScreeningWorkflow | ScreeningWorkflowSkill | null>;
 
 type CreateNextScreeningSkillVersion = (params: {
   previousSkill: PublishSkill;
@@ -86,6 +96,7 @@ export type CandidateScreeningWorkflowSessionDependencies = {
   exploreSkill?: ExploreScreeningWorkflow;
   createExploredSkill?: (skill: PublishSkill) => Promise<PublishSkill>;
   createNextSkillVersion?: CreateNextScreeningSkillVersion;
+  runBrowserWorkflow?: typeof runSharedBrowserWorkflow;
   updateRun?: WorkflowRunRepository['updateRun'];
   createRunEvent?: WorkflowRunRepository['createRunEvent'];
 };
@@ -98,6 +109,7 @@ type ResolvedDependencies = Omit<
   | 'exploreSkill'
   | 'createExploredSkill'
   | 'createNextSkillVersion'
+  | 'runBrowserWorkflow'
   | 'updateRun'
   | 'createRunEvent'
 > & {
@@ -108,6 +120,7 @@ type ResolvedDependencies = Omit<
     CandidateScreeningWorkflowSessionDependencies['createExploredSkill']
   >;
   createNextSkillVersion: CreateNextScreeningSkillVersion;
+  runBrowserWorkflow: typeof runSharedBrowserWorkflow;
   updateRun: WorkflowRunRepository['updateRun'];
   createRunEvent: WorkflowRunRepository['createRunEvent'];
 };
@@ -132,42 +145,42 @@ type WorkflowEventDetail = {
   structuredSnapshot?: StructuredDomSnapshot;
 };
 
+type SegmentParams = {
+  startStepId: string;
+  input: Record<string, unknown>;
+  candidate?: StoredCandidateRef;
+  candidateName?: string;
+};
+
 type BrowserFailureContext = {
   rawSnapshot?: string;
   structuredSnapshot?: StructuredDomSnapshot;
 };
 
-type ActionStart = {
-  skill: ScreeningWorkflowSkill;
-  step: Extract<PublishStep, { type: 'action' }>;
+type TargetFailure = {
+  stepId: string;
+  targetKey: keyof BossLikeScreeningTargets;
+  target: BrowserTargetInput;
+  error: string;
 };
 
-export class ScreeningWorkflowTargetError extends Error {
-  readonly stepId: string;
-  readonly targetKey: string;
-  readonly target: BrowserTargetInput;
-  readonly result: BrowserStepResult;
-  readonly browserStepResult: BrowserStepResult;
-  readonly candidateId?: string;
+const TARGET_KEY_BY_STEP_ID: Partial<Record<string, keyof BossLikeScreeningTargets>> = {
+  [SCREENING_STEP_IDS.loginFillUsername]: 'username',
+  [SCREENING_STEP_IDS.loginFillPassword]: 'password',
+  [SCREENING_STEP_IDS.loginSubmit]: 'loginButton',
+  [SCREENING_STEP_IDS.searchFill]: 'searchInput',
+  [SCREENING_STEP_IDS.searchSubmit]: 'searchSubmit',
+  [SCREENING_STEP_IDS.contactOpenGreeting]: 'greetButton',
+  [SCREENING_STEP_IDS.contactFillMessage]: 'messageInput',
+  [SCREENING_STEP_IDS.contactSend]: 'sendButton',
+  [SCREENING_STEP_IDS.collectClick]: 'collectButton',
+};
 
-  constructor(params: {
-    stepId: string;
-    targetKey: string;
-    target: BrowserTargetInput;
-    result: BrowserStepResult;
-    candidateId?: string;
-  }) {
-    super(params.result.error ?? `target failed: ${params.targetKey}`);
-    this.name = 'ScreeningWorkflowTargetError';
-    this.stepId = params.stepId;
-    this.targetKey = params.targetKey;
-    this.target = params.target;
-    this.result = params.result;
-    this.browserStepResult = params.result;
-    this.candidateId = params.candidateId;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
+const CONTACT_REPAIR_STEP_IDS = new Set<string>([
+  SCREENING_STEP_IDS.contactOpenGreeting,
+  SCREENING_STEP_IDS.contactFillMessage,
+  SCREENING_STEP_IDS.contactSend,
+]);
 
 export type CandidateScreeningWorkflowSession = {
   readonly skill: ScreeningWorkflowSkill | null;
@@ -179,18 +192,39 @@ export type CandidateScreeningWorkflowSession = {
     skillId: string;
     stage: CandidateScreeningRunStage;
   }): Promise<ScreeningWorkflowSkill>;
-  searchCandidates(plan: SearchPlan, options: SearchOptions): AsyncIterable<RawCandidateBatch>;
-  enrichCandidate(candidate: RawCandidate): Promise<RawCandidate>;
-  chatCandidate(
+  runSearchKeyword(params: {
+    keyword: string;
+    maxCandidates: number;
+  }): Promise<{ keyword: string; candidates: RawCandidate[] }>;
+  observeCandidateProfile(candidate: RawCandidate): Promise<RawCandidate>;
+  contactAndCollectCandidate(
     candidate: StoredCandidateRef,
     plan: CandidateActionPlan,
   ): Promise<ActionExecutionResult>;
   collectCandidate(candidate: StoredCandidateRef): Promise<ActionExecutionResult>;
+  /**
+   * Transitional compatibility for the current screening runner. It delegates only to browser-v2
+   * segments; Task 5 moves its keyword loop into the runner and removes this facade.
+   */
+  searchCandidates(plan: SearchPlan, options: SearchOptions): AsyncIterable<RawCandidateBatch>;
+  /** Transitional compatibility for the current screening runner. */
+  enrichCandidate(candidate: RawCandidate): Promise<RawCandidate>;
+  /** Transitional compatibility for the current screening runner. */
+  chatCandidate(
+    candidate: StoredCandidateRef,
+    plan: CandidateActionPlan,
+  ): Promise<ActionExecutionResult>;
   close(): Promise<void>;
 };
 
 function readBossLikeSetting(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
+}
+
+function createBossLikeSearchUrl(baseUrl: string, keyword: string): string {
+  const url = new URL('/employer/resumes', `${baseUrl}/`);
+  url.searchParams.set('keyword', keyword);
+  return url.toString();
 }
 
 function resolveWorkflowExploreContext(adapter: CandidateSourceAdapter): {
@@ -215,59 +249,32 @@ function screeningSkill(skill: PublishSkill): ScreeningWorkflowSkill {
   return skill as ScreeningWorkflowSkill;
 }
 
-function actionStep(
-  skill: ScreeningWorkflowSkill,
-  action: ScreeningWorkflowAction,
-): Extract<PublishStep, { type: 'action' }> {
+function isExploredScreeningWorkflow(
+  skill: ExploredScreeningWorkflow | ScreeningWorkflowSkill,
+): skill is ExploredScreeningWorkflow {
+  return 'firstKeyword' in skill && 'firstListHtml' in skill && 'skill' in skill;
+}
+
+function isBrowserTargetInput(value: unknown): value is BrowserTargetInput {
+  if (typeof value === 'string') return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.kind === 'string' && typeof candidate.name === 'string';
+}
+
+function targetForStep(skill: ScreeningWorkflowSkill, stepId: string): BrowserTargetInput | null {
   const step = skill.steps.find(
     (candidate): candidate is Extract<PublishStep, { type: 'action' }> =>
-      candidate.type === 'action' && candidate.id === action && candidate.action === action,
+      candidate.id === stepId && candidate.type === 'action',
   );
-  if (!step) {
-    throw new Error(`screening workflow action is missing: ${action}`);
-  }
-  return step;
+  return isBrowserTargetInput(step?.params.target) ? step.params.target : null;
 }
 
-function targetsForStep(
-  step: Extract<PublishStep, { type: 'action' }>,
-): CandidateBrowserActionOptions {
-  const targets = step.params.targets;
-  if (!targets || typeof targets !== 'object' || Array.isArray(targets)) {
-    throw new Error(`screening workflow targets are missing: ${step.id}`);
-  }
-  return { targets: targets as Partial<BossLikeScreeningTargets> };
-}
-
-function targetErrorFromUnknown(params: {
-  error: unknown;
-  step: Extract<PublishStep, { type: 'action' }>;
-  candidateId?: string;
-}): ScreeningWorkflowTargetError | null {
-  if (params.error instanceof ScreeningWorkflowTargetError) return params.error;
-  if (!(params.error instanceof CandidateAdapterTargetError)) return null;
-  const targets = targetsForStep(params.step).targets;
-  if (!targets || !Object.hasOwn(targets, params.error.targetKey)) return null;
-
-  return new ScreeningWorkflowTargetError({
-    stepId: params.step.id,
-    targetKey: params.error.targetKey,
-    target: params.error.target,
-    result: params.error.result,
-    candidateId: params.candidateId,
-  });
-}
-
-function resolveOptionsForTarget(targetKey: string): BrowserResolveOptions {
-  if (
-    targetKey === 'username' ||
-    targetKey === 'password' ||
-    targetKey === 'searchInput' ||
-    targetKey === 'messageInput'
-  ) {
+function resolveOptionsForTarget(targetKey: keyof BossLikeScreeningTargets): BrowserResolveOptions {
+  if (targetKey === 'username' || targetKey === 'password' || targetKey === 'searchInput') {
     return { action: 'fill', requireEditable: true };
   }
-  if (targetKey === 'detailContent') return { action: 'wait_for_text' };
+  if (targetKey === 'messageInput') return { action: 'fill', requireEditable: true };
   return { action: 'click' };
 }
 
@@ -277,47 +284,59 @@ function targetFailureCode(report: LocatorMatchReport): string {
   return 'not_found_target';
 }
 
-class ScreeningWorkflowRepairResolutionError extends Error {
-  constructor(report: LocatorMatchReport) {
-    super(`${targetFailureCode(report)}: ${report.reason ?? report.target.name}`);
-    this.name = 'ScreeningWorkflowRepairResolutionError';
-    Object.setPrototypeOf(this, new.target.prototype);
+function errorForWorkflowRun(run: BrowserWorkflowRunResult): string {
+  return (
+    run.failedStep?.result.error ??
+    run.onFail?.reason ??
+    `browser workflow ${run.status} at ${run.currentStepId ?? 'terminal'}`
+  );
+}
+
+function browserTrace(run: BrowserWorkflowRunResult): Record<string, unknown> {
+  return {
+    status: run.status,
+    currentStepId: run.currentStepId,
+    traceSteps: run.traceSteps,
+  };
+}
+
+function normalizeCandidateProfileUrl(candidate: RawCandidate, baseUrl: string): RawCandidate {
+  const profileUrl = resolveBossLikeProfileUrl(candidate.profileUrl, baseUrl).profileUrl;
+  return profileUrl ? { ...candidate, profileUrl } : candidate;
+}
+
+function mergeProfileObservation(params: {
+  candidate: RawCandidate;
+  html: string;
+  baseUrl: string;
+}): RawCandidate {
+  const detailCandidates = extractBossLikeCandidatesFromHtml(params.html);
+  const detail =
+    detailCandidates.find(
+      (candidate) =>
+        candidate.platformCandidateId === params.candidate.platformCandidateId ||
+        candidate.profileUrl === params.candidate.profileUrl,
+    ) ?? detailCandidates[0];
+  const merged = detail
+    ? mergeBossLikeCandidateWithDetail(params.candidate, detail)
+    : params.candidate;
+  return normalizeCandidateProfileUrl(merged, params.baseUrl);
+}
+
+function uniqueSearchKeywords(plan: SearchPlan): string[] {
+  const seen = new Set<string>();
+  const keywords: string[] = [];
+  for (const value of plan.keywords) {
+    const keyword = value.trim();
+    if (keyword && !seen.has(keyword)) {
+      seen.add(keyword);
+      keywords.push(keyword);
+    }
   }
-}
-
-class ScreeningWorkflowRepairPersistenceError extends Error {
-  constructor(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    super(`screening_workflow_repair_persistence_failed: ${message}`);
-    this.name = 'ScreeningWorkflowRepairPersistenceError';
-    Object.setPrototypeOf(this, new.target.prototype);
+  if (keywords.length === 0 && plan.retrievalQuery.trim()) {
+    keywords.push(plan.retrievalQuery.trim());
   }
-}
-
-function patchStepTargets(params: {
-  steps: PublishStep[];
-  stepId: string;
-  targets: Record<string, BrowserTargetInput>;
-}): PublishStep[] {
-  return params.steps.map((step) => {
-    if (step.id !== params.stepId || step.type !== 'action') return step;
-    const targets = step.params.targets;
-    if (!targets || typeof targets !== 'object' || Array.isArray(targets)) return step;
-    return {
-      ...step,
-      params: {
-        ...step.params,
-        targets: {
-          ...targets,
-          ...params.targets,
-        },
-      },
-    };
-  });
-}
-
-function isActionExecutionResult(value: unknown): value is ActionExecutionResult {
-  return typeof value === 'object' && value !== null && 'success' in value;
+  return keywords;
 }
 
 function resolveDependencies(
@@ -340,17 +359,17 @@ function resolveDependencies(
       }),
     exploreSkill:
       dependencies.exploreSkill ??
-      (async ({ adapter, searchPlan, baseUrl, credentials }) => {
-        return exploreBossLikeScreeningWorkflow({
+      (async ({ adapter, searchPlan, baseUrl, credentials }) =>
+        exploreBossLikeScreeningWorkflow({
           executor: adapter.getBrowserExecutor(),
           baseUrl,
           credentials,
           searchPlan,
-        });
-      }),
+        })),
     createExploredSkill: dependencies.createExploredSkill ?? createExploredPublishSkill,
     createNextSkillVersion:
       dependencies.createNextSkillVersion ?? createNextActivePublishSkillVersion,
+    runBrowserWorkflow: dependencies.runBrowserWorkflow ?? runSharedBrowserWorkflow,
     updateRun,
     createRunEvent,
   };
@@ -360,9 +379,11 @@ export function createCandidateScreeningWorkflowSession(
   input: CandidateScreeningWorkflowSessionDependencies,
 ): CandidateScreeningWorkflowSession {
   const dependencies = resolveDependencies(input);
+  const exploreContext = resolveWorkflowExploreContext(dependencies.adapter);
   let skill: ScreeningWorkflowSkill | null = null;
   let stage: CandidateScreeningRunStage | null = null;
   let emptyExplorationCompleted = false;
+  let firstExploredList: { keyword: string; html: string } | null = null;
 
   function requireSkill(): ScreeningWorkflowSkill {
     if (!skill) throw new Error('screening workflow must be loaded before browser actions');
@@ -401,106 +422,106 @@ export function createCandidateScreeningWorkflowSession(
     });
   }
 
-  function eventDetail(params: {
-    workflowStep: string;
-    skillId?: string;
-    workflowName?: string;
-    workflowVersion?: number;
-    reused?: boolean;
-    previousSkillId?: string;
-    retry?: boolean;
-    retryState?: 'start' | 'success' | 'failure';
-    repair?: boolean;
-    browserTrace?: Record<string, unknown>;
-    candidateName?: string;
-    candidateId?: string;
-    target?: BrowserTargetInput;
-    targetKey?: string;
-    error?: string;
-    rawSnapshot?: string;
-    structuredSnapshot?: StructuredDomSnapshot;
-  }): WorkflowEventDetail {
+  function eventDetail(params: Omit<WorkflowEventDetail, 'skillId'> & { skillId?: string }) {
     return {
-      workflowStep: params.workflowStep,
+      ...params,
       skillId: params.skillId ?? requireSkill().id,
-      ...(params.workflowName ? { workflowName: params.workflowName } : {}),
-      ...(params.workflowVersion !== undefined ? { workflowVersion: params.workflowVersion } : {}),
-      ...(params.reused ? { reused: true } : {}),
-      ...(params.previousSkillId ? { previousSkillId: params.previousSkillId } : {}),
-      ...(params.retry ? { retry: true } : {}),
-      ...(params.retryState ? { retryState: params.retryState } : {}),
-      ...(params.repair ? { repair: true } : {}),
-      ...(params.browserTrace ? { browserTrace: params.browserTrace } : {}),
-      ...(params.candidateName ? { candidateName: params.candidateName } : {}),
-      ...(params.candidateId ? { candidateId: params.candidateId } : {}),
-      ...(params.target ? { target: params.target } : {}),
-      ...(params.targetKey ? { targetKey: params.targetKey } : {}),
-      ...(params.error ? { error: params.error } : {}),
-      ...(params.rawSnapshot ? { rawSnapshot: params.rawSnapshot } : {}),
-      ...(params.structuredSnapshot ? { structuredSnapshot: params.structuredSnapshot } : {}),
     };
   }
 
-  async function startAction(
-    action: ScreeningWorkflowAction,
-    retry: boolean,
-  ): Promise<ActionStart> {
-    const currentSkill = requireSkill();
-    const step = actionStep(currentSkill, action);
-    await updateRun({ skillId: currentSkill.id, currentWorkflowStep: step.id });
-    await recordEvent({
-      level: 'info',
-      message: retry ? `Workflow 重试：${step.id}` : `Workflow 开始：${step.id}`,
-      detail: eventDetail({
-        workflowStep: step.id,
-        skillId: currentSkill.id,
-        retry,
-        retryState: retry ? 'start' : undefined,
-      }),
-    });
-    return { skill: currentSkill, step };
-  }
-
-  async function finishAction(params: {
-    stepId: string;
-    retry: boolean;
-    candidateId?: string;
-    candidateName?: string;
-    browserTrace?: Record<string, unknown>;
-  }): Promise<void> {
-    const currentSkill = requireSkill();
-    await updateRun({ skillId: currentSkill.id, currentWorkflowStep: null });
-    await recordEvent({
-      level: 'success',
-      message: params.retry
-        ? `Workflow 重试成功：${params.stepId}`
-        : `Workflow 完成：${params.stepId}`,
-      candidateId: params.candidateId,
-      detail: eventDetail({
-        workflowStep: params.stepId,
-        skillId: currentSkill.id,
-        retry: params.retry,
-        retryState: params.retry ? 'success' : undefined,
-        browserTrace: params.browserTrace,
-        candidateName: params.candidateName,
-      }),
-    });
+  function executionContext(inputValues: Record<string, unknown>): PublishExecutionContext {
+    return {
+      input: {
+        baseUrl: exploreContext.baseUrl,
+        keyword: '',
+        searchUrl: '',
+        profileUrl: '',
+        message: '',
+        ...inputValues,
+      },
+      credentials: exploreContext.credentials,
+      target: {},
+    };
   }
 
   async function clearCurrentWorkflowStep(): Promise<void> {
+    await updateRun({ skillId: requireSkill().id, currentWorkflowStep: null });
+  }
+
+  async function runSegmentOnce(
+    params: SegmentParams,
+    retry: boolean,
+  ): Promise<BrowserWorkflowRunResult> {
     const currentSkill = requireSkill();
-    await updateRun({ skillId: currentSkill.id, currentWorkflowStep: null });
+    const run = await dependencies.runBrowserWorkflow({
+      skill: currentSkill,
+      currentStepId: params.startStepId,
+      executor: dependencies.adapter.getBrowserExecutor(),
+      context: executionContext(params.input),
+      onStep: async ({ stepId }) => {
+        await updateRun({ skillId: currentSkill.id, currentWorkflowStep: stepId });
+        await recordEvent({
+          level: 'info',
+          message: retry ? `Workflow 重试步骤：${stepId}` : `Workflow 开始：${stepId}`,
+          candidateId: params.candidate?.candidateId,
+          detail: eventDetail({
+            workflowStep: stepId,
+            skillId: currentSkill.id,
+            retry: retry || undefined,
+            retryState: retry ? 'start' : undefined,
+            candidateId: params.candidate?.candidateId,
+            candidateName: params.candidate?.displayName ?? params.candidateName,
+          }),
+        });
+      },
+    });
+
+    if (run.status === 'success') {
+      await clearCurrentWorkflowStep();
+      await recordEvent({
+        level: 'success',
+        message: retry
+          ? `Workflow 重试成功：${params.startStepId}`
+          : `Workflow 完成：${params.startStepId}`,
+        candidateId: params.candidate?.candidateId,
+        detail: eventDetail({
+          workflowStep: params.startStepId,
+          retry: retry || undefined,
+          retryState: retry ? 'success' : undefined,
+          browserTrace: browserTrace(run),
+          candidateId: params.candidate?.candidateId,
+          candidateName: params.candidate?.displayName ?? params.candidateName,
+        }),
+      });
+    }
+    return run;
+  }
+
+  function targetFailureFromRun(run: BrowserWorkflowRunResult): TargetFailure | null {
+    const failedStep = run.failedStep;
+    if (!failedStep) return null;
+    const targetKey = TARGET_KEY_BY_STEP_ID[failedStep.stepId];
+    const target = failedStep.params.target;
+    if (!targetKey || !isBrowserTargetInput(target)) return null;
+    return {
+      stepId: failedStep.stepId,
+      targetKey,
+      target,
+      error: failedStep.result.error ?? errorForWorkflowRun(run),
+    };
   }
 
   async function captureBrowserFailure(
-    failed: ScreeningWorkflowTargetError,
+    run: BrowserWorkflowRunResult,
   ): Promise<BrowserFailureContext> {
     const executor = dependencies.adapter.getBrowserExecutor();
     const [rawSnapshot, structuredSnapshot] = await Promise.all([
-      executor.snapshot?.().catch(() => undefined),
-      executor.snapshotStructured?.().catch(() => undefined),
+      executor.snapshot ? Promise.resolve(executor.snapshot()).catch(() => undefined) : undefined,
+      executor.snapshotStructured
+        ? Promise.resolve(executor.snapshotStructured()).catch(() => undefined)
+        : undefined,
     ]);
-    const resultSnapshot = failed.result.domSnapshot;
+    const resultSnapshot = run.failedStep?.result.domSnapshot;
     return {
       rawSnapshot:
         rawSnapshot ??
@@ -514,301 +535,174 @@ export function createCandidateScreeningWorkflowSession(
   }
 
   async function recordWorkflowFailure(params: {
-    stepId: string;
-    candidateId?: string;
-    candidateName?: string;
-    error: string;
+    segment: SegmentParams;
+    run: BrowserWorkflowRunResult;
     retry: boolean;
-    targetError?: ScreeningWorkflowTargetError;
-    browserTrace?: Record<string, unknown>;
-  }): Promise<BrowserFailureContext | undefined> {
-    const context = params.targetError
-      ? await captureBrowserFailure(params.targetError)
-      : undefined;
-    try {
-      await recordEvent({
-        level: 'error',
-        message: params.retry
-          ? `Workflow 重试失败：${params.stepId}`
-          : `Workflow 失败：${params.stepId}`,
-        candidateId: params.candidateId,
-        detail: eventDetail({
-          workflowStep: params.stepId,
-          retry: params.retry,
-          retryState: params.retry ? 'failure' : undefined,
-          candidateId: params.candidateId,
-          candidateName: params.candidateName,
-          target: params.targetError?.target,
-          targetKey: params.targetError?.targetKey,
-          error: params.error,
-          browserTrace: params.browserTrace,
-          rawSnapshot: context?.rawSnapshot,
-          structuredSnapshot: context?.structuredSnapshot,
-        }),
-      });
-    } catch (error) {
-      if (params.targetError) throw new ScreeningWorkflowRepairPersistenceError(error);
-      throw error;
-    }
-    return context;
+    targetFailure: TargetFailure | null;
+    context: BrowserFailureContext;
+  }): Promise<void> {
+    const stepId = params.run.failedStep?.stepId ?? params.segment.startStepId;
+    await recordEvent({
+      level: 'error',
+      message: params.retry ? `Workflow 重试失败：${stepId}` : `Workflow 失败：${stepId}`,
+      candidateId: params.segment.candidate?.candidateId,
+      detail: eventDetail({
+        workflowStep: stepId,
+        retry: params.retry || undefined,
+        retryState: params.retry ? 'failure' : undefined,
+        candidateId: params.segment.candidate?.candidateId,
+        candidateName: params.segment.candidate?.displayName ?? params.segment.candidateName,
+        target: params.targetFailure?.target,
+        targetKey: params.targetFailure?.targetKey,
+        error: errorForWorkflowRun(params.run),
+        browserTrace: browserTrace(params.run),
+        rawSnapshot: params.context.rawSnapshot,
+        structuredSnapshot: params.context.structuredSnapshot,
+      }),
+    });
   }
 
-  async function repairTarget(
-    failed: ScreeningWorkflowTargetError,
-    failureContext?: BrowserFailureContext,
+  async function requireUniqueTarget(
+    executor: BrowserExecutor,
+    target: BrowserTargetInput,
+    targetKey: keyof BossLikeScreeningTargets,
   ): Promise<boolean> {
+    if (!executor.resolveTarget) return false;
+    const report = await executor.resolveTarget(target, resolveOptionsForTarget(targetKey));
+    if (report.status === 'unique') return true;
+    throw new Error(`${targetFailureCode(report)}: ${report.reason ?? report.target.name}`);
+  }
+
+  async function repairTarget(params: {
+    failure: TargetFailure;
+    context: BrowserFailureContext;
+    candidateId?: string;
+  }): Promise<boolean> {
     const currentSkill = requireSkill();
     const executor = dependencies.adapter.getBrowserExecutor();
-    if (!executor.snapshotStructured || !executor.resolveTarget) return false;
+    const snapshot = params.context.structuredSnapshot;
+    if (!snapshot || !executor.snapshotStructured || !executor.resolveTarget) return false;
 
-    let report: LocatorMatchReport | null = null;
-    let replacements: Record<string, BrowserTargetInput> | null = null;
     try {
-      const snapshot = failureContext?.structuredSnapshot ?? (await executor.snapshotStructured());
+      const targets: Partial<BossLikeScreeningTargets> = {};
       const replacement = repairBossLikeScreeningTargetFromSnapshot({
         snapshot,
-        failedStepId: failed.stepId,
-        targetKey: failed.targetKey,
-        failedTarget: failed.target,
+        failedStepId: params.failure.stepId,
+        targetKey: params.failure.targetKey,
+        failedTarget: params.failure.target,
       });
       if (!replacement) return false;
-      report = await executor.resolveTarget(replacement, resolveOptionsForTarget(failed.targetKey));
-      if (report.status !== 'unique') {
-        throw new ScreeningWorkflowRepairResolutionError(report);
-      }
-      replacements = { [failed.targetKey]: replacement };
-      if (failed.stepId === 'chat_candidate') {
+      targets[params.failure.targetKey] = replacement;
+
+      if (CONTACT_REPAIR_STEP_IDS.has(params.failure.stepId)) {
         let composerSnapshot = snapshot;
-        if (failed.targetKey === 'greetButton') {
-          const composerOpened = await executor.click(replacement);
-          if (!composerOpened.success) return false;
+        if (params.failure.stepId === SCREENING_STEP_IDS.contactOpenGreeting) {
+          const opened = await executor.click(replacement);
+          if (!opened.success) return false;
           composerSnapshot = await executor.snapshotStructured();
         }
-        for (const targetKey of ['messageInput', 'sendButton'] as const) {
-          const composerTarget = repairBossLikeScreeningTargetFromSnapshot({
-            snapshot: composerSnapshot,
-            failedStepId: failed.stepId,
+        for (const stepId of [
+          SCREENING_STEP_IDS.contactOpenGreeting,
+          SCREENING_STEP_IDS.contactFillMessage,
+          SCREENING_STEP_IDS.contactSend,
+        ]) {
+          const targetKey = TARGET_KEY_BY_STEP_ID[stepId];
+          const failedTarget = targetForStep(currentSkill, stepId);
+          if (!targetKey || !failedTarget) return false;
+          const repairedTarget = repairBossLikeScreeningTargetFromSnapshot({
+            snapshot:
+              stepId === SCREENING_STEP_IDS.contactOpenGreeting ? snapshot : composerSnapshot,
+            failedStepId: stepId,
             targetKey,
-            failedTarget: failed.target,
+            failedTarget,
           });
-          if (!composerTarget) return false;
-          replacements[targetKey] = composerTarget;
+          if (!repairedTarget) return false;
+          targets[targetKey] = repairedTarget;
         }
       }
-    } catch (error) {
-      if (error instanceof ScreeningWorkflowRepairResolutionError) throw error;
-      return false;
-    }
 
-    if (!report || !replacements) return false;
+      for (const [targetKey, target] of Object.entries(targets)) {
+        if (!target) return false;
+        await requireUniqueTarget(executor, target, targetKey as keyof BossLikeScreeningTargets);
+      }
 
-    let nextSkill: ScreeningWorkflowSkill;
-    try {
-      nextSkill = screeningSkill(
+      const repairedSteps = repairBossLikeScreeningSteps({
+        steps: currentSkill.steps,
+        failedStepId: params.failure.stepId,
+        targets,
+      });
+      if (!repairedSteps) return false;
+
+      const nextSkill = screeningSkill(
         await dependencies.createNextSkillVersion({
           previousSkill: currentSkill,
-          steps: patchStepTargets({
-            steps: currentSkill.steps,
-            stepId: failed.stepId,
-            targets: replacements,
-          }),
+          steps: repairedSteps,
           meta: {
             ...currentSkill.meta,
             repaired_from_skill_id: currentSkill.id,
             repaired_from_version: currentSkill.version,
-            failed_step_id: failed.stepId,
-            repair_reason: failed.message,
+            failed_step_id: params.failure.stepId,
+            repair_reason: params.failure.error,
           },
         }),
       );
-    } catch (error) {
-      throw new ScreeningWorkflowRepairPersistenceError(error);
-    }
-
-    try {
-      await updateRun({ skillId: nextSkill.id, currentWorkflowStep: failed.stepId });
+      await updateRun({ skillId: nextSkill.id, currentWorkflowStep: params.failure.stepId });
       await recordEvent({
         level: 'info',
         message: `Workflow 修复并升级到 v${nextSkill.version}`,
-        candidateId: failed.candidateId,
+        candidateId: params.candidateId,
         detail: eventDetail({
-          workflowStep: failed.stepId,
+          workflowStep: params.failure.stepId,
           skillId: nextSkill.id,
           previousSkillId: currentSkill.id,
           repair: true,
         }),
       });
-    } catch (error) {
-      throw new ScreeningWorkflowRepairPersistenceError(error);
-    }
-
-    skill = nextSkill;
-    return true;
-  }
-
-  async function runAction<T>(params: {
-    action: Exclude<ScreeningWorkflowAction, 'search_candidates'>;
-    candidateId?: string;
-    candidateName?: string;
-    invoke: (options: CandidateBrowserActionOptions) => Promise<T>;
-  }): Promise<T> {
-    try {
-      return await runActionWithRetry(params);
-    } catch (error) {
-      await clearCurrentWorkflowStep().catch(() => undefined);
-      throw error;
+      skill = nextSkill;
+      return true;
+    } catch {
+      return false;
     }
   }
 
-  async function runActionWithRetry<T>(params: {
-    action: Exclude<ScreeningWorkflowAction, 'search_candidates'>;
-    candidateId?: string;
-    candidateName?: string;
-    invoke: (options: CandidateBrowserActionOptions) => Promise<T>;
-  }): Promise<T> {
+  async function runSegmentWithSingleRepair(
+    params: SegmentParams,
+  ): Promise<BrowserWorkflowRunResult> {
     let retry = false;
+    let startStepId = params.startStepId;
 
     while (true) {
-      const started = await startAction(params.action, retry);
-      let value: T;
-      try {
-        value = await params.invoke(targetsForStep(started.step));
-      } catch (error) {
-        const targetError = targetErrorFromUnknown({
-          error,
-          step: started.step,
-          candidateId: params.candidateId,
-        });
-        if (retry) {
-          await recordWorkflowFailure({
-            stepId: started.step.id,
-            candidateId: params.candidateId,
-            candidateName: params.candidateName,
-            error: error instanceof Error ? error.message : String(error),
-            retry: true,
-            targetError: targetError ?? undefined,
-          });
-          throw error;
-        }
-        if (!targetError) throw error;
-        const failureContext = await recordWorkflowFailure({
-          stepId: started.step.id,
-          candidateId: params.candidateId,
-          candidateName: params.candidateName,
-          error: targetError.message,
-          retry: false,
-          targetError,
-        });
-        if (!(await repairTarget(targetError, failureContext))) throw error;
-        retry = true;
-        continue;
-      }
+      const run = await runSegmentOnce({ ...params, startStepId }, retry);
+      if (run.status === 'success') return run;
 
-      const actionResult = isActionExecutionResult(value) ? value : undefined;
-      if (actionResult && !actionResult.success) {
-        const targetError = targetErrorFromUnknown({
-          error: actionResult.targetError,
-          step: started.step,
-          candidateId: params.candidateId,
-        });
-        const failureContext = await recordWorkflowFailure({
-          stepId: started.step.id,
-          candidateId: params.candidateId,
-          candidateName: params.candidateName,
-          error: actionResult.error ?? 'candidate browser action failed',
-          retry,
-          targetError: targetError ?? undefined,
-          browserTrace: actionResult.browserTrace,
-        });
-        if (retry || !targetError) {
-          await clearCurrentWorkflowStep();
-          return value;
-        }
-        try {
-          if (!(await repairTarget(targetError, failureContext))) {
-            await clearCurrentWorkflowStep();
-            return value;
-          }
-        } catch (error) {
-          if (error instanceof ScreeningWorkflowRepairResolutionError) {
-            await clearCurrentWorkflowStep();
-            return value;
-          }
-          throw error;
-        }
-        retry = true;
-        continue;
-      }
-
-      await finishAction({
-        stepId: started.step.id,
+      const targetFailure = targetFailureFromRun(run);
+      const context = await captureBrowserFailure(run);
+      await recordWorkflowFailure({
+        segment: { ...params, startStepId },
+        run,
         retry,
-        candidateId: params.candidateId,
-        candidateName: params.candidateName,
-        browserTrace: actionResult?.browserTrace,
+        targetFailure,
+        context,
       });
-      return value;
-    }
-  }
-
-  async function enrichCandidate(candidate: RawCandidate): Promise<RawCandidate> {
-    return runAction({
-      action: 'enrich_candidate',
-      candidateName: candidate.name,
-      invoke: (workflow) => dependencies.adapter.enrichCandidate(candidate, workflow),
-    });
-  }
-
-  async function* runSearchCandidates(
-    plan: SearchPlan,
-    options: SearchOptions,
-  ): AsyncIterable<RawCandidateBatch> {
-    if (!skill && !emptyExplorationCompleted) {
-      await loadOrExplore({ searchPlan: plan, stage: stage ?? 'searching_live' });
-    }
-    if (!skill && emptyExplorationCompleted) return;
-    let retry = false;
-
-    while (true) {
-      const started = await startAction('search_candidates', retry);
-      try {
-        const source = dependencies.adapter.searchCandidates(
-          plan,
-          { ...options, deferEnrichment: true },
-          targetsForStep(started.step),
-        );
-        for await (const batch of source) {
-          const candidates: RawCandidate[] = [];
-          for (const candidate of batch.candidates) {
-            candidates.push(
-              hasShortResumeText(candidate) ? await enrichCandidate(candidate) : candidate,
-            );
-          }
-          yield { ...batch, candidates };
-        }
-        await finishAction({ stepId: started.step.id, retry });
-        return;
-      } catch (error) {
-        const targetError = targetErrorFromUnknown({ error, step: started.step });
-        if (retry) {
-          await recordWorkflowFailure({
-            stepId: started.step.id,
-            error: error instanceof Error ? error.message : String(error),
-            retry: true,
-            targetError: targetError ?? undefined,
-          });
-          throw error;
-        }
-        if (!targetError) throw error;
-        const failureContext = await recordWorkflowFailure({
-          stepId: started.step.id,
-          error: targetError.message,
-          retry: false,
-          targetError,
-        });
-        if (!(await repairTarget(targetError, failureContext))) throw error;
-        retry = true;
+      if (retry || !targetFailure) {
+        await clearCurrentWorkflowStep();
+        return run;
       }
+      if (
+        !(await repairTarget({
+          failure: targetFailure,
+          context,
+          candidateId: params.candidate?.candidateId,
+        }))
+      ) {
+        await clearCurrentWorkflowStep();
+        return run;
+      }
+
+      retry = true;
+      startStepId = CONTACT_REPAIR_STEP_IDS.has(targetFailure.stepId)
+        ? SCREENING_STEP_IDS.contactOpen
+        : targetFailure.stepId;
     }
   }
 
@@ -837,7 +731,6 @@ export function createCandidateScreeningWorkflowSession(
         }),
       });
     } else {
-      const exploreContext = resolveWorkflowExploreContext(dependencies.adapter);
       const explored = await dependencies.exploreSkill({
         adapter: dependencies.adapter,
         searchPlan: params.searchPlan,
@@ -847,7 +740,11 @@ export function createCandidateScreeningWorkflowSession(
         emptyExplorationCompleted = true;
         return null;
       }
-      skill = screeningSkill(await dependencies.createExploredSkill(explored));
+      const exploredSkill = isExploredScreeningWorkflow(explored) ? explored.skill : explored;
+      skill = screeningSkill(await dependencies.createExploredSkill(exploredSkill));
+      if (isExploredScreeningWorkflow(explored)) {
+        firstExploredList = { keyword: explored.firstKeyword, html: explored.firstListHtml };
+      }
       await recordEvent({
         level: 'success',
         message: 'Workflow 探索完成',
@@ -856,10 +753,6 @@ export function createCandidateScreeningWorkflowSession(
     }
 
     await updateRun({ skillId: skill.id, currentWorkflowStep: null });
-    await runAction({
-      action: 'ensure_login',
-      invoke: (workflow) => dependencies.adapter.loginIfNeeded(workflow),
-    });
     return skill;
   }
 
@@ -878,23 +771,142 @@ export function createCandidateScreeningWorkflowSession(
     }
 
     const storedSkill = await dependencies.getSkillById(params.skillId);
-    if (!storedSkill) {
-      throw new Error(`screening workflow skill not found: ${params.skillId}`);
-    }
-
+    if (!storedSkill) throw new Error(`screening workflow skill not found: ${params.skillId}`);
     skill = screeningSkill(storedSkill);
     if (skill.platform !== dependencies.platform) {
       throw new Error(
         `screening workflow skill platform mismatch: expected ${dependencies.platform}, received ${skill.platform}`,
       );
     }
-
     await updateRun({ skillId: skill.id, currentWorkflowStep: null });
-    await runAction({
-      action: 'ensure_login',
-      invoke: (workflow) => dependencies.adapter.loginIfNeeded(workflow),
-    });
     return skill;
+  }
+
+  async function runSearchKeyword(params: {
+    keyword: string;
+    maxCandidates: number;
+  }): Promise<{ keyword: string; candidates: RawCandidate[] }> {
+    const keyword = params.keyword.trim();
+    if (!keyword) return { keyword, candidates: [] };
+    const currentSkill = requireSkill();
+    let html: string;
+    if (firstExploredList?.keyword === keyword) {
+      html = firstExploredList.html;
+      firstExploredList = null;
+      await recordEvent({
+        level: 'success',
+        message: `复用探索搜索观察：${keyword}`,
+        detail: eventDetail({
+          workflowStep: SCREENING_STEP_IDS.searchObserve,
+          skillId: currentSkill.id,
+        }),
+      });
+    } else {
+      const run = await runSegmentWithSingleRepair({
+        startStepId: SCREENING_STEP_IDS.searchOpen,
+        input: {
+          keyword,
+          searchUrl: createBossLikeSearchUrl(exploreContext.baseUrl, keyword),
+        },
+      });
+      if (run.status !== 'success') throw new Error(errorForWorkflowRun(run));
+      html = run.observations.listHtml ?? '';
+    }
+    if (!html.trim()) throw new Error('screening search did not observe listHtml');
+    return {
+      keyword,
+      candidates: extractBossLikeCandidatesFromHtml(html)
+        .map((candidate) => normalizeCandidateProfileUrl(candidate, exploreContext.baseUrl))
+        .slice(0, Math.max(0, params.maxCandidates)),
+    };
+  }
+
+  async function observeCandidateProfile(candidate: RawCandidate): Promise<RawCandidate> {
+    const profileUrl = resolveBossLikeProfileUrl(
+      candidate.profileUrl,
+      exploreContext.baseUrl,
+    ).profileUrl;
+    if (!profileUrl) return candidate;
+    const run = await runSegmentWithSingleRepair({
+      startStepId: SCREENING_STEP_IDS.detailOpen,
+      input: { profileUrl },
+      candidateName: candidate.name,
+    });
+    if (run.status !== 'success') throw new Error(errorForWorkflowRun(run));
+    const html = run.observations.profileHtml ?? '';
+    if (!html.trim()) throw new Error('screening profile did not observe profileHtml');
+    return mergeProfileObservation({ candidate, html, baseUrl: exploreContext.baseUrl });
+  }
+
+  async function contactAndCollectCandidate(
+    candidate: StoredCandidateRef,
+    plan: CandidateActionPlan,
+  ): Promise<ActionExecutionResult> {
+    const profileUrl = resolveBossLikeProfileUrl(candidate.profileUrl, exploreContext.baseUrl);
+    const message = plan.message?.trim();
+    if (!profileUrl.profileUrl || !message) {
+      return {
+        success: false,
+        error: profileUrl.error ?? 'chat message is required',
+        browserTrace: { action: 'contact_and_collect', candidateId: candidate.candidateId },
+      };
+    }
+    const run = await runSegmentWithSingleRepair({
+      startStepId: SCREENING_STEP_IDS.contactOpen,
+      input: { profileUrl: profileUrl.profileUrl, message },
+      candidate,
+    });
+    return run.status === 'success'
+      ? { success: true, browserTrace: browserTrace(run) }
+      : { success: false, error: errorForWorkflowRun(run), browserTrace: browserTrace(run) };
+  }
+
+  async function collectCandidate(candidate: StoredCandidateRef): Promise<ActionExecutionResult> {
+    const profileUrl = resolveBossLikeProfileUrl(candidate.profileUrl, exploreContext.baseUrl);
+    if (!profileUrl.profileUrl) {
+      return {
+        success: false,
+        error: profileUrl.error ?? 'candidate profileUrl is required to collect',
+        browserTrace: { action: 'collect', candidateId: candidate.candidateId },
+      };
+    }
+    const run = await runSegmentWithSingleRepair({
+      startStepId: SCREENING_STEP_IDS.collectOpen,
+      input: { profileUrl: profileUrl.profileUrl },
+      candidate,
+    });
+    return run.status === 'success'
+      ? { success: true, browserTrace: browserTrace(run) }
+      : { success: false, error: errorForWorkflowRun(run), browserTrace: browserTrace(run) };
+  }
+
+  async function* searchCandidates(
+    plan: SearchPlan,
+    options: SearchOptions,
+  ): AsyncIterable<RawCandidateBatch> {
+    if (!skill && !emptyExplorationCompleted) {
+      await loadOrExplore({ searchPlan: plan, stage: stage ?? 'searching_live' });
+    }
+    if (!skill) return;
+
+    const batchSize = Math.max(1, options.batchSize);
+    const maxCandidates = Math.max(0, options.maxCandidates);
+    let emitted = 0;
+    let batch: RawCandidate[] = [];
+    for (const keyword of uniqueSearchKeywords(plan)) {
+      if (emitted >= maxCandidates) break;
+      const searched = await runSearchKeyword({ keyword, maxCandidates: maxCandidates - emitted });
+      for (const candidate of searched.candidates) {
+        if (emitted >= maxCandidates) break;
+        batch.push(await observeCandidateProfile(candidate));
+        emitted += 1;
+        if (batch.length === batchSize) {
+          yield { candidates: batch, cursor: String(emitted) };
+          batch = [];
+        }
+      }
+    }
+    if (batch.length > 0) yield { candidates: batch, cursor: String(emitted) };
   }
 
   return {
@@ -903,22 +915,13 @@ export function createCandidateScreeningWorkflowSession(
     },
     loadOrExplore,
     loadExact,
-    searchCandidates: runSearchCandidates,
-    enrichCandidate,
-    chatCandidate: (candidate, plan) =>
-      runAction({
-        action: 'chat_candidate',
-        candidateId: candidate.candidateId,
-        candidateName: candidate.displayName,
-        invoke: (workflow) => dependencies.adapter.chatCandidate(candidate, plan, workflow),
-      }),
-    collectCandidate: (candidate) =>
-      runAction({
-        action: 'collect_candidate',
-        candidateId: candidate.candidateId,
-        candidateName: candidate.displayName,
-        invoke: (workflow) => dependencies.adapter.collectCandidate(candidate, workflow),
-      }),
+    runSearchKeyword,
+    observeCandidateProfile,
+    contactAndCollectCandidate,
+    collectCandidate,
+    searchCandidates,
+    enrichCandidate: observeCandidateProfile,
+    chatCandidate: contactAndCollectCandidate,
     close: () => dependencies.adapter.close(),
   };
 }

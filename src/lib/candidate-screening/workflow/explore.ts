@@ -598,55 +598,18 @@ function firstSearchKeyword(plan: SearchPlan): string | null {
   return keyword?.trim() || plan.retrievalQuery.trim() || null;
 }
 
-const SEARCH_RESULT_SNAPSHOT_CHANGE_MAX_ATTEMPTS = 5;
-
-function isExplicitEmptySearchResultSnapshot(html: string): boolean {
-  const text = html
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, '');
-  return /暂无(?:符合条件的)?(?:简历|候选人|人才|数据)/.test(text);
+function createBossLikeSearchUrl(baseUrl: string, keyword: string): string {
+  const url = new URL('/employer/resumes', `${baseUrl}/`);
+  url.searchParams.set('keyword', keyword);
+  return url.toString();
 }
 
 async function waitForCandidateSearchResults(
   executor: BrowserExecutor,
-  previousSnapshot: string,
-  previousUrl: string,
+  searchUrl: string,
 ): Promise<string> {
-  if (executor.waitForSnapshotChange) {
-    let snapshot = previousSnapshot;
-    for (let attempt = 0; attempt < SEARCH_RESULT_SNAPSHOT_CHANGE_MAX_ATTEMPTS; attempt += 1) {
-      ensureSuccess(
-        'wait for candidate search result change',
-        await executor.waitForSnapshotChange(snapshot, attempt === 0 ? previousUrl : undefined),
-      );
-      const updatedSnapshot = await requireRawSnapshot(executor);
-      if (
-        updatedSnapshot !== snapshot &&
-        (extractBossLikeCandidatesFromHtml(updatedSnapshot).length > 0 ||
-          isExplicitEmptySearchResultSnapshot(updatedSnapshot))
-      ) {
-        return updatedSnapshot;
-      }
-      snapshot = updatedSnapshot;
-    }
-    throw new Error('screening_explore_candidate_results_not_ready');
-  }
-
-  const hasCandidateCards = await executor.check({
-    type: 'dom_exists',
-    selector: 'article[data-candidate-id]',
-    timeout: 5_000,
-  });
-  if (hasCandidateCards) return requireRawSnapshot(executor);
-
-  const hasEmptyState = await executor.check({
-    type: 'text_contains',
-    text: '暂无',
-    timeout: 5_000,
-  });
-  if (hasEmptyState) return requireRawSnapshot(executor);
-  throw new Error('screening_explore_candidate_results_not_ready');
+  ensureSuccess('wait for candidate search URL', await executor.waitForUrl(searchUrl));
+  return requireRawSnapshot(executor);
 }
 
 export async function exploreBossLikeScreeningWorkflow(
@@ -716,12 +679,10 @@ export async function exploreBossLikeScreeningWorkflow(
     throw new Error('screening_explore_search_keyword_required');
   }
   ensureSuccess('fill search keyword', await executor.fill(searchTargets.searchInput, keyword));
-  const previousSearchSnapshot = await requireRawSnapshot(executor);
   ensureSuccess('submit candidate search', await executor.click(searchTargets.searchSubmit));
   const candidateSearchSnapshot = await waitForCandidateSearchResults(
     executor,
-    previousSearchSnapshot,
-    listSnapshot.url,
+    createBossLikeSearchUrl(baseUrl, keyword),
   );
 
   const candidates = extractBossLikeCandidatesFromHtml(candidateSearchSnapshot);

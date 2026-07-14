@@ -12,8 +12,8 @@ export type SearchOptions = {
   maxCandidates: number;
   batchSize: number;
   /**
-   * Lets a workflow session run short-resume detail enrichment as its own
-   * target-aware browser step. Direct callers retain the legacy behavior.
+   * Retained for direct legacy adapter callers. Browser-v2 screening receives
+   * list/profile HTML observations through the shared workflow runner instead.
    */
   deferEnrichment?: boolean;
 };
@@ -68,6 +68,7 @@ export type CandidateSourceAdapter = {
   platform: CandidateScreeningPlatform;
   getBrowserExecutor(): BrowserExecutor;
   getWorkflowExploreContext?(): CandidateWorkflowExploreContext;
+  /** Legacy and Candidate Communication browser boundary; browser-v2 uses getBrowserExecutor(). */
   loginIfNeeded(options?: CandidateBrowserActionOptions): Promise<void>;
   searchCandidates(
     plan: SearchPlan,

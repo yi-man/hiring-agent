@@ -252,6 +252,14 @@ class DelayedSearchResultsExploringExecutor extends ExploringScreeningExecutor {
     return result;
   }
 
+  async waitForUrl(url: string): Promise<BrowserStepResult> {
+    const result = await super.waitForUrl(url);
+    if (url === `${baseUrl}/employer/resumes?keyword=Java`) {
+      this.candidatesReady = true;
+    }
+    return result;
+  }
+
   async snapshot(): Promise<string> {
     this.calls.push('snapshot');
     return this.candidatesReady ? resumeListHtml : '<main>正在加载候选人</main>';
@@ -266,17 +274,18 @@ class RefreshedSearchResultsExploringExecutor extends ExploringScreeningExecutor
     return this.resultsRefreshed ? refreshedResumeListHtml : resumeListHtml;
   }
 
-  async waitForSnapshotChange(): Promise<BrowserStepResult> {
-    this.calls.push('waitForSnapshotChange');
-    this.resultsRefreshed = true;
-    return { success: true };
+  async waitForUrl(url: string): Promise<BrowserStepResult> {
+    const result = await super.waitForUrl(url);
+    if (url === `${baseUrl}/employer/resumes?keyword=Java`) {
+      this.resultsRefreshed = true;
+    }
+    return result;
   }
 }
 
 class UrlThenResultsExploringExecutor extends ExploringScreeningExecutor {
   private searchSubmitted = false;
-  private urlChanged = false;
-  private resultsRefreshed = false;
+  private queryNavigationCompleted = false;
 
   async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
     const result = await super.click(target);
@@ -289,20 +298,15 @@ class UrlThenResultsExploringExecutor extends ExploringScreeningExecutor {
   async snapshot(): Promise<string> {
     this.calls.push('snapshot');
     if (!this.searchSubmitted) return resumeListHtml;
-    return this.resultsRefreshed ? refreshedResumeListHtml : resumeListHtml;
+    return this.queryNavigationCompleted ? resumeListHtml : '<main>正在加载候选人</main>';
   }
 
-  async waitForSnapshotChange(
-    _previousSnapshot: string,
-    previousUrl?: string,
-  ): Promise<BrowserStepResult> {
-    this.calls.push(`waitForSnapshotChange:${previousUrl ? 'url' : 'snapshot'}`);
-    if (previousUrl) {
-      this.urlChanged = true;
-      return { success: true };
+  async waitForUrl(url: string): Promise<BrowserStepResult> {
+    const result = await super.waitForUrl(url);
+    if (url === `${baseUrl}/employer/resumes?keyword=Java`) {
+      this.queryNavigationCompleted = true;
     }
-    this.resultsRefreshed = true;
-    return { success: true };
+    return result;
   }
 }
 
@@ -519,7 +523,7 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     ).resolves.toBeNull();
   });
 
-  it('waits for search candidates before reading the first exploration snapshot', async () => {
+  it('waits for the keyword query URL before reading the first exploration snapshot', async () => {
     const executor = new DelayedSearchResultsExploringExecutor();
 
     await expect(
@@ -528,10 +532,10 @@ describe('exploreBossLikeScreeningWorkflow', () => {
       expect.objectContaining({ skill: expect.objectContaining({ name: 'screen_candidates' }) }),
     );
 
-    expect(executor.calls).toContain('check:article[data-candidate-id]');
+    expect(executor.calls).toContain(`waitForUrl:${baseUrl}/employer/resumes?keyword=Java`);
   });
 
-  it('waits for a new search-result snapshot instead of learning the previous candidate list', async () => {
+  it('uses the keyword query navigation before learning the first result snapshot', async () => {
     const executor = new RefreshedSearchResultsExploringExecutor();
 
     await expect(
@@ -540,11 +544,11 @@ describe('exploreBossLikeScreeningWorkflow', () => {
       expect.objectContaining({ skill: expect.objectContaining({ name: 'screen_candidates' }) }),
     );
 
-    expect(executor.calls).toContain('waitForSnapshotChange');
+    expect(executor.calls).toContain(`waitForUrl:${baseUrl}/employer/resumes?keyword=Java`);
     expect(executor.calls).toContain(`navigate:${baseUrl}/employer/resumes/2`);
   });
 
-  it('keeps waiting for a result snapshot after the search URL changes', async () => {
+  it('accepts unchanged candidate HTML only after the keyword query navigation completes', async () => {
     const executor = new UrlThenResultsExploringExecutor();
 
     const explored = await exploreBossLikeScreeningWorkflow({
@@ -555,15 +559,13 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     });
     if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
 
-    expect(explored.firstListHtml).toBe(refreshedResumeListHtml);
+    expect(explored.firstListHtml).toBe(resumeListHtml);
 
-    expect(executor.calls).toEqual(
-      expect.arrayContaining([
-        'waitForSnapshotChange:url',
-        'waitForSnapshotChange:snapshot',
-        `navigate:${baseUrl}/employer/resumes/2`,
-      ]),
+    const waitForQueryUrl = executor.calls.indexOf(
+      `waitForUrl:${baseUrl}/employer/resumes?keyword=Java`,
     );
+    expect(waitForQueryUrl).toBeGreaterThan(-1);
+    expect(executor.calls.slice(waitForQueryUrl + 1)).toContain('snapshot');
   });
 
   it('accepts a nested explicit empty-state message after the result page changes', async () => {

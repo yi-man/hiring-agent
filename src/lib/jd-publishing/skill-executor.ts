@@ -276,6 +276,7 @@ export async function runBrowserWorkflow(params: {
   currentStepId?: string | null;
   executor: BrowserExecutor;
   context: PublishExecutionContext;
+  onStep?: (params: { stepId: string; step: PublishStep }) => void | Promise<void>;
 }): Promise<BrowserWorkflowRunResult> {
   const { skill, executor, context } = params;
   const traceSteps: PublishTraceStep[] = [];
@@ -288,6 +289,10 @@ export async function runBrowserWorkflow(params: {
   const maxIterations = Math.max(skill.steps.length * 3, 1);
 
   for (let iteration = 0; currentStepId && iteration < maxIterations; iteration += 1) {
+    const currentStep = skill.steps.find((step) => step.id === currentStepId);
+    if (currentStep && currentStep.type !== 'end') {
+      await params.onStep?.({ stepId: currentStepId, step: currentStep });
+    }
     const result = await executePublishingStep({
       stepId: currentStepId,
       skill,
