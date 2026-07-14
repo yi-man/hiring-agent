@@ -1,8 +1,15 @@
 import { buildBossLikeScreeningSkill } from './skill-registry';
 
+function stepById(skill: ReturnType<typeof buildBossLikeScreeningSkill>, id: string) {
+  const step = skill.steps.find((candidate) => candidate.id === id);
+  if (!step) throw new Error(`missing step: ${id}`);
+  return step;
+}
+
 describe('boss-like screening workflow skill', () => {
-  it('builds a complete boss-like screening workflow', () => {
+  it('builds one browser-v2 primitive screening graph', () => {
     const skill = buildBossLikeScreeningSkill();
+    const actionSteps = skill.steps.filter((step) => step.type === 'action');
 
     expect(skill).toEqual(
       expect.objectContaining({
@@ -12,68 +19,60 @@ describe('boss-like screening workflow skill', () => {
         isActive: true,
       }),
     );
-    expect(skill.steps.filter((step) => step.type === 'action').map((step) => step.action)).toEqual(
-      [
-        'ensure_login',
-        'search_candidates',
-        'enrich_candidate',
-        'chat_candidate',
-        'collect_candidate',
-      ],
-    );
+    expect(actionSteps.map((step) => step.action)).toEqual([
+      'navigate',
+      'fill',
+      'fill',
+      'click',
+      'wait_for_url',
+      'fill',
+      'click',
+      'wait_for_text',
+      'observe',
+      'navigate',
+      'wait_for_text',
+      'observe',
+      'navigate',
+      'click',
+      'fill',
+      'click',
+      'wait_for_text',
+      'navigate',
+      'click',
+    ]);
+    expect(skill.meta).toMatchObject({ dsl_version: 'browser-v2', created_from: 'explore' });
+    expect(stepById(skill, 'contact_wait_success')).toMatchObject({
+      action: 'wait_for_text',
+      next: 'collect_click',
+    });
+    expect(new Set(actionSteps.map((step) => step.id)).size).toBe(19);
+    expect(stepById(skill, 'auth_required')).toMatchObject({
+      ifFalse: { next: 'search_fill' },
+    });
+    expect(stepById(skill, 'login_wait')).toMatchObject({ next: 'search_fill' });
   });
 
-  it('groups neutral browser targets with each screening action', () => {
+  it('uses template inputs and one target per target-bearing primitive', () => {
     const skill = buildBossLikeScreeningSkill();
 
-    expect(skill.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'ensure_login',
-          params: {
-            targets: expect.objectContaining({
-              username: expect.objectContaining({ name: '用户名' }),
-              password: expect.objectContaining({ name: '密码' }),
-              loginButton: expect.objectContaining({ name: '登录' }),
-            }),
-          },
-        }),
-        expect.objectContaining({
-          id: 'search_candidates',
-          params: {
-            targets: expect.objectContaining({
-              searchInput: expect.objectContaining({ name: '搜索候选人' }),
-              searchSubmit: expect.objectContaining({ name: '搜索' }),
-            }),
-          },
-        }),
-        expect.objectContaining({
-          id: 'enrich_candidate',
-          params: {
-            targets: expect.objectContaining({
-              detailContent: expect.objectContaining({ name: '候选人详情' }),
-            }),
-          },
-        }),
-        expect.objectContaining({
-          id: 'chat_candidate',
-          params: {
-            targets: expect.objectContaining({
-              greetButton: expect.objectContaining({ name: '打招呼' }),
-              messageInput: expect.objectContaining({ name: '消息' }),
-              sendButton: expect.objectContaining({ name: '发送' }),
-            }),
-          },
-        }),
-        expect.objectContaining({
-          id: 'collect_candidate',
-          params: {
-            targets: expect.objectContaining({
-              collectButton: expect.objectContaining({ name: '收藏' }),
-            }),
-          },
-        }),
-      ]),
-    );
+    expect(stepById(skill, 'search_fill')).toMatchObject({
+      params: {
+        target: expect.objectContaining({ name: '搜索候选人' }),
+        value: '{{input.keyword}}',
+      },
+      next: 'search_submit',
+    });
+    expect(stepById(skill, 'detail_open')).toMatchObject({
+      params: { url: '{{input.profileUrl}}' },
+      next: 'detail_wait',
+    });
+    expect(stepById(skill, 'contact_fill_message')).toMatchObject({
+      params: {
+        target: expect.objectContaining({ name: '消息' }),
+        value: '{{input.message}}',
+      },
+      next: 'contact_send',
+    });
+    expect(stepById(skill, 'collect_open')).toMatchObject({ next: 'collect_click' });
   });
 });

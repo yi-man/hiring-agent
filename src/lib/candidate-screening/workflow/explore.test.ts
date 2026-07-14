@@ -11,8 +11,10 @@ import type {
 } from '@/lib/browser/types';
 import {
   exploreBossLikeScreeningWorkflow,
+  repairBossLikeScreeningSteps,
   repairBossLikeScreeningTargetFromSnapshot,
 } from './explore';
+import { buildBossLikeScreeningSkill } from './skill-registry';
 import type { SearchPlan } from '../types';
 
 const baseUrl = 'http://localhost:6183';
@@ -456,60 +458,65 @@ class DisabledSendButtonExploringExecutor extends ExploringScreeningExecutor {
 }
 
 describe('exploreBossLikeScreeningWorkflow', () => {
-  it('explores list and detail targets without sending or collecting', async () => {
+  it('returns the first actual search observation without sending or collecting', async () => {
     const executor = new ExploringScreeningExecutor();
 
-    const skill = await exploreBossLikeScreeningWorkflow({
+    const explored = await exploreBossLikeScreeningWorkflow({
       executor,
       baseUrl,
       credentials,
       searchPlan,
     });
-    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+    if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
+    const { skill } = explored;
 
     expect(skill.id).toMatch(/^boss-like-screen-candidates-explore-/);
+    expect(explored.firstKeyword).toBe('Java');
+    expect(explored.firstListHtml).toContain('data-candidate-id');
     expect(skill.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'search_candidates',
+          id: 'search_submit',
           params: expect.objectContaining({
-            targets: expect.objectContaining({
-              searchSubmit: expect.objectContaining({ name: '搜索' }),
-            }),
+            target: expect.objectContaining({ name: '搜索' }),
           }),
         }),
         expect.objectContaining({
-          id: 'chat_candidate',
+          id: 'contact_send',
           params: expect.objectContaining({
-            targets: expect.objectContaining({
-              sendButton: expect.objectContaining({ name: '发送' }),
-            }),
+            target: expect.objectContaining({ name: '发送' }),
           }),
         }),
       ]),
     );
+    expect(executor.calls.filter((call) => call === 'click:搜索')).toHaveLength(1);
     expect(executor.calls).not.toEqual(expect.arrayContaining(['click:发送', 'click:收藏']));
   });
 
   it('keeps chat composer targets scoped to any composer form instead of one candidate name', async () => {
     const executor = new ExploringScreeningExecutor();
 
-    const skill = await exploreBossLikeScreeningWorkflow({
+    const explored = await exploreBossLikeScreeningWorkflow({
       executor,
       baseUrl,
       credentials,
       searchPlan,
     });
-    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+    if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
 
-    const chatStep = skill.steps.find((step) => step.id === 'chat_candidate');
-    expect(chatStep).toEqual(
+    const messageStep = explored.skill.steps.find((step) => step.id === 'contact_fill_message');
+    const sendStep = explored.skill.steps.find((step) => step.id === 'contact_send');
+    expect(messageStep).toEqual(
       expect.objectContaining({
         params: expect.objectContaining({
-          targets: expect.objectContaining({
-            messageInput: expect.objectContaining({ scope: { kind: 'form' } }),
-            sendButton: expect.objectContaining({ scope: { kind: 'form' } }),
-          }),
+          target: expect.objectContaining({ scope: { kind: 'form' } }),
+        }),
+      }),
+    );
+    expect(sendStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          target: expect.objectContaining({ scope: { kind: 'form' } }),
         }),
       }),
     );
@@ -528,7 +535,9 @@ describe('exploreBossLikeScreeningWorkflow', () => {
 
     await expect(
       exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
-    ).resolves.toEqual(expect.objectContaining({ name: 'screen_candidates' }));
+    ).resolves.toEqual(
+      expect.objectContaining({ skill: expect.objectContaining({ name: 'screen_candidates' }) }),
+    );
 
     expect(executor.calls).toContain('check:article[data-candidate-id]');
   });
@@ -538,7 +547,9 @@ describe('exploreBossLikeScreeningWorkflow', () => {
 
     await expect(
       exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
-    ).resolves.toEqual(expect.objectContaining({ name: 'screen_candidates' }));
+    ).resolves.toEqual(
+      expect.objectContaining({ skill: expect.objectContaining({ name: 'screen_candidates' }) }),
+    );
 
     expect(executor.calls).toContain('waitForSnapshotChange');
     expect(executor.calls).toContain(`navigate:${baseUrl}/employer/resumes/2`);
@@ -549,7 +560,9 @@ describe('exploreBossLikeScreeningWorkflow', () => {
 
     await expect(
       exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
-    ).resolves.toEqual(expect.objectContaining({ name: 'screen_candidates' }));
+    ).resolves.toEqual(
+      expect.objectContaining({ skill: expect.objectContaining({ name: 'screen_candidates' }) }),
+    );
 
     expect(executor.calls).toEqual(
       expect.arrayContaining([
@@ -571,21 +584,19 @@ describe('exploreBossLikeScreeningWorkflow', () => {
   it('waits for a rendered candidate article before learning its detail readiness target', async () => {
     const executor = new DelayedArticleDetailExploringExecutor();
 
-    const skill = await exploreBossLikeScreeningWorkflow({
+    const explored = await exploreBossLikeScreeningWorkflow({
       executor,
       baseUrl,
       credentials,
       searchPlan,
     });
-    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+    if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
 
-    const enrichStep = skill.steps.find((step) => step.id === 'enrich_candidate');
-    expect(enrichStep).toEqual(
+    const detailWait = explored.skill.steps.find((step) => step.id === 'detail_wait');
+    expect(detailWait).toEqual(
       expect.objectContaining({
         params: expect.objectContaining({
-          targets: expect.objectContaining({
-            detailContent: expect.objectContaining({ kind: 'text', name: '经验见简历' }),
-          }),
+          text: '经验见简历',
         }),
       }),
     );
@@ -595,23 +606,26 @@ describe('exploreBossLikeScreeningWorkflow', () => {
   it('records a disabled composer send button without validating it before the message is filled', async () => {
     const executor = new DisabledSendButtonExploringExecutor();
 
-    const skill = await exploreBossLikeScreeningWorkflow({
+    const explored = await exploreBossLikeScreeningWorkflow({
       executor,
       baseUrl,
       credentials,
       searchPlan,
     });
-    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+    if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
 
-    const chatStep = skill.steps.find((step) => step.id === 'chat_candidate');
-    expect(chatStep).toEqual(
+    const messageStep = explored.skill.steps.find((step) => step.id === 'contact_fill_message');
+    const sendStep = explored.skill.steps.find((step) => step.id === 'contact_send');
+    expect(messageStep).toEqual(
       expect.objectContaining({
         params: expect.objectContaining({
-          targets: expect.objectContaining({
-            messageInput: expect.objectContaining({ name: '消息' }),
-            sendButton: expect.objectContaining({ name: '发送' }),
-          }),
+          target: expect.objectContaining({ name: '消息' }),
         }),
+      }),
+    );
+    expect(sendStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({ target: expect.objectContaining({ name: '发送' }) }),
       }),
     );
     expect(executor.calls).not.toEqual(expect.arrayContaining(['resolve:发送', 'click:发送']));
@@ -620,22 +634,27 @@ describe('exploreBossLikeScreeningWorkflow', () => {
   it('explores a form-less search page through unique semantic global targets', async () => {
     const executor = new FormlessSearchExploringExecutor();
 
-    const skill = await exploreBossLikeScreeningWorkflow({
+    const explored = await exploreBossLikeScreeningWorkflow({
       executor,
       baseUrl,
       credentials,
       searchPlan,
     });
-    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+    if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
 
-    const searchStep = skill.steps.find((step) => step.id === 'search_candidates');
-    expect(searchStep).toEqual(
+    const searchFill = explored.skill.steps.find((step) => step.id === 'search_fill');
+    const searchSubmit = explored.skill.steps.find((step) => step.id === 'search_submit');
+    expect(searchFill).toEqual(
       expect.objectContaining({
         params: expect.objectContaining({
-          targets: expect.objectContaining({
-            searchInput: expect.objectContaining({ name: '搜索候选人', role: 'textbox' }),
-            searchSubmit: expect.objectContaining({ name: '搜索', role: 'button' }),
-          }),
+          target: expect.objectContaining({ name: '搜索候选人', role: 'textbox' }),
+        }),
+      }),
+    );
+    expect(searchSubmit).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          target: expect.objectContaining({ name: '搜索', role: 'button' }),
         }),
       }),
     );
@@ -645,50 +664,42 @@ describe('exploreBossLikeScreeningWorkflow', () => {
   it('explores an ambiguous form-less detail page through unique semantic global targets', async () => {
     const executor = new AmbiguousFormlessDetailExploringExecutor();
 
-    const skill = await exploreBossLikeScreeningWorkflow({
+    const explored = await exploreBossLikeScreeningWorkflow({
       executor,
       baseUrl,
       credentials,
       searchPlan,
     });
-    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+    if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
 
-    const enrichStep = skill.steps.find((step) => step.id === 'enrich_candidate');
-    const chatStep = skill.steps.find((step) => step.id === 'chat_candidate');
-    const collectStep = skill.steps.find((step) => step.id === 'collect_candidate');
-    expect(enrichStep).toEqual(
+    const detailWait = explored.skill.steps.find((step) => step.id === 'detail_wait');
+    const greeting = explored.skill.steps.find((step) => step.id === 'contact_open_greeting');
+    const message = explored.skill.steps.find((step) => step.id === 'contact_fill_message');
+    const collect = explored.skill.steps.find((step) => step.id === 'collect_click');
+    expect(detailWait).toEqual(
       expect.objectContaining({
         params: expect.objectContaining({
-          targets: expect.objectContaining({
-            detailContent: {
-              kind: 'text',
-              name: '候选人详情',
-              exact: true,
-            },
-          }),
+          text: '候选人详情',
         }),
       }),
     );
-    expect(chatStep).toEqual(
+    expect(greeting).toEqual(
       expect.objectContaining({
         params: expect.objectContaining({
-          targets: expect.objectContaining({
-            greetButton: expect.objectContaining({ name: '打招呼' }),
-            messageInput: expect.objectContaining({
-              name: '消息内容',
-              scope: { kind: 'form' },
-            }),
-          }),
+          target: expect.objectContaining({ name: '打招呼' }),
         }),
       }),
     );
-    expect(collectStep).toEqual(
+    expect(message).toEqual(
       expect.objectContaining({
         params: expect.objectContaining({
-          targets: expect.objectContaining({
-            collectButton: expect.objectContaining({ name: '收藏' }),
-          }),
+          target: expect.objectContaining({ name: '消息内容', scope: { kind: 'form' } }),
         }),
+      }),
+    );
+    expect(collect).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({ target: expect.objectContaining({ name: '收藏' }) }),
       }),
     );
     expect(executor.calls).toEqual(
@@ -715,7 +726,7 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     expect(
       repairBossLikeScreeningTargetFromSnapshot({
         snapshot: renamedSnapshot,
-        failedStepId: 'search_candidates',
+        failedStepId: 'search_submit',
         targetKey: 'searchSubmit',
         failedTarget: {
           kind: 'button',
@@ -729,6 +740,41 @@ describe('exploreBossLikeScreeningWorkflow', () => {
         name: '开始检索',
         stableAttrs: expect.objectContaining({ testId: 'candidate-search-submit' }),
       }),
+    );
+  });
+
+  it('patches all contact targets from one relearned composer context', () => {
+    const repaired = repairBossLikeScreeningSteps({
+      steps: buildBossLikeScreeningSkill().steps,
+      failedStepId: 'contact_send',
+      targets: {
+        greetButton: { kind: 'button', role: 'button', name: '开始沟通', exact: true },
+        messageInput: { kind: 'field', role: 'textbox', name: '沟通内容', exact: true },
+        sendButton: { kind: 'button', role: 'button', name: '确认发送', exact: true },
+      },
+    });
+
+    expect(repaired).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'contact_open_greeting',
+          params: expect.objectContaining({
+            target: expect.objectContaining({ name: '开始沟通' }),
+          }),
+        }),
+        expect.objectContaining({
+          id: 'contact_fill_message',
+          params: expect.objectContaining({
+            target: expect.objectContaining({ name: '沟通内容' }),
+          }),
+        }),
+        expect.objectContaining({
+          id: 'contact_send',
+          params: expect.objectContaining({
+            target: expect.objectContaining({ name: '确认发送' }),
+          }),
+        }),
+      ]),
     );
   });
 });

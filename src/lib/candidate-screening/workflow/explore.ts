@@ -9,13 +9,21 @@ import type {
   StructuredDomSnapshot,
   TargetDescriptor,
 } from '@/lib/browser/types';
+import type { PublishStep } from '@/lib/jd-publishing/types';
 import {
   extractBossLikeCandidatesFromHtml,
   resolveBossLikeProfileUrl,
 } from '../adapters/boss-like';
 import type { SearchPlan } from '../types';
 import { buildBossLikeScreeningSkill, defaultBossLikeScreeningTargets } from './skill-registry';
-import type { BossLikeScreeningTargets, ScreeningWorkflowSkill } from './types';
+import {
+  SCREENING_STEP_IDS,
+  type BossLikeScreeningExploration,
+  type BossLikeScreeningTargets,
+  type ScreeningWorkflowSkill,
+} from './types';
+
+export type { BossLikeScreeningExploration } from './types';
 
 type ExploreBossLikeScreeningWorkflowParams = {
   executor: BrowserExecutor;
@@ -35,11 +43,33 @@ type CandidateRequirement = {
 type ScreeningRepairKey = keyof BossLikeScreeningTargets;
 
 const REPAIR_KEY_BY_STEP: Record<string, readonly ScreeningRepairKey[]> = {
-  ensure_login: ['username', 'password', 'loginButton'],
-  search_candidates: ['searchInput', 'searchSubmit'],
-  enrich_candidate: ['detailContent'],
-  chat_candidate: ['greetButton', 'messageInput', 'sendButton'],
-  collect_candidate: ['collectButton'],
+  [SCREENING_STEP_IDS.loginFillUsername]: ['username'],
+  [SCREENING_STEP_IDS.loginFillPassword]: ['password'],
+  [SCREENING_STEP_IDS.loginSubmit]: ['loginButton'],
+  [SCREENING_STEP_IDS.searchFill]: ['searchInput'],
+  [SCREENING_STEP_IDS.searchSubmit]: ['searchSubmit'],
+  [SCREENING_STEP_IDS.contactOpenGreeting]: ['greetButton'],
+  [SCREENING_STEP_IDS.contactFillMessage]: ['messageInput'],
+  [SCREENING_STEP_IDS.contactSend]: ['sendButton'],
+  [SCREENING_STEP_IDS.collectClick]: ['collectButton'],
+};
+
+const CONTACT_REPAIR_STEP_IDS = [
+  SCREENING_STEP_IDS.contactOpenGreeting,
+  SCREENING_STEP_IDS.contactFillMessage,
+  SCREENING_STEP_IDS.contactSend,
+] as const;
+
+const REPAIR_KEY_BY_TARGET_STEP: Record<string, ScreeningRepairKey> = {
+  [SCREENING_STEP_IDS.loginFillUsername]: 'username',
+  [SCREENING_STEP_IDS.loginFillPassword]: 'password',
+  [SCREENING_STEP_IDS.loginSubmit]: 'loginButton',
+  [SCREENING_STEP_IDS.searchFill]: 'searchInput',
+  [SCREENING_STEP_IDS.searchSubmit]: 'searchSubmit',
+  [SCREENING_STEP_IDS.contactOpenGreeting]: 'greetButton',
+  [SCREENING_STEP_IDS.contactFillMessage]: 'messageInput',
+  [SCREENING_STEP_IDS.contactSend]: 'sendButton',
+  [SCREENING_STEP_IDS.collectClick]: 'collectButton',
 };
 
 const REPAIR_KEY_BY_VALUE_HINT: Partial<
@@ -478,6 +508,34 @@ export function repairBossLikeScreeningTargetFromSnapshot(params: {
   }
 }
 
+export function repairBossLikeScreeningSteps(params: {
+  steps: PublishStep[];
+  failedStepId: string;
+  targets: Partial<BossLikeScreeningTargets>;
+}): PublishStep[] | null {
+  const stepIds = CONTACT_REPAIR_STEP_IDS.includes(
+    params.failedStepId as (typeof CONTACT_REPAIR_STEP_IDS)[number],
+  )
+    ? CONTACT_REPAIR_STEP_IDS
+    : [params.failedStepId];
+
+  const repairedTargets = stepIds.map((stepId) => {
+    const targetKey = REPAIR_KEY_BY_TARGET_STEP[stepId];
+    const target = targetKey ? params.targets[targetKey] : undefined;
+    return { stepId, target };
+  });
+  if (repairedTargets.some(({ target }) => !target)) return null;
+
+  const targetByStepId = new Map(
+    repairedTargets.map(({ stepId, target }) => [stepId, target] as const),
+  );
+  return params.steps.map((step) => {
+    const target = targetByStepId.get(step.id);
+    if (!target || step.type !== 'action') return step;
+    return { ...step, params: { ...step.params, target } };
+  });
+}
+
 function ensureSuccess(label: string, result: BrowserStepResult): void {
   if (!result.success) {
     throw new Error(`${label} failed: ${result.error ?? 'unknown browser error'}`);
@@ -591,7 +649,7 @@ async function waitForCandidateSearchResults(
 
 export async function exploreBossLikeScreeningWorkflow(
   params: ExploreBossLikeScreeningWorkflowParams,
-): Promise<ScreeningWorkflowSkill | null> {
+): Promise<(BossLikeScreeningExploration & ScreeningWorkflowSkill) | null> {
   const { executor, credentials, searchPlan } = params;
   const baseUrl = normalizeBaseUrl(params.baseUrl);
   const resumeListUrl = `${baseUrl}/employer/resumes`;
@@ -717,7 +775,7 @@ export async function exploreBossLikeScreeningWorkflow(
   // The real composer keeps Send disabled until messageInput is filled. Runtime execution fills it
   // before clicking Send, so discovery records the button without validating its disabled state.
 
-  return buildBossLikeScreeningSkill(
+  const skill = buildBossLikeScreeningSkill(
     {
       id: `boss-like-screen-candidates-explore-${randomUUID()}`,
       version: 1,
@@ -735,4 +793,10 @@ export async function exploreBossLikeScreeningWorkflow(
       ...composerTargets,
     },
   );
+  return {
+    ...skill,
+    skill,
+    firstKeyword: keyword,
+    firstListHtml: candidateSearchSnapshot,
+  };
 }
