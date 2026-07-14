@@ -167,6 +167,28 @@ describe('publish repository', () => {
     ).resolves.toBeNull();
   });
 
+  it('selects an active browser-v2 screen_candidates workflow', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(
+      skillRow({
+        id: 'screen-v5',
+        name: 'screen_candidates',
+        version: 5,
+        meta: { dsl_version: 'browser-v2', created_from: 'explore' },
+      }),
+    );
+
+    await expect(
+      getActiveBrowserV2SkillByName({ name: 'screen_candidates', platform: 'boss-like' }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        id: 'screen-v5',
+        name: 'screen_candidates',
+        version: 5,
+        meta: { dsl_version: 'browser-v2', created_from: 'explore' },
+      }),
+    );
+  });
+
   it('allocates browser-v2 v5 after legacy v4', async () => {
     prismaMock.publishSkill.findFirst.mockResolvedValueOnce(
       skillRow({
@@ -190,11 +212,21 @@ describe('publish repository', () => {
     const created = await createExploredPublishSkill(browserV2ScreeningSkill());
 
     expect(created.version).toBe(5);
-    expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: { isActive: false },
+    expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        version: 5,
+        meta: { dsl_version: 'browser-v2', created_from: 'explore' },
       }),
-    );
+    });
+    expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith({
+      where: {
+        name: 'screen_candidates',
+        platform: 'boss-like',
+        isActive: true,
+        id: { not: 'screen-v5' },
+      },
+      data: { isActive: false },
+    });
   });
 
   it('stores an explored skill as the active browser-authored skill', async () => {
