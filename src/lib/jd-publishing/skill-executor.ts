@@ -3,6 +3,8 @@ import type {
   BrowserExecutor,
   BrowserTargetInput,
   BrowserStepResult,
+  BrowserWorkflowObservation,
+  BrowserWorkflowRunResult,
   PublishActionStep,
   PublishConditionStep,
   PublishExecutionContext,
@@ -76,53 +78,98 @@ function isBrowserAction(action: PublishSkillAction): action is BrowserAction {
   );
 }
 
+function observationParams(
+  params: Record<string, unknown>,
+): { format: 'html'; saveAs: string } | null {
+  const saveAs = asString(params.saveAs);
+  if (params.format !== 'html' || !saveAs.trim()) {
+    return null;
+  }
+  return { format: 'html', saveAs };
+}
+
+type ActionStepExecutionResult = {
+  result: BrowserStepResult;
+  observation?: BrowserWorkflowObservation;
+};
+
 async function executeActionStep(
   step: PublishActionStep,
   params: Record<string, unknown>,
   executor: BrowserExecutor,
-): Promise<BrowserStepResult> {
+): Promise<ActionStepExecutionResult> {
+  if (step.action === 'observe') {
+    const observation = observationParams(params);
+    if (!observation) {
+      return { result: { success: false, error: 'invalid observe params' } };
+    }
+    if (!executor.snapshot) {
+      return { result: { success: false, error: 'executor does not support snapshot' } };
+    }
+    let value: string;
+    try {
+      value = await executor.snapshot();
+    } catch (error) {
+      return {
+        result: {
+          success: false,
+          error: error instanceof Error ? error.message : 'snapshot failed',
+        },
+      };
+    }
+    return {
+      result: { success: true },
+      observation: { key: observation.saveAs, format: observation.format, value },
+    };
+  }
+
   if (!isBrowserAction(step.action)) {
-    return { success: false, error: `unsupported action: ${step.action}` };
+    return { result: { success: false, error: `unsupported action: ${step.action}` } };
   }
 
   if (step.action === 'navigate') {
-    return executor.navigate(asString(params.url));
+    return { result: await executor.navigate(asString(params.url)) };
   }
   if (step.action === 'fill') {
-    return executor.fill(
-      asBrowserTargetInput(params.target, params.locator),
-      asString(params.value),
-    );
+    return {
+      result: await executor.fill(
+        asBrowserTargetInput(params.target, params.locator),
+        asString(params.value),
+      ),
+    };
   }
   if (step.action === 'click') {
-    return executor.click(asBrowserTargetInput(params.target, params.locator));
+    return { result: await executor.click(asBrowserTargetInput(params.target, params.locator)) };
   }
   if (step.action === 'wait_for_url') {
-    return executor.waitForUrl(asString(params.url));
+    return { result: await executor.waitForUrl(asString(params.url)) };
   }
   if (step.action === 'wait_for_text') {
     if (!executor.waitForText) {
-      return { success: false, error: 'executor does not support wait_for_text' };
+      return { result: { success: false, error: 'executor does not support wait_for_text' } };
     }
-    return executor.waitForText(asString(params.text));
+    return { result: await executor.waitForText(asString(params.text)) };
   }
   if (step.action === 'add_keywords') {
     if (!executor.addKeywords) {
-      return { success: false, error: 'executor does not support add_keywords' };
+      return { result: { success: false, error: 'executor does not support add_keywords' } };
     }
-    return executor.addKeywords(
-      asBrowserTargetInput(params.target, params.locator),
-      asStringList(params.values),
-      asBrowserTargetInput(params.submitTarget, params.submitLocator),
-    );
+    return {
+      result: await executor.addKeywords(
+        asBrowserTargetInput(params.target, params.locator),
+        asStringList(params.values),
+        asBrowserTargetInput(params.submitTarget, params.submitLocator),
+      ),
+    };
   }
-  return { success: false, error: `unsupported action: ${step.action}` };
+  return { result: { success: false, error: `unsupported action: ${step.action}` } };
 }
 
 export type PublishingStepExecutionResult = {
   status: 'running' | 'success' | 'failed' | 'fallback';
   nextStepId: string | null;
   traceStep?: PublishTraceStep;
+  observation?: BrowserWorkflowObservation;
   onFail?: PublishStepOnFail;
   step?: PublishStep;
 };
@@ -205,7 +252,7 @@ export async function executePublishingStep(params: {
   }
 
   const resolvedParams = interpolate(step.params, context) as Record<string, unknown>;
-  const result = await executeActionStep(step, resolvedParams, executor);
+  const { observation, result } = await executeActionStep(step, resolvedParams, executor);
   const traceStep: PublishTraceStep = {
     stepId: step.id,
     action: step.action,
@@ -219,20 +266,24 @@ export async function executePublishingStep(params: {
     status: 'running',
     nextStepId: step.next,
     traceStep,
+    observation,
     step,
   };
 }
 
-export async function runPublishingSkill(params: {
-  taskId: string;
+export async function runBrowserWorkflow(params: {
   skill: PublishSkill;
+  currentStepId?: string | null;
   executor: BrowserExecutor;
   context: PublishExecutionContext;
-}): Promise<PublishTaskResult> {
-  const { taskId, skill, executor, context } = params;
+}): Promise<BrowserWorkflowRunResult> {
+  const { skill, executor, context } = params;
   const traceSteps: PublishTraceStep[] = [];
-  let currentStepId: string | null = skill.steps[0]?.id ?? null;
-  let status: 'success' | 'failed' = 'success';
+  const observations: Record<string, string> = {};
+  let currentStepId: string | null = params.currentStepId ?? skill.steps[0]?.id ?? null;
+  let status: BrowserWorkflowRunResult['status'] = 'success';
+  let failedStep: PublishTraceStep | undefined;
+  let onFail: PublishStepOnFail | undefined;
   let stoppedByTerminalStep = false;
   const maxIterations = Math.max(skill.steps.length * 3, 1);
 
@@ -246,12 +297,18 @@ export async function runPublishingSkill(params: {
     if (result.traceStep) {
       traceSteps.push(result.traceStep);
     }
+    if (result.observation) {
+      observations[result.observation.key] = result.observation.value;
+    }
     if (result.status === 'success') {
       stoppedByTerminalStep = true;
+      currentStepId = null;
       break;
     }
     if (result.status === 'failed' || result.status === 'fallback') {
-      status = 'failed';
+      status = result.status;
+      failedStep = result.traceStep;
+      onFail = result.onFail;
       break;
     }
     currentStepId = result.nextStepId;
@@ -259,7 +316,7 @@ export async function runPublishingSkill(params: {
 
   if (currentStepId && status === 'success' && !stoppedByTerminalStep) {
     status = 'failed';
-    traceSteps.push({
+    failedStep = {
       stepId: currentStepId,
       action: 'iteration_guard',
       params: { maxIterations },
@@ -267,13 +324,33 @@ export async function runPublishingSkill(params: {
         success: false,
         error: `step iteration guard exceeded at: ${currentStepId}`,
       },
-    });
+    };
+    traceSteps.push(failedStep);
   }
 
+  return {
+    status,
+    currentStepId,
+    traceSteps,
+    observations,
+    ...(failedStep ? { failedStep } : {}),
+    ...(onFail ? { onFail } : {}),
+  };
+}
+
+export async function runPublishingSkill(params: {
+  taskId: string;
+  skill: PublishSkill;
+  executor: BrowserExecutor;
+  context: PublishExecutionContext;
+}): Promise<PublishTaskResult> {
+  const { taskId, skill, executor, context } = params;
+  const workflow = await runBrowserWorkflow({ skill, executor, context });
+  const status: 'success' | 'failed' = workflow.status === 'success' ? 'success' : 'failed';
   const trace = {
     taskId,
     skillId: skill.id,
-    steps: traceSteps,
+    steps: workflow.traceSteps,
     status,
     createdAt: new Date().toISOString(),
   };

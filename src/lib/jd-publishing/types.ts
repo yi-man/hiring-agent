@@ -36,14 +36,18 @@ export type BossLikeJobPayload = {
   keywords: string[];
 };
 
-export type ScreeningWorkflowAction =
+export type BrowserWorkflowAction = BrowserAction | 'observe';
+
+export type LegacyScreeningWorkflowAction =
   | 'ensure_login'
   | 'search_candidates'
   | 'enrich_candidate'
   | 'chat_candidate'
   | 'collect_candidate';
 
-export type PublishSkillAction = BrowserAction | ScreeningWorkflowAction;
+export type ScreeningWorkflowAction = LegacyScreeningWorkflowAction;
+
+export type PublishSkillAction = BrowserWorkflowAction | LegacyScreeningWorkflowAction;
 
 export type PublishSkillMeta = Record<string, unknown> & {
   success_rate?: number;
@@ -112,6 +116,21 @@ export type PublishTraceStep = {
   action: string;
   params: Record<string, unknown>;
   result: BrowserStepResult;
+};
+
+export type BrowserWorkflowObservation = {
+  key: string;
+  format: 'html';
+  value: string;
+};
+
+export type BrowserWorkflowRunResult = {
+  status: 'success' | 'failed' | 'fallback';
+  currentStepId: string | null;
+  traceSteps: PublishTraceStep[];
+  observations: Record<string, string>;
+  failedStep?: PublishTraceStep;
+  onFail?: PublishStepOnFail;
 };
 
 export type PublishTrace = {

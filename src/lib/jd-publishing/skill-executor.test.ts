@@ -1,9 +1,10 @@
-import { executePublishingStep, runPublishingSkill } from './skill-executor';
+import { executePublishingStep, runBrowserWorkflow, runPublishingSkill } from './skill-executor';
 import type { BrowserExecutor, BrowserStepResult, PublishSkill } from './types';
 
 class RecordingExecutor implements BrowserExecutor {
   readonly calls: string[] = [];
   readonly fillCalls: Array<{ target: unknown; value: string }> = [];
+  snapshot?: () => Promise<string>;
 
   constructor(private readonly checks: Record<string, boolean> = {}) {}
 
@@ -106,7 +107,117 @@ const skill: PublishSkill = {
   ],
 };
 
+const emptyContext = { input: {}, credentials: {}, target: {} };
+
+const contextWithTitle = {
+  input: { title: '高级前端工程师' },
+  credentials: {},
+  target: {},
+};
+
+function skillWith(steps: PublishSkill['steps']): PublishSkill {
+  return { ...skill, steps };
+}
+
 describe('runPublishingSkill', () => {
+  it('captures HTML without embedding it in the trace', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockResolvedValue('<main>candidate list</main>');
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_list',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'listHtml' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      currentStepId: 'observe_list',
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result.observations).toEqual({ listHtml: '<main>candidate list</main>' });
+    expect(result.traceSteps[0]?.result).toEqual({ success: true });
+  });
+
+  it('starts at the supplied currentStepId', async () => {
+    const result = await runBrowserWorkflow({
+      skill,
+      currentStepId: 'fill_title',
+      executor: new RecordingExecutor(),
+      context: contextWithTitle,
+    });
+
+    expect(result.traceSteps.map((step) => step.stepId)).toEqual(['fill_title']);
+  });
+
+  it('rejects an observe step without the supported format and save key', async () => {
+    const result = await executePublishingStep({
+      stepId: 'observe_list',
+      skill: skillWith([
+        {
+          id: 'observe_list',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'text', saveAs: '' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor: new RecordingExecutor(),
+      context: emptyContext,
+    });
+
+    expect(result.traceStep?.result).toEqual({
+      success: false,
+      error: 'invalid observe params',
+    });
+  });
+
+  it('routes a rejected observation snapshot through its failure handler', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockRejectedValue(new Error('snapshot unavailable'));
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_list',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'listHtml' },
+          next: 'done',
+          onFail: { type: 'fallback_agent', reason: 'snapshot unavailable' },
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      currentStepId: 'observe_list',
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result).toMatchObject({
+      status: 'fallback',
+      currentStepId: 'observe_list',
+      observations: {},
+      traceSteps: [
+        {
+          stepId: 'observe_list',
+          action: 'observe',
+          result: { success: false, error: 'snapshot unavailable' },
+        },
+      ],
+      failedStep: {
+        stepId: 'observe_list',
+        result: { success: false, error: 'snapshot unavailable' },
+      },
+      onFail: { type: 'fallback_agent', reason: 'snapshot unavailable' },
+    });
+  });
+
   it('executes one action step and returns the next step for graph routing', async () => {
     const executor = new RecordingExecutor();
 

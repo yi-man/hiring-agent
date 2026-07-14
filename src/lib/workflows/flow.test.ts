@@ -81,6 +81,23 @@ describe('workflow flow helpers', () => {
     expect(flow.mermaid).not.toContain('failed');
   });
 
+  it('renders observe steps as browser actions', () => {
+    const steps: PublishStep[] = [
+      {
+        id: 'observe_list',
+        type: 'action',
+        action: 'observe',
+        params: { format: 'html', saveAs: 'listHtml' },
+        next: 'done',
+      },
+      { id: 'done', type: 'end' },
+    ];
+
+    expect(buildWorkflowFlow(steps).nodes).toContainEqual(
+      expect.objectContaining({ id: 'observe_list', description: 'observe' }),
+    );
+  });
+
   it('synthesizes referenced missing targets as terminal nodes', () => {
     const steps: PublishStep[] = [
       {
