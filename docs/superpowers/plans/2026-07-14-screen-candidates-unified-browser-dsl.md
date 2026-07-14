@@ -272,7 +272,6 @@ expect(skill.steps.filter((step) => step.type === 'action').map((step) => step.a
   'fill',
   'click',
   'wait_for_text',
-  'click',
   'navigate',
   'click',
 ]);
@@ -309,7 +308,7 @@ export const SCREENING_STEP_IDS = {
   params: { target: targets.messageInput, value: '{{input.message}}' }, next: 'contact_send' }
 ```
 
-The login condition must route both branches to `search_fill`. `contact_wait_success` routes to the shared `collect_click`; `collect_open` also routes to that same click. Attach `fallback_agent` only to target-bearing primitive steps, so repair receives an actionable target.
+The graph has exactly 19 unique action steps: `contact_wait_success` routes to the single shared `collect_click`, and `collect_open` also routes to that same step. The login condition must route both branches to `search_fill`. Attach `fallback_agent` only to target-bearing primitive steps, so repair receives an actionable target.
 
 - [ ] **Step 4: Return and test the first actual search observation.**
 
