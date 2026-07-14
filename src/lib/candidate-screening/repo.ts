@@ -1722,3 +1722,25 @@ export async function claimCandidateActionLog(params: {
   });
   return row ? mapActionLog(row) : null;
 }
+
+export async function claimRetryableCollectActionLog(params: {
+  userId: string;
+  id: string;
+}): Promise<CandidateActionLogDto | null> {
+  const where = { id: params.id, userId: params.userId, action: 'collect', status: 'failed' };
+  const result = await prisma.candidateActionLog.updateMany({
+    where,
+    data: {
+      status: 'running',
+      browserTrace: Prisma.JsonNull,
+      errorMessage: null,
+    },
+  });
+  if (result.count === 0) {
+    return null;
+  }
+  const row = await prisma.candidateActionLog.findFirst({
+    where: { id: params.id, userId: params.userId },
+  });
+  return row ? mapActionLog(row) : null;
+}

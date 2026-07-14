@@ -2,6 +2,7 @@
 
 import {
   claimCandidateActionLog,
+  claimRetryableCollectActionLog,
   createCandidateActionLog,
   createCandidateScreeningRunEvent,
   createCandidateScreeningRun,
@@ -1887,6 +1888,41 @@ describe('candidate screening repository', () => {
 
     expect(result).toBeNull();
     expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('claims only a failed collect action when resuming post-contact collection', async () => {
+    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.candidateActionLog.findFirst.mockResolvedValueOnce({
+      id: 'action-collect-1',
+      userId: 'u1',
+      runId: 'run-1',
+      screeningResultId: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      action: 'collect',
+      message: null,
+      status: 'running',
+      idempotencyKey: 'collect-idem-1',
+      browserTrace: null,
+      errorMessage: null,
+      createdAt,
+      updatedAt,
+    });
+
+    const result = await claimRetryableCollectActionLog({ userId: 'u1', id: 'action-collect-1' });
+
+    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'action-collect-1',
+        userId: 'u1',
+        action: 'collect',
+        status: 'failed',
+      },
+      data: { status: 'running', browserTrace: expect.anything(), errorMessage: null },
+    });
+    expect(result?.status).toBe('running');
   });
 
   it('lists JD-scoped results owned by a run or planned by its action logs', async () => {

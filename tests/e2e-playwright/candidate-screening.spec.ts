@@ -359,4 +359,60 @@ test.describe('candidate screening UI', () => {
       await cleanupSeededUser(seeded.userId);
     }
   });
+
+  test('renders the persisted browser-v2 workflow with primitive observe steps', async ({
+    context,
+    page,
+  }, testInfo) => {
+    const seeded = await seedSessionToken();
+    const workflowId = `screen-candidates-browser-v2-${Date.now()}`;
+    const workflowVersion = 900_000 + (Date.now() % 10_000);
+    const rawBaseURL = testInfo.project.use.baseURL;
+    if (!rawBaseURL || typeof rawBaseURL !== 'string') {
+      throw new Error('Playwright baseURL is required to set the seeded auth cookie by url.');
+    }
+    await context.addCookies([
+      {
+        name: SESSION_COOKIE_NAME,
+        value: seeded.sessionToken,
+        url: new URL('/', rawBaseURL).toString(),
+        httpOnly: true,
+        sameSite: 'Lax',
+      },
+    ]);
+    await prisma.publishSkill.create({
+      data: {
+        id: workflowId,
+        name: 'screen_candidates',
+        platform: 'boss-like',
+        description: 'Browser-v2 candidate screening workflow',
+        version: workflowVersion,
+        isActive: true,
+        inputSchema: {},
+        variables: {},
+        steps: [
+          {
+            id: 'search_observe',
+            type: 'action',
+            action: 'observe',
+            params: { format: 'html', saveAs: 'listHtml' },
+            next: 'search_complete',
+          },
+          { id: 'search_complete', type: 'end' },
+        ],
+        meta: { dsl_version: 'browser-v2', created_from: 'explore' },
+      },
+    });
+
+    try {
+      await page.goto(`/workflows/${workflowId}`);
+
+      await expect(page.getByText('search_observe · observe', { exact: true })).toBeVisible();
+      await expect(page.getByText('search_candidates', { exact: true })).toHaveCount(0);
+      await expect(page.getByText('chat_candidate', { exact: true })).toHaveCount(0);
+    } finally {
+      await prisma.publishSkill.delete({ where: { id: workflowId } });
+      await cleanupSeededUser(seeded.userId);
+    }
+  });
 });

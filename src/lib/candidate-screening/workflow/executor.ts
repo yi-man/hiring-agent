@@ -9,7 +9,8 @@ import { runBrowserWorkflow as runSharedBrowserWorkflow } from '@/lib/jd-publish
 import {
   createExploredPublishSkill,
   createNextActivePublishSkillVersion,
-  getActivePublishSkillByName,
+  getActiveBrowserV2SkillByName,
+  isBrowserV2Skill,
 } from '@/lib/jd-publishing/publish-repo';
 import type {
   BrowserWorkflowRunResult,
@@ -28,8 +29,6 @@ import {
 import type {
   ActionExecutionResult,
   CandidateSourceAdapter,
-  RawCandidateBatch,
-  SearchOptions,
   StoredCandidateRef,
 } from '../adapters/types';
 import {
@@ -202,18 +201,6 @@ export type CandidateScreeningWorkflowSession = {
     plan: CandidateActionPlan,
   ): Promise<ActionExecutionResult>;
   collectCandidate(candidate: StoredCandidateRef): Promise<ActionExecutionResult>;
-  /**
-   * Transitional compatibility for the current screening runner. It delegates only to browser-v2
-   * segments; Task 5 moves its keyword loop into the runner and removes this facade.
-   */
-  searchCandidates(plan: SearchPlan, options: SearchOptions): AsyncIterable<RawCandidateBatch>;
-  /** Transitional compatibility for the current screening runner. */
-  enrichCandidate(candidate: RawCandidate): Promise<RawCandidate>;
-  /** Transitional compatibility for the current screening runner. */
-  chatCandidate(
-    candidate: StoredCandidateRef,
-    plan: CandidateActionPlan,
-  ): Promise<ActionExecutionResult>;
   close(): Promise<void>;
 };
 
@@ -245,6 +232,9 @@ function resolveWorkflowExploreContext(adapter: CandidateSourceAdapter): {
 function screeningSkill(skill: PublishSkill): ScreeningWorkflowSkill {
   if (skill.name !== 'screen_candidates') {
     throw new Error(`expected screen_candidates workflow, received ${skill.name}`);
+  }
+  if (!isBrowserV2Skill(skill)) {
+    throw new Error('screening workflow must use browser-v2 DSL');
   }
   return skill as ScreeningWorkflowSkill;
 }
@@ -300,6 +290,20 @@ function browserTrace(run: BrowserWorkflowRunResult): Record<string, unknown> {
   };
 }
 
+function contactAndCollectBrowserTrace(run: BrowserWorkflowRunResult): Record<string, unknown> {
+  const completed = new Set(
+    run.traceSteps.filter((step) => step.result.success).map((step) => step.stepId),
+  );
+  const contactSucceeded = completed.has(SCREENING_STEP_IDS.contactWaitSuccess);
+  const collectSucceeded =
+    run.status === 'success' || completed.has(SCREENING_STEP_IDS.collectClick);
+  return {
+    contact: contactSucceeded ? 'success' : 'failed',
+    collect: collectSucceeded ? 'success' : contactSucceeded ? 'failed' : 'not_attempted',
+    workflow: browserTrace(run),
+  };
+}
+
 function normalizeCandidateProfileUrl(candidate: RawCandidate, baseUrl: string): RawCandidate {
   const profileUrl = resolveBossLikeProfileUrl(candidate.profileUrl, baseUrl).profileUrl;
   return profileUrl ? { ...candidate, profileUrl } : candidate;
@@ -323,22 +327,6 @@ function mergeProfileObservation(params: {
   return normalizeCandidateProfileUrl(merged, params.baseUrl);
 }
 
-function uniqueSearchKeywords(plan: SearchPlan): string[] {
-  const seen = new Set<string>();
-  const keywords: string[] = [];
-  for (const value of plan.keywords) {
-    const keyword = value.trim();
-    if (keyword && !seen.has(keyword)) {
-      seen.add(keyword);
-      keywords.push(keyword);
-    }
-  }
-  if (keywords.length === 0 && plan.retrievalQuery.trim()) {
-    keywords.push(plan.retrievalQuery.trim());
-  }
-  return keywords;
-}
-
 function resolveDependencies(
   dependencies: CandidateScreeningWorkflowSessionDependencies,
 ): ResolvedDependencies {
@@ -350,7 +338,7 @@ function resolveDependencies(
     createCandidateScreeningRunEvent;
   return {
     ...dependencies,
-    getActiveSkill: dependencies.getActiveSkill ?? getActivePublishSkillByName,
+    getActiveSkill: dependencies.getActiveSkill ?? getActiveBrowserV2SkillByName,
     getSkillById:
       dependencies.getSkillById ??
       (async (skillId) => {
@@ -382,7 +370,6 @@ export function createCandidateScreeningWorkflowSession(
   const exploreContext = resolveWorkflowExploreContext(dependencies.adapter);
   let skill: ScreeningWorkflowSkill | null = null;
   let stage: CandidateScreeningRunStage | null = null;
-  let emptyExplorationCompleted = false;
   let firstExploredList: { keyword: string; html: string } | null = null;
 
   function requireSkill(): ScreeningWorkflowSkill {
@@ -737,7 +724,6 @@ export function createCandidateScreeningWorkflowSession(
         ...exploreContext,
       });
       if (!explored) {
-        emptyExplorationCompleted = true;
         return null;
       }
       const exploredSkill = isExploredScreeningWorkflow(explored) ? explored.skill : explored;
@@ -857,8 +843,12 @@ export function createCandidateScreeningWorkflowSession(
       candidate,
     });
     return run.status === 'success'
-      ? { success: true, browserTrace: browserTrace(run) }
-      : { success: false, error: errorForWorkflowRun(run), browserTrace: browserTrace(run) };
+      ? { success: true, browserTrace: contactAndCollectBrowserTrace(run) }
+      : {
+          success: false,
+          error: errorForWorkflowRun(run),
+          browserTrace: contactAndCollectBrowserTrace(run),
+        };
   }
 
   async function collectCandidate(candidate: StoredCandidateRef): Promise<ActionExecutionResult> {
@@ -880,35 +870,6 @@ export function createCandidateScreeningWorkflowSession(
       : { success: false, error: errorForWorkflowRun(run), browserTrace: browserTrace(run) };
   }
 
-  async function* searchCandidates(
-    plan: SearchPlan,
-    options: SearchOptions,
-  ): AsyncIterable<RawCandidateBatch> {
-    if (!skill && !emptyExplorationCompleted) {
-      await loadOrExplore({ searchPlan: plan, stage: stage ?? 'searching_live' });
-    }
-    if (!skill) return;
-
-    const batchSize = Math.max(1, options.batchSize);
-    const maxCandidates = Math.max(0, options.maxCandidates);
-    let emitted = 0;
-    let batch: RawCandidate[] = [];
-    for (const keyword of uniqueSearchKeywords(plan)) {
-      if (emitted >= maxCandidates) break;
-      const searched = await runSearchKeyword({ keyword, maxCandidates: maxCandidates - emitted });
-      for (const candidate of searched.candidates) {
-        if (emitted >= maxCandidates) break;
-        batch.push(await observeCandidateProfile(candidate));
-        emitted += 1;
-        if (batch.length === batchSize) {
-          yield { candidates: batch, cursor: String(emitted) };
-          batch = [];
-        }
-      }
-    }
-    if (batch.length > 0) yield { candidates: batch, cursor: String(emitted) };
-  }
-
   return {
     get skill() {
       return skill;
@@ -919,9 +880,6 @@ export function createCandidateScreeningWorkflowSession(
     observeCandidateProfile,
     contactAndCollectCandidate,
     collectCandidate,
-    searchCandidates,
-    enrichCandidate: observeCandidateProfile,
-    chatCandidate: contactAndCollectCandidate,
     close: () => dependencies.adapter.close(),
   };
 }

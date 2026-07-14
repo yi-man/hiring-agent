@@ -1,8 +1,16 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
-import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
+import {
+  createActionIdempotencyKey,
+  createDryRunActionPlan,
+  plannedActionSequence,
+} from './actions';
 import { resolveBossLikeProfileUrl } from './adapters/boss-like';
 import { createCandidateSourceAdapter } from './adapters/factory';
-import type { CandidateSourceAdapter, StoredCandidateRef } from './adapters/types';
+import type {
+  ActionExecutionResult,
+  CandidateSourceAdapter,
+  StoredCandidateRef,
+} from './adapters/types';
 import {
   CANDIDATE_EVALUATION_PROMPT_VERSION,
   CANDIDATE_SCREENING_CALIBRATION_VERSION,
@@ -19,9 +27,11 @@ import { mergeAndRankCandidates, type RankInput, type RankedCandidate } from './
 import { recallCandidatesForJd } from './recall';
 import {
   claimCandidateActionLog,
+  claimRetryableCollectActionLog,
   createCandidateActionLog,
   getCandidateScreeningDetail,
   getCandidateScreeningRun,
+  listCandidateScreeningRunEvents,
   listCandidateScreeningResults,
   updateCandidateActionLog,
   updateCandidateScreeningRun,
@@ -95,6 +105,8 @@ export type ScreeningRunnerDependencies = {
     getDetail: typeof getCandidateScreeningDetail;
     upsertCandidate: typeof upsertCandidateWithIdentity;
     claimActionLog: typeof claimCandidateActionLog;
+    claimRetryableCollectActionLog: typeof claimRetryableCollectActionLog;
+    listRunEvents: typeof listCandidateScreeningRunEvents;
   };
 };
 
@@ -129,6 +141,8 @@ const defaultDependencies: ScreeningRunnerDependencies = {
     getDetail: getCandidateScreeningDetail,
     upsertCandidate: upsertCandidateWithIdentity,
     claimActionLog: claimCandidateActionLog,
+    claimRetryableCollectActionLog: claimRetryableCollectActionLog,
+    listRunEvents: listCandidateScreeningRunEvents,
   },
 };
 
@@ -372,28 +386,116 @@ function buildVectorInputs(params: {
   return { inputs, skipped };
 }
 
+function uniqueSearchValues(keywords: string[], fallback: string): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const value of keywords) {
+    const keyword = value.trim();
+    if (keyword && !seen.has(keyword)) {
+      seen.add(keyword);
+      values.push(keyword);
+    }
+  }
+  if (values.length === 0 && fallback.trim()) {
+    values.push(fallback.trim());
+  }
+  return values;
+}
+
 async function collectRawCandidates(params: {
-  search: Pick<CandidateSourceAdapter, 'searchCandidates'>;
+  workflowSession: Pick<
+    CandidateScreeningWorkflowSession,
+    'runSearchKeyword' | 'observeCandidateProfile'
+  >;
   searchPlan: SearchPlan;
   request: CreateScreeningRunRequest;
   stats: ScreeningRunStats;
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  completedKeywords?: ReadonlySet<string>;
 }): Promise<RawCandidate[]> {
   const rawCandidates: RawCandidate[] = [];
+  const seenIdentityHashes = new Set<string>();
 
-  for await (const batch of params.search.searchCandidates(params.searchPlan, {
-    maxCandidates: params.request.maxCandidates,
-    batchSize: params.request.batchSize,
-  })) {
-    for (const rawCandidate of batch.candidates) {
-      if (rawCandidates.length >= params.request.maxCandidates) {
-        return rawCandidates;
+  for (const keyword of uniqueSearchValues(
+    params.searchPlan.keywords,
+    params.searchPlan.retrievalQuery,
+  )) {
+    if (params.completedKeywords?.has(keyword)) continue;
+    if (rawCandidates.length >= params.request.maxCandidates) break;
+    const remaining = params.request.maxCandidates - rawCandidates.length;
+    const searched = await params.workflowSession.runSearchKeyword({
+      keyword,
+      maxCandidates: remaining,
+    });
+    await recordRunEvent({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescriptionId,
+      stage: 'searching_live',
+      level: 'success',
+      message: 'search_keyword_completed',
+      detail: {
+        keyword,
+        candidateCount: searched.candidates.length,
+        remaining,
+      },
+    });
+
+    for (const listCandidate of searched.candidates) {
+      if (rawCandidates.length >= params.request.maxCandidates) break;
+      const identity = createCandidateIdentity({
+        sourcePlatform: params.request.platform,
+        platformCandidateId: listCandidate.platformCandidateId,
+        profileUrl: listCandidate.profileUrl,
+        name: listCandidate.name,
+        company: listCandidate.company,
+        title: listCandidate.title,
+      });
+      if (seenIdentityHashes.has(identity.identityHash)) {
+        params.stats.deduped += 1;
+        await recordRunEvent({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          jobDescriptionId: params.jobDescriptionId,
+          stage: 'searching_live',
+          level: 'warning',
+          message: 'search_candidate_duplicate',
+          detail: {
+            keyword,
+            candidateName: listCandidate.name,
+            profileUrl: listCandidate.profileUrl ?? null,
+            platformCandidateId: listCandidate.platformCandidateId ?? null,
+            dedupeBy: 'raw_identity',
+          },
+        });
+        continue;
       }
-      rawCandidates.push(rawCandidate);
+      seenIdentityHashes.add(identity.identityHash);
+      rawCandidates.push(await params.workflowSession.observeCandidateProfile(listCandidate));
       params.stats.fetched += 1;
     }
   }
 
   return rawCandidates;
+}
+
+function completedSearchKeywords(
+  events: Array<{ message: string; detail: Record<string, unknown> | null }>,
+): Set<string> {
+  const keywords = new Set<string>();
+  for (const event of events) {
+    if (event.message !== 'search_keyword_completed') continue;
+    const keyword = event.detail?.keyword;
+    if (typeof keyword === 'string' && keyword.trim()) {
+      keywords.add(keyword.trim());
+    }
+  }
+  return keywords;
 }
 
 function createRawSeenIdentityRef(rawCandidate: RawCandidate): SeenIdentityRef {
@@ -881,26 +983,30 @@ async function createPlannedActions(params: {
           }),
     });
 
-    await params.dependencies.repo.createActionLog({
-      userId: params.userId,
-      runId: params.runId,
-      screeningResultId: result.id,
-      candidateId: rankedCandidate.candidateId,
-      jobDescriptionId: params.jobDescription.id,
-      platform: params.request.platform,
-      mode: params.request.mode,
-      action: actionPlan.action,
-      message: actionPlan.message,
-      status: actionStatus,
-      idempotencyKey: createActionIdempotencyKey({
+    const actionsToLog =
+      actionPlan.action === 'skip' ? (['skip'] as const) : plannedActionSequence(actionPlan.action);
+    for (const action of actionsToLog) {
+      await params.dependencies.repo.createActionLog({
         userId: params.userId,
         runId: params.runId,
-        jobDescriptionId: params.jobDescription.id,
+        screeningResultId: result.id,
         candidateId: rankedCandidate.candidateId,
+        jobDescriptionId: params.jobDescription.id,
         platform: params.request.platform,
-        action: actionPlan.action,
-      }),
-    });
+        mode: params.request.mode,
+        action,
+        message: action === 'chat' ? actionPlan.message : null,
+        status: actionStatus,
+        idempotencyKey: createActionIdempotencyKey({
+          userId: params.userId,
+          runId: params.runId,
+          jobDescriptionId: params.jobDescription.id,
+          candidateId: rankedCandidate.candidateId,
+          platform: params.request.platform,
+          action,
+        }),
+      });
+    }
     await recordRunEvent({
       dependencies: params.dependencies,
       userId: params.userId,
@@ -1083,12 +1189,24 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
         skillId: skill.id,
       });
     }
-    const rawCandidates = await collectRawCandidates({
-      search: workflowSession,
-      searchPlan,
-      request: state.request,
-      stats,
-    });
+    let rawCandidates: RawCandidate[] = [];
+    if (skill) {
+      const existingEvents = await state.dependencies.repo.listRunEvents({
+        userId: state.userId,
+        runId: state.runId,
+      });
+      rawCandidates = await collectRawCandidates({
+        workflowSession,
+        searchPlan,
+        request: state.request,
+        stats,
+        dependencies: state.dependencies,
+        userId: state.userId,
+        runId: state.runId,
+        jobDescriptionId: state.jobDescription.id,
+        completedKeywords: completedSearchKeywords(existingEvents),
+      });
+    }
     await recordRunEvent({
       dependencies: state.dependencies,
       userId: state.userId,
@@ -1543,7 +1661,8 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       userId: state.userId,
       runId: state.runId,
       jobDescriptionId: state.jobDescription.id,
-      executeChat: (candidate, actionPlan) => workflowSession.chatCandidate(candidate, actionPlan),
+      executeContactAndCollect: (candidate, actionPlan) =>
+        workflowSession.contactAndCollectCandidate(candidate, actionPlan),
       executeCollect: (candidate) => workflowSession.collectCandidate(candidate),
       request: {
         confirmExecution: true,
@@ -1682,6 +1801,18 @@ function getPlannedActionLog(
     detail.actionLogs.find(
       (actionLog) =>
         actionLog.runId === runId && actionLog.action === action && actionLog.status === 'planned',
+    ) ?? null
+  );
+}
+
+function getActionLog(
+  detail: CandidateScreeningDetailDto,
+  action: CandidateDecisionAction,
+  runId: string,
+): CandidateActionLogDto | null {
+  return (
+    detail.actionLogs.find(
+      (actionLog) => actionLog.runId === runId && actionLog.action === action,
     ) ?? null
   );
 }
@@ -1832,12 +1963,201 @@ async function markExecutionFailed(params: {
   });
 }
 
+function contactAndCollectStatus(executionResult: ActionExecutionResult): {
+  contactSucceeded: boolean;
+  collectSucceeded: boolean;
+} {
+  const trace = executionResult.browserTrace;
+  const contact = trace?.contact;
+  const collect = trace?.collect;
+  return {
+    contactSucceeded: contact === 'success' || (executionResult.success && contact !== 'failed'),
+    collectSucceeded: collect === 'success' || (executionResult.success && collect !== 'failed'),
+  };
+}
+
+async function persistContactAndCollectExecutionResult(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  result: CandidateScreeningResultListItem;
+  actionPlan: CandidateActionPlan;
+  chatActionLog: CandidateActionLogDto;
+  collectActionLog: CandidateActionLogDto;
+  executionResult: ActionExecutionResult;
+  stats: ScreeningRunStats;
+}): Promise<void> {
+  const status = contactAndCollectStatus(params.executionResult);
+  if (!status.contactSucceeded) {
+    await markExecutionFailed({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      result: params.result,
+      actionPlan: params.actionPlan,
+      actionLog: params.chatActionLog,
+      errorMessage: params.executionResult.error ?? 'contact execution failed',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      stats: params.stats,
+    });
+    await params.dependencies.repo.updateActionLog({
+      userId: params.userId,
+      id: params.collectActionLog.id,
+      status: 'skipped',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      errorMessage: 'contact was not sent',
+    });
+    return;
+  }
+
+  await persistExecutionResult({
+    dependencies: params.dependencies,
+    userId: params.userId,
+    runId: params.runId,
+    result: params.result,
+    actionPlan: params.actionPlan,
+    actionLog: params.chatActionLog,
+    executionResult: { success: true, browserTrace: params.executionResult.browserTrace },
+    stats: params.stats,
+  });
+
+  if (status.collectSucceeded) {
+    await params.dependencies.repo.updateActionLog({
+      userId: params.userId,
+      id: params.collectActionLog.id,
+      status: 'success',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      errorMessage: null,
+    });
+    await params.dependencies.repo.upsertResult({
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.result.jobDescriptionId,
+      candidateId: params.result.candidateId,
+      resumeId: params.result.resumeId,
+      source: params.result.source,
+      tags: params.result.tags,
+      scoreDetail: params.result.scoreDetail,
+      finalScore: params.result.finalScore,
+      rank: params.result.rank,
+      decisionAction: params.result.decisionAction,
+      decisionPriority: params.result.decisionPriority,
+      decisionReason: params.result.decisionReason,
+      actionPlan: params.actionPlan,
+      actionStatus: 'success',
+      interviewStage: 'collected',
+      notes: params.result.notes,
+    });
+    return;
+  }
+
+  params.stats.failed += 1;
+  await params.dependencies.repo.updateActionLog({
+    userId: params.userId,
+    id: params.collectActionLog.id,
+    status: 'failed',
+    browserTrace: params.executionResult.browserTrace ?? null,
+    errorMessage: params.executionResult.error ?? 'collect execution failed',
+  });
+  await params.dependencies.repo.upsertResult({
+    userId: params.userId,
+    runId: params.runId,
+    jobDescriptionId: params.result.jobDescriptionId,
+    candidateId: params.result.candidateId,
+    resumeId: params.result.resumeId,
+    source: params.result.source,
+    tags: params.result.tags,
+    scoreDetail: params.result.scoreDetail,
+    finalScore: params.result.finalScore,
+    rank: params.result.rank,
+    decisionAction: params.result.decisionAction,
+    decisionPriority: params.result.decisionPriority,
+    decisionReason: params.result.decisionReason,
+    actionPlan: params.actionPlan,
+    actionStatus: 'failed',
+    interviewStage: 'contacted',
+    notes: params.result.notes,
+  });
+}
+
+async function persistCollectRetryExecutionResult(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  result: CandidateScreeningResultListItem;
+  actionPlan: CandidateActionPlan;
+  collectActionLog: CandidateActionLogDto;
+  executionResult: ActionExecutionResult;
+  stats: ScreeningRunStats;
+}): Promise<void> {
+  if (params.executionResult.success) {
+    await params.dependencies.repo.updateActionLog({
+      userId: params.userId,
+      id: params.collectActionLog.id,
+      status: 'success',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      errorMessage: null,
+    });
+    await params.dependencies.repo.upsertResult({
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.result.jobDescriptionId,
+      candidateId: params.result.candidateId,
+      resumeId: params.result.resumeId,
+      source: params.result.source,
+      tags: params.result.tags,
+      scoreDetail: params.result.scoreDetail,
+      finalScore: params.result.finalScore,
+      rank: params.result.rank,
+      decisionAction: params.result.decisionAction,
+      decisionPriority: params.result.decisionPriority,
+      decisionReason: params.result.decisionReason,
+      actionPlan: params.actionPlan,
+      actionStatus: 'success',
+      interviewStage: 'collected',
+      notes: params.result.notes,
+    });
+    return;
+  }
+
+  params.stats.failed += 1;
+  await params.dependencies.repo.updateActionLog({
+    userId: params.userId,
+    id: params.collectActionLog.id,
+    status: 'failed',
+    browserTrace: params.executionResult.browserTrace ?? null,
+    errorMessage: params.executionResult.error ?? 'collect execution failed',
+  });
+  await params.dependencies.repo.upsertResult({
+    userId: params.userId,
+    runId: params.runId,
+    jobDescriptionId: params.result.jobDescriptionId,
+    candidateId: params.result.candidateId,
+    resumeId: params.result.resumeId,
+    source: params.result.source,
+    tags: params.result.tags,
+    scoreDetail: params.result.scoreDetail,
+    finalScore: params.result.finalScore,
+    rank: params.result.rank,
+    decisionAction: params.result.decisionAction,
+    decisionPriority: params.result.decisionPriority,
+    decisionReason: params.result.decisionReason,
+    actionPlan: params.actionPlan,
+    actionStatus: 'failed',
+    interviewStage: 'contacted',
+    notes: params.result.notes,
+  });
+}
+
 async function executePlannedActionsForRun(params: {
   dependencies: ScreeningRunnerDependencies;
   userId: string;
   runId: string;
   jobDescriptionId: string;
-  executeChat: CandidateSourceAdapter['chatCandidate'];
+  executeContactAndCollect: (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ) => Promise<ActionExecutionResult>;
   executeCollect: CandidateSourceAdapter['collectCandidate'];
   request: ExecuteActionsRequest;
   stats: ScreeningRunStats;
@@ -1855,14 +2175,20 @@ async function executePlannedActionsForRun(params: {
   });
 
   for (const result of results) {
+    if (!result.actionPlan) {
+      continue;
+    }
+
+    const isRetryingCollect =
+      result.actionPlan.action === 'chat' && result.actionStatus === 'failed';
     if (
+      !isRetryingCollect &&
       !shouldExecuteAction({
         result,
         chatCount,
         collectCount,
         request: params.request,
-      }) ||
-      !result.actionPlan
+      })
     ) {
       continue;
     }
@@ -1873,6 +2199,50 @@ async function executePlannedActionsForRun(params: {
       candidateId: result.candidateId,
     });
     if (!detail) continue;
+
+    if (isRetryingCollect) {
+      const chatActionLog = getActionLog(detail, 'chat', params.runId);
+      const collectActionLog = getActionLog(detail, 'collect', params.runId);
+      if (
+        chatActionLog?.status !== 'success' ||
+        collectActionLog?.status !== 'failed' ||
+        collectCount >= params.request.maxCollectActions
+      ) {
+        continue;
+      }
+      const claimedCollectLog = await params.dependencies.repo.claimRetryableCollectActionLog({
+        userId: params.userId,
+        id: collectActionLog.id,
+      });
+      if (!claimedCollectLog) continue;
+
+      try {
+        const executionResult = await params.executeCollect(createStoredCandidateRef(result));
+        await persistCollectRetryExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          collectActionLog: claimedCollectLog,
+          executionResult,
+          stats: params.stats,
+        });
+        collectCount += 1;
+      } catch (error) {
+        await persistCollectRetryExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          collectActionLog: claimedCollectLog,
+          executionResult: { success: false, error: getErrorMessage(error) },
+          stats: params.stats,
+        });
+      }
+      continue;
+    }
 
     const actionLog = getPlannedActionLog(detail, result.actionPlan.action, params.runId);
     if (!actionLog) continue;
@@ -1900,21 +2270,37 @@ async function executePlannedActionsForRun(params: {
           priority: result.actionPlan.priority,
         },
       });
+      const collectActionLog =
+        result.actionPlan.action === 'chat' ? getActionLog(detail, 'collect', params.runId) : null;
       const executionResult =
         result.actionPlan.action === 'chat'
-          ? await params.executeChat(storedCandidate, result.actionPlan)
+          ? await params.executeContactAndCollect(storedCandidate, result.actionPlan)
           : await params.executeCollect(storedCandidate);
 
-      await persistExecutionResult({
-        dependencies: params.dependencies,
-        userId: params.userId,
-        runId: params.runId,
-        result,
-        actionPlan: result.actionPlan,
-        actionLog: claimedActionLog,
-        executionResult,
-        stats: params.stats,
-      });
+      if (result.actionPlan.action === 'chat' && collectActionLog) {
+        await persistContactAndCollectExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          chatActionLog: claimedActionLog,
+          collectActionLog,
+          executionResult,
+          stats: params.stats,
+        });
+      } else {
+        await persistExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          actionLog: claimedActionLog,
+          executionResult,
+          stats: params.stats,
+        });
+      }
       await recordRunEvent({
         dependencies: params.dependencies,
         userId: params.userId,
@@ -2039,13 +2425,31 @@ export async function executeScreeningRunActions(params: {
     return workflowSession;
   }
 
-  const executeChat: CandidateSourceAdapter['chatCandidate'] = async (candidate, actionPlan) => {
+  const executeContactAndCollect = async (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ): Promise<ActionExecutionResult> => {
     if (currentRun.skillId === null) {
       const legacyAdapter = await getLegacyAdapterAfterClaim();
-      return legacyAdapter.chatCandidate(candidate, actionPlan);
+      const contact = await legacyAdapter.chatCandidate(candidate, actionPlan);
+      if (!contact.success) {
+        return {
+          ...contact,
+          browserTrace: { contact: 'failed', collect: 'not_attempted' },
+        };
+      }
+      const collect = await legacyAdapter.collectCandidate(candidate);
+      return {
+        success: collect.success,
+        error: collect.error,
+        browserTrace: {
+          contact: 'success',
+          collect: collect.success ? 'success' : 'failed',
+        },
+      };
     }
     const session = await getWorkflowSessionAfterClaim();
-    return session.chatCandidate(candidate, actionPlan);
+    return session.contactAndCollectCandidate(candidate, actionPlan);
   };
 
   const executeCollect: CandidateSourceAdapter['collectCandidate'] = async (candidate) => {
@@ -2073,7 +2477,7 @@ export async function executeScreeningRunActions(params: {
       userId: params.userId,
       runId: params.runId,
       jobDescriptionId: currentRun.jobDescriptionId,
-      executeChat,
+      executeContactAndCollect,
       executeCollect,
       request: params.request,
       stats,
@@ -2144,6 +2548,7 @@ export async function executeSingleCandidateAction(params: {
   if (!claimedActionLog) {
     throw new Error('candidate planned chat action is already running or finished');
   }
+  const collectActionLog = getActionLog(detail, 'collect', params.runId);
 
   const stats = createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
@@ -2153,7 +2558,7 @@ export async function executeSingleCandidateAction(params: {
     });
     adapter = nextAdapter;
     const storedCandidate = createStoredCandidateRef(detail);
-    let executionResult: Awaited<ReturnType<CandidateSourceAdapter['chatCandidate']>>;
+    let executionResult: ActionExecutionResult;
     if (run.skillId === null) {
       await nextAdapter.loginIfNeeded();
       executionResult = await nextAdapter.chatCandidate(storedCandidate, actionPlan);
@@ -2170,7 +2575,40 @@ export async function executeSingleCandidateAction(params: {
         skillId: run.skillId,
         stage: 'executing_actions',
       });
-      executionResult = await workflowSession.chatCandidate(storedCandidate, actionPlan);
+      executionResult = await workflowSession.contactAndCollectCandidate(
+        storedCandidate,
+        actionPlan,
+      );
+    }
+
+    if (collectActionLog) {
+      await persistContactAndCollectExecutionResult({
+        dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        result: detail,
+        actionPlan,
+        chatActionLog: claimedActionLog,
+        collectActionLog,
+        executionResult,
+        stats,
+      });
+      if (!executionResult.success) {
+        return {
+          status: 'failed',
+          candidateId: params.candidateId,
+          candidateName: detail.candidate.displayName,
+          detail: executionResult.error ?? '单点沟通或收藏失败',
+          errorMessage: executionResult.error ?? 'action execution failed',
+        };
+      }
+      return {
+        status: 'success',
+        candidateId: params.candidateId,
+        candidateName: detail.candidate.displayName,
+        detail: '已发送单点沟通消息并收藏候选人',
+        errorMessage: null,
+      };
     }
 
     if (!executionResult.success) {

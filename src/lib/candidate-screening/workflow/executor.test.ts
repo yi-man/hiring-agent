@@ -494,6 +494,52 @@ describe('CandidateScreeningWorkflowSession', () => {
     );
   });
 
+  it('reports a successful greeting and failed collection separately for recovery', async () => {
+    const dependencies = makeDependencies();
+    dependencies.runBrowserWorkflow.mockResolvedValue({
+      status: 'failed',
+      currentStepId: 'collect_click',
+      observations: {},
+      traceSteps: [
+        {
+          stepId: 'contact_wait_success',
+          action: 'wait_for_text',
+          params: { text: '已发送' },
+          result: { success: true },
+        },
+        {
+          stepId: 'collect_click',
+          action: 'click',
+          params: { target: { kind: 'role', name: '收藏', role: 'button' } },
+          result: { success: false, error: 'collect target missing' },
+        },
+      ],
+      failedStep: {
+        stepId: 'collect_click',
+        action: 'click',
+        params: { target: { kind: 'role', name: '收藏', role: 'button' } },
+        result: { success: false, error: 'collect target missing' },
+      },
+    });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadOrExplore({ searchPlan, stage: 'executing_actions' });
+    const result = await session.contactAndCollectCandidate(
+      {
+        candidateId: 'candidate-301',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'http://localhost:6183/employer/resumes/301',
+      },
+      { action: 'chat', priority: 'high', message: 'Hello Ada', reason: 'Java match' },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'collect target missing',
+      browserTrace: { contact: 'success', collect: 'failed' },
+    });
+  });
+
   it('uses no adapter browser action while collecting through collect_open', async () => {
     const dependencies = makeDependencies();
     dependencies.runBrowserWorkflow.mockResolvedValue(successfulRun());
@@ -511,5 +557,16 @@ describe('CandidateScreeningWorkflowSession', () => {
     );
     expect(dependencies.adapter.collectCandidate).not.toHaveBeenCalled();
     expect(dependencies.adapter.chatCandidate).not.toHaveBeenCalled();
+  });
+
+  it('does not expose high-level screening actions for a browser-v2 skill', async () => {
+    const dependencies = makeDependencies();
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadExact({ skillId: 'screen-v1', stage: 'searching_live' });
+
+    expect('searchCandidates' in session).toBe(false);
+    expect('enrichCandidate' in session).toBe(false);
+    expect('chatCandidate' in session).toBe(false);
   });
 });

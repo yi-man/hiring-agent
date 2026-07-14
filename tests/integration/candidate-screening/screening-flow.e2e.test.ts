@@ -45,6 +45,8 @@ jest.mock('@/lib/rag/embed', () => ({
 type BossLikeServer = {
   baseUrl: string;
   requests: string[];
+  sentMessageIds: string[];
+  collectedCandidateIds: string[];
   setSearchButtonLabel: (label: string) => void;
   setGreetButtonLabel: (label: string) => void;
   setCandidateResultsVisible: (visible: boolean) => void;
@@ -200,6 +202,8 @@ function renderResumeDetailPage(id: string, greetButtonLabel: string): string {
 
 async function startBossLikeServer(): Promise<BossLikeServer> {
   const requests: string[] = [];
+  const sentMessageIds: string[] = [];
+  const collectedCandidateIds: string[] = [];
   let searchButtonLabel = '搜索';
   let greetButtonLabel = '打招呼';
   let candidateResultsVisible = true;
@@ -226,6 +230,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     if (request.method === 'POST' && messageMatch) {
       request.resume();
       request.on('end', () => {
+        sentMessageIds.push(messageMatch[1] ?? '');
         response.end('<!doctype html><html><body>Message sent</body></html>');
       });
       return;
@@ -234,6 +239,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     if (request.method === 'POST' && collectMatch) {
       request.resume();
       request.on('end', () => {
+        collectedCandidateIds.push(collectMatch[1] ?? '');
         response.end('<!doctype html><html><body>Candidate collected</body></html>');
       });
       return;
@@ -256,6 +262,8 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
+    sentMessageIds,
+    collectedCandidateIds,
     setSearchButtonLabel: (label) => {
       searchButtonLabel = label;
     },
@@ -572,7 +580,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
       });
 
       await session.loadExact({ skillId: staleSkill.id, stage: 'executing_actions' });
-      const result = await session.chatCandidate(
+      const result = await session.contactAndCollectCandidate(
         {
           candidateId: graceResumeId,
           displayName: 'Grace Hopper',
@@ -683,7 +691,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
       });
 
       await session.loadExact({ skillId: staleSkill.id, stage: 'executing_actions' });
-      const result = await session.chatCandidate(
+      const result = await session.contactAndCollectCandidate(
         {
           candidateId: graceResumeId,
           displayName: 'Grace Hopper',
@@ -858,24 +866,26 @@ describe('candidate screening integration flow with real postgres and boss-like 
 
       expect(completedRun.status).toBe('success');
       expect(completedRun.currentStage).toBe('finalizing');
-      expect(actionLogs).toHaveLength(1);
-      expect(actionLogs[0]).toMatchObject({
-        mode: 'execution',
-        action: 'chat',
-        status: 'success',
-      });
+      expect(actionLogs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ mode: 'execution', action: 'chat', status: 'success' }),
+          expect.objectContaining({ mode: 'execution', action: 'collect', status: 'success' }),
+        ]),
+      );
       expect(result.actionStatus).toBe('success');
-      expect(result.interviewStage).toBe('contacted');
+      expect(result.interviewStage).toBe('collected');
       expect(bossLike.requests).toContain('GET /employer/resumes');
       expect(bossLike.requests).toContain(`GET /employer/resumes/${adaResumeId}`);
       expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
+      expect(bossLike.sentMessageIds).toEqual([adaResumeId]);
+      expect(bossLike.collectedCandidateIds).toEqual([adaResumeId]);
     } finally {
       await cleanupIntegrationUser(userId);
       await bossLike.close();
     }
   }, 120000);
 
-  it('explores and persists screen_candidates v1, then reuses it with browser action traces', async () => {
+  it('explores and persists one browser-v2 screen_candidates graph, then reuses it with browser action traces', async () => {
     const bossLike = await startBossLikeServer();
     const userId = await createIntegrationUser();
 
@@ -904,7 +914,21 @@ describe('candidate screening integration flow with real postgres and boss-like 
 
       expect(first?.skillId).toBeTruthy();
       expect(workflow).toEqual(
-        expect.objectContaining({ name: 'screen_candidates', version: 1, isActive: true }),
+        expect.objectContaining({
+          name: 'screen_candidates',
+          version: 1,
+          isActive: true,
+          meta: expect.objectContaining({ dsl_version: 'browser-v2' }),
+        }),
+      );
+      expect(workflow?.steps).toEqual(
+        expect.arrayContaining([expect.objectContaining({ action: 'observe' })]),
+      );
+      expect(workflow?.steps).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ action: 'search_candidates' }),
+          expect.objectContaining({ action: 'chat_candidate' }),
+        ]),
       );
       expect(firstEvents.map((event) => event.message)).toEqual(
         expect.arrayContaining([
@@ -921,7 +945,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
           expect.objectContaining({
             decisionAction: 'chat',
             actionStatus: 'success',
-            interviewStage: 'contacted',
+            interviewStage: 'collected',
           }),
           expect.objectContaining({
             decisionAction: 'collect',
@@ -936,11 +960,15 @@ describe('candidate screening integration flow with real postgres and boss-like 
             action: 'chat',
             status: 'success',
             browserTrace: expect.objectContaining({
-              traceSteps: expect.arrayContaining([
-                expect.objectContaining({ stepId: 'contact_open' }),
-                expect.objectContaining({ stepId: 'contact_send' }),
-                expect.objectContaining({ stepId: 'collect_click' }),
-              ]),
+              contact: 'success',
+              collect: 'success',
+              workflow: expect.objectContaining({
+                traceSteps: expect.arrayContaining([
+                  expect.objectContaining({ stepId: 'contact_open' }),
+                  expect.objectContaining({ stepId: 'contact_send' }),
+                  expect.objectContaining({ stepId: 'collect_click' }),
+                ]),
+              }),
             }),
           }),
           expect.objectContaining({
@@ -962,6 +990,13 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(bossLike.requests).toContain(`GET /employer/resumes/${adaResumeId}`);
       expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
       expect(bossLike.requests).toContain(`POST /employer/resumes/${graceResumeId}/collect`);
+      expect(
+        bossLike.requests.filter((request) => request === 'GET /employer/resumes?keyword=Java'),
+      ).toHaveLength(1);
+      expect(bossLike.sentMessageIds).toEqual([adaResumeId]);
+      expect(bossLike.collectedCandidateIds).toEqual(
+        expect.arrayContaining([adaResumeId, graceResumeId]),
+      );
 
       const secondRun = await createRunAndExecute({
         userId,
@@ -995,6 +1030,134 @@ describe('candidate screening integration flow with real postgres and boss-like 
           where: { name: 'screen_candidates', platform: 'boss-like' },
         }),
       ).toBe(1);
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('searches each keyword once and observes each duplicate profile only once', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+
+    try {
+      await cleanupScreeningWorkflows();
+      const jobDescription = await createPublishedJobDescription(userId);
+      await createExploredPublishSkill(buildBossLikeScreeningSkill());
+      const run = await createCandidateScreeningRun({
+        userId,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        mode: 'dry_run',
+        status: 'pending',
+      });
+
+      await runCandidateScreening({
+        runId: run.id,
+        userId,
+        jobDescription,
+        request: { ...browserExecutionRequest, mode: 'dry_run', maxCandidates: 3 },
+        dependencies: {
+          buildPlan: () => ({
+            searchPlan: {
+              ...workflowSearchPlan,
+              keywords: ['Java', 'PostgreSQL'],
+            },
+            evaluationSchema: {
+              skills: ['Java', 'PostgreSQL'],
+              domainKnowledge: [],
+              generalAbility: [],
+              risk: [],
+            },
+          }),
+          createAdapter: () =>
+            new BossLikeCandidateSourceAdapter({
+              baseUrl: bossLike.baseUrl,
+              executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+              username: 'admin',
+              password: 'boss123',
+            }),
+          evaluateCandidate: evaluateCandidateWithChatAndCollect,
+        },
+      });
+
+      const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
+      expect(
+        bossLike.requests.filter((request) => request === 'GET /employer/resumes?keyword=Java'),
+      ).toHaveLength(1);
+      expect(
+        bossLike.requests.filter(
+          (request) => request === 'GET /employer/resumes?keyword=PostgreSQL',
+        ),
+      ).toHaveLength(1);
+      expect(
+        bossLike.requests.filter((request) => request === `GET /employer/resumes/${adaResumeId}`),
+      ).toHaveLength(1);
+      expect(
+        bossLike.requests.filter((request) => request === `GET /employer/resumes/${graceResumeId}`),
+      ).toHaveLength(1);
+      expect(
+        events
+          .filter((event) => event.message === 'search_keyword_completed')
+          .map((event) => event.detail?.keyword),
+      ).toEqual(['Java', 'PostgreSQL']);
+      expect(bossLike.sentMessageIds).toEqual([]);
+      expect(bossLike.collectedCandidateIds).toEqual([]);
+    } finally {
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('replaces an active legacy screen_candidates v4 with a browser-v2 v5 before execution', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+
+    try {
+      await cleanupScreeningWorkflows();
+      const legacy = await createExploredPublishSkill({
+        ...buildBossLikeScreeningSkill({ id: 'screen-candidates-legacy-v4', version: 4 }),
+        steps: [
+          {
+            id: 'legacy_search',
+            type: 'action',
+            action: 'search_candidates',
+            params: {},
+            next: 'legacy_end',
+          },
+          { id: 'legacy_end', type: 'end' },
+        ],
+        meta: { created_from: 'explore' },
+      });
+      const jobDescription = await createPublishedJobDescription(userId);
+      const run = await createRunAndExecute({
+        userId,
+        jobDescription,
+        bossLike,
+        request: { ...browserExecutionRequest, maxCandidates: 1 },
+        evaluate: evaluateCandidate,
+      });
+      const storedRun = await getCandidateScreeningRun({ userId, runId: run.id });
+      const active = await prisma.publishSkill.findFirstOrThrow({
+        where: { name: 'screen_candidates', platform: 'boss-like', isActive: true },
+      });
+      const persistedLegacy = await prisma.publishSkill.findUniqueOrThrow({
+        where: { id: legacy.id },
+      });
+
+      expect(storedRun?.skillId).toBe(active.id);
+      expect(active).toEqual(
+        expect.objectContaining({
+          version: 5,
+          meta: expect.objectContaining({ dsl_version: 'browser-v2' }),
+        }),
+      );
+      expect(active.steps).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ action: 'search_candidates' })]),
+      );
+      expect(persistedLegacy.isActive).toBe(false);
     } finally {
       await cleanupIntegrationUser(userId);
       await cleanupScreeningWorkflows();
@@ -1083,13 +1246,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
       });
 
       await session.loadExact({ skillId: v1.id, stage: 'searching_live' });
-      for await (const batch of session.searchCandidates(workflowSearchPlan, {
-        maxCandidates: 1,
-        batchSize: 1,
-      })) {
-        // Exhaust the browser stream to execute the repaired search step.
-        void batch;
-      }
+      await session.runSearchKeyword({ keyword: 'Java', maxCandidates: 1 });
 
       const persisted = await getCandidateScreeningRun({ userId, runId: run.id });
       const workflows = await prisma.publishSkill.findMany({
