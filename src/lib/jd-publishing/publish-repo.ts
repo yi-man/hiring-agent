@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { BROWSER_WORKFLOW_DSL_VERSION } from './types';
 import type {
   PublishPlatform,
   PublishSkill,
@@ -262,6 +263,18 @@ export async function getActivePublishSkillByName(params: {
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
   });
   return row ? mapSkill(row) : null;
+}
+
+export function isBrowserV2Skill(skill: Pick<PublishSkill, 'meta'>): boolean {
+  return skill.meta?.dsl_version === BROWSER_WORKFLOW_DSL_VERSION;
+}
+
+export async function getActiveBrowserV2SkillByName(params: {
+  name: string;
+  platform: PublishPlatform;
+}): Promise<PublishSkill | null> {
+  const active = await getActivePublishSkillByName(params);
+  return active && isBrowserV2Skill(active) ? active : null;
 }
 
 export function getActivePublishSkillFromDb(

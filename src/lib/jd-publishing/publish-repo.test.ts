@@ -3,6 +3,7 @@ import {
   createExploredPublishSkill,
   createNextActivePublishSkillVersion,
   createPublishTask,
+  getActiveBrowserV2SkillByName,
   getActivePublishSkillByName,
   getActivePublishSkillFromDb,
   listPublishTasksForJobDescription,
@@ -10,6 +11,7 @@ import {
   upsertDefaultPublishSkill,
 } from './publish-repo';
 import { bossLikePublishSkill } from './skill-registry';
+import type { PublishSkill } from './types';
 
 jest.mock('@/lib/prisma', () => ({
   prisma: {
@@ -55,14 +57,27 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
 
 const now = new Date('2026-06-26T00:00:00.000Z');
 
-const skillRow = {
+const skillRow = (
+  overrides: Partial<PublishSkill & { createdAt: Date; updatedAt: Date }> = {},
+) => ({
   ...bossLikePublishSkill,
   isActive: true,
   inputSchema: bossLikePublishSkill.inputSchema,
-  meta: { success_rate: 0.75, usage_count: 4, created_from: 'explore' },
+  meta: { success_rate: 0.75, usage_count: 4, created_from: 'explore' as const },
   createdAt: now,
   updatedAt: now,
-};
+  ...overrides,
+});
+
+function browserV2ScreeningSkill(): PublishSkill {
+  return {
+    ...bossLikePublishSkill,
+    id: 'screen-v5',
+    name: 'screen_candidates',
+    version: 1,
+    meta: { dsl_version: 'browser-v2', created_from: 'explore' },
+  };
+}
 
 describe('publish repository', () => {
   beforeEach(() => {
@@ -82,7 +97,7 @@ describe('publish repository', () => {
   });
 
   it('upserts the built-in boss-like skill by name, platform, and version', async () => {
-    prismaMock.publishSkill.upsert.mockResolvedValueOnce(skillRow);
+    prismaMock.publishSkill.upsert.mockResolvedValueOnce(skillRow());
 
     const result = await upsertDefaultPublishSkill(bossLikePublishSkill);
 
@@ -112,7 +127,7 @@ describe('publish repository', () => {
   });
 
   it('loads the latest active skill for a platform', async () => {
-    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(skillRow);
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(skillRow());
 
     const result = await getActivePublishSkillFromDb('boss-like');
 
@@ -130,7 +145,7 @@ describe('publish repository', () => {
 
   it('loads the active workflow for an explicit name and platform', async () => {
     prismaMock.publishSkill.findFirst.mockResolvedValueOnce({
-      ...skillRow,
+      ...skillRow(),
       name: 'screen_candidates',
     });
 
@@ -140,6 +155,46 @@ describe('publish repository', () => {
       where: { name: 'screen_candidates', platform: 'boss-like', isActive: true },
       orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
     });
+  });
+
+  it('does not select an active legacy screen_candidates workflow', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValue(
+      skillRow({ name: 'screen_candidates', version: 4, meta: { created_from: 'explore' } }),
+    );
+
+    await expect(
+      getActiveBrowserV2SkillByName({ name: 'screen_candidates', platform: 'boss-like' }),
+    ).resolves.toBeNull();
+  });
+
+  it('allocates browser-v2 v5 after legacy v4', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(
+      skillRow({
+        id: 'screen-v4',
+        name: 'screen_candidates',
+        version: 4,
+        isActive: true,
+        meta: { created_from: 'explore' },
+      }),
+    );
+    prismaMock.publishSkill.create.mockResolvedValueOnce(
+      skillRow({
+        id: 'screen-v5',
+        name: 'screen_candidates',
+        version: 5,
+        isActive: true,
+        meta: { dsl_version: 'browser-v2', created_from: 'explore' },
+      }),
+    );
+
+    const created = await createExploredPublishSkill(browserV2ScreeningSkill());
+
+    expect(created.version).toBe(5);
+    expect(prismaMock.publishSkill.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { isActive: false },
+      }),
+    );
   });
 
   it('stores an explored skill as the active browser-authored skill', async () => {
@@ -304,7 +359,7 @@ describe('publish repository', () => {
     };
     const repairedSteps = staleV1.steps;
     const activeV2 = {
-      ...skillRow,
+      ...skillRow(),
       id: 'screen-candidates-v2',
       name: 'screen_candidates',
       version: 2,

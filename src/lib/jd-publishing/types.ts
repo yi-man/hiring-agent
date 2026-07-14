@@ -1,5 +1,7 @@
 import type { BrowserAction, BrowserStepCheck, BrowserStepResult } from '@/lib/browser/types';
 
+export const BROWSER_WORKFLOW_DSL_VERSION = 'browser-v2' as const;
+
 export type {
   BrowserCommand,
   BrowserCommandAction,
@@ -50,6 +52,7 @@ export type ScreeningWorkflowAction = LegacyScreeningWorkflowAction;
 export type PublishSkillAction = BrowserWorkflowAction | LegacyScreeningWorkflowAction;
 
 export type PublishSkillMeta = Record<string, unknown> & {
+  dsl_version?: typeof BROWSER_WORKFLOW_DSL_VERSION;
   success_rate?: number;
   usage_count?: number;
   created_from?: 'explore' | 'agent';
