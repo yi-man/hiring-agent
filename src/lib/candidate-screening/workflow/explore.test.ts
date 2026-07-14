@@ -490,6 +490,7 @@ describe('exploreBossLikeScreeningWorkflow', () => {
       ]),
     );
     expect(executor.calls.filter((call) => call === 'click:搜索')).toHaveLength(1);
+    expect(executor.calls.filter((call) => call.startsWith('fill:'))).toEqual(['fill:关键词:Java']);
     expect(executor.calls).not.toEqual(expect.arrayContaining(['click:发送', 'click:收藏']));
   });
 
