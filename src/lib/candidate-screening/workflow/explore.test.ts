@@ -259,22 +259,11 @@ class DelayedSearchResultsExploringExecutor extends ExploringScreeningExecutor {
 }
 
 class RefreshedSearchResultsExploringExecutor extends ExploringScreeningExecutor {
-  private searchSubmitted = false;
   private resultsRefreshed = false;
-
-  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
-    const result = await super.click(target);
-    if (targetName(target) === '搜索') {
-      this.searchSubmitted = true;
-    }
-    return result;
-  }
 
   async snapshot(): Promise<string> {
     this.calls.push('snapshot');
-    return this.searchSubmitted && !this.resultsRefreshed
-      ? resumeListHtml
-      : refreshedResumeListHtml;
+    return this.resultsRefreshed ? refreshedResumeListHtml : resumeListHtml;
   }
 
   async waitForSnapshotChange(): Promise<BrowserStepResult> {
@@ -300,8 +289,7 @@ class UrlThenResultsExploringExecutor extends ExploringScreeningExecutor {
   async snapshot(): Promise<string> {
     this.calls.push('snapshot');
     if (!this.searchSubmitted) return resumeListHtml;
-    if (!this.urlChanged) return resumeListHtml;
-    return this.resultsRefreshed ? refreshedResumeListHtml : '<main>正在加载候选人</main>';
+    return this.resultsRefreshed ? refreshedResumeListHtml : resumeListHtml;
   }
 
   async waitForSnapshotChange(
@@ -559,11 +547,15 @@ describe('exploreBossLikeScreeningWorkflow', () => {
   it('keeps waiting for a result snapshot after the search URL changes', async () => {
     const executor = new UrlThenResultsExploringExecutor();
 
-    await expect(
-      exploreBossLikeScreeningWorkflow({ executor, baseUrl, credentials, searchPlan }),
-    ).resolves.toEqual(
-      expect.objectContaining({ skill: expect.objectContaining({ name: 'screen_candidates' }) }),
-    );
+    const explored = await exploreBossLikeScreeningWorkflow({
+      executor,
+      baseUrl,
+      credentials,
+      searchPlan,
+    });
+    if (!explored) throw new Error('expected workflow exploration to find a candidate detail');
+
+    expect(explored.firstListHtml).toBe(refreshedResumeListHtml);
 
     expect(executor.calls).toEqual(
       expect.arrayContaining([

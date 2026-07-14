@@ -620,13 +620,15 @@ async function waitForCandidateSearchResults(
         'wait for candidate search result change',
         await executor.waitForSnapshotChange(snapshot, attempt === 0 ? previousUrl : undefined),
       );
-      snapshot = await requireRawSnapshot(executor);
+      const updatedSnapshot = await requireRawSnapshot(executor);
       if (
-        extractBossLikeCandidatesFromHtml(snapshot).length > 0 ||
-        isExplicitEmptySearchResultSnapshot(snapshot)
+        updatedSnapshot !== snapshot &&
+        (extractBossLikeCandidatesFromHtml(updatedSnapshot).length > 0 ||
+          isExplicitEmptySearchResultSnapshot(updatedSnapshot))
       ) {
-        return snapshot;
+        return updatedSnapshot;
       }
+      snapshot = updatedSnapshot;
     }
     throw new Error('screening_explore_candidate_results_not_ready');
   }
