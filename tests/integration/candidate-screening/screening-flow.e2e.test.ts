@@ -45,6 +45,7 @@ type BossLikeServer = {
   baseUrl: string;
   requests: string[];
   setSearchButtonLabel: (label: string) => void;
+  setGreetButtonLabel: (label: string) => void;
   setCandidateResultsVisible: (visible: boolean) => void;
   close: () => Promise<void>;
 };
@@ -149,19 +150,23 @@ function renderResumeListPage(searchButtonLabel: string, candidatesVisible: bool
 </html>`;
 }
 
-function renderResumeDetailPage(id: string): string {
+function renderResumeDetailPage(id: string, greetButtonLabel: string): string {
   const article =
     candidateFixtures().find((fixture) => fixture.includes(`data-candidate-id="${id}"`)) ??
     candidateFixtures()[0];
+  const candidateName = id === graceResumeId ? 'Grace Hopper' : 'Ada Lovelace';
   return `<!doctype html>
 <html lang="zh-CN">
   <head><meta charset="utf-8" /><title>候选人详情</title></head>
   <body>
     <main>
-      <h1>候选人详情</h1>
+      <h1>${candidateName}</h1>
+      <p>候选人详情</p>
       ${article}
-      <button type="button" id="collect">收藏</button>
-      <button type="button" id="open-chat">打招呼</button>
+      <form aria-label="候选人操作">
+        <button type="button" id="collect">收藏</button>
+        <button type="button" id="open-chat">${escapeHtml(greetButtonLabel)}</button>
+      </form>
       <form id="chat-composer" method="post" action="/employer/resumes/${escapeHtml(id)}/messages" hidden>
         <label>消息 <textarea name="message" disabled></textarea></label>
         <button type="submit" disabled>发送</button>
@@ -195,6 +200,7 @@ function renderResumeDetailPage(id: string): string {
 async function startBossLikeServer(): Promise<BossLikeServer> {
   const requests: string[] = [];
   let searchButtonLabel = '搜索';
+  let greetButtonLabel = '打招呼';
   let candidateResultsVisible = true;
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
@@ -233,7 +239,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     }
     const detailMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)$/);
     if (detailMatch) {
-      response.end(renderResumeDetailPage(detailMatch[1] ?? adaResumeId));
+      response.end(renderResumeDetailPage(detailMatch[1] ?? adaResumeId, greetButtonLabel));
       return;
     }
 
@@ -251,6 +257,9 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     requests,
     setSearchButtonLabel: (label) => {
       searchButtonLabel = label;
+    },
+    setGreetButtonLabel: (label) => {
+      greetButtonLabel = label;
     },
     setCandidateResultsVisible: (visible) => {
       candidateResultsVisible = visible;
@@ -452,6 +461,209 @@ describe('candidate screening integration flow with real postgres and boss-like 
       await bossLike.close();
     }
   }, 30000);
+
+  it('repairs both stale chat-composer targets before retrying another candidate', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+    let session: ReturnType<typeof createCandidateScreeningWorkflowSession> | null = null;
+
+    try {
+      await cleanupScreeningWorkflows();
+      const jobDescription = await createPublishedJobDescription(userId);
+      const staleSkill = await createExploredPublishSkill(
+        buildBossLikeScreeningSkill(
+          { id: 'screen-candidates-stale-chat-v1', version: 1 },
+          {
+            messageInput: {
+              kind: 'field',
+              role: 'textbox',
+              name: '消息',
+              exact: true,
+              valueHint: 'message',
+              scope: { kind: 'form', name: 'Ada Lovelace' },
+            },
+            sendButton: {
+              kind: 'button',
+              role: 'button',
+              name: '发送',
+              exact: true,
+              scope: { kind: 'form', name: 'Ada Lovelace' },
+            },
+          },
+        ),
+      );
+      const run = await createCandidateScreeningRun({
+        userId,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        mode: 'execution',
+        status: 'pending',
+      });
+      const adapter = new BossLikeCandidateSourceAdapter({
+        baseUrl: bossLike.baseUrl,
+        executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+        username: 'admin',
+        password: 'boss123',
+      });
+      session = createCandidateScreeningWorkflowSession({
+        adapter,
+        userId,
+        runId: run.id,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+      });
+
+      await session.loadExact({ skillId: staleSkill.id, stage: 'executing_actions' });
+      const result = await session.chatCandidate(
+        {
+          candidateId: graceResumeId,
+          displayName: 'Grace Hopper',
+          profileUrl: `${bossLike.baseUrl}/employer/resumes/${graceResumeId}`,
+        },
+        {
+          action: 'chat',
+          priority: 'high',
+          message: '您好，想和您沟通高级后端工程师岗位机会。',
+          reason: 'Java 微服务经验匹配',
+        },
+      );
+
+      const persisted = await getCandidateScreeningRun({ userId, runId: run.id });
+      const repairedWorkflow = await prisma.publishSkill.findUnique({
+        where: { id: persisted?.skillId ?? '' },
+      });
+      const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
+      const chatStep = repairedWorkflow?.steps.find(
+        (step) => step.id === 'chat_candidate' && step.type === 'action',
+      );
+      const targets = chatStep?.params.targets as Record<string, unknown> | undefined;
+
+      expect(result.success).toBe(true);
+      expect(persisted?.skillId).not.toBe(staleSkill.id);
+      expect(targets).toEqual(
+        expect.objectContaining({
+          messageInput: expect.objectContaining({
+            name: '消息',
+            scope: { kind: 'form' },
+          }),
+          sendButton: expect.objectContaining({
+            name: '发送',
+            scope: { kind: 'form' },
+          }),
+        }),
+      );
+      expect(events.map((event) => event.message)).toEqual(
+        expect.arrayContaining([
+          'Workflow 修复并升级到 v2',
+          'Workflow 重试：chat_candidate',
+          'Workflow 重试成功：chat_candidate',
+        ]),
+      );
+      expect(bossLike.requests).toContain(`POST /employer/resumes/${graceResumeId}/messages`);
+    } finally {
+      await session?.close();
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
+
+  it('relearns composer targets after repairing a drifted greeting button in a real browser', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+    let session: ReturnType<typeof createCandidateScreeningWorkflowSession> | null = null;
+
+    try {
+      await cleanupScreeningWorkflows();
+      bossLike.setGreetButtonLabel('开始沟通');
+      const jobDescription = await createPublishedJobDescription(userId);
+      const staleSkill = await createExploredPublishSkill(
+        buildBossLikeScreeningSkill(
+          { id: 'screen-candidates-stale-greeting-v1', version: 1 },
+          {
+            messageInput: {
+              kind: 'field',
+              role: 'textbox',
+              name: '消息',
+              exact: true,
+              valueHint: 'message',
+              scope: { kind: 'form', name: 'Ada Lovelace' },
+            },
+            sendButton: {
+              kind: 'button',
+              role: 'button',
+              name: '发送',
+              exact: true,
+              scope: { kind: 'form', name: 'Ada Lovelace' },
+            },
+          },
+        ),
+      );
+      const run = await createCandidateScreeningRun({
+        userId,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        mode: 'execution',
+        status: 'pending',
+      });
+      const adapter = new BossLikeCandidateSourceAdapter({
+        baseUrl: bossLike.baseUrl,
+        executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+        username: 'admin',
+        password: 'boss123',
+      });
+      session = createCandidateScreeningWorkflowSession({
+        adapter,
+        userId,
+        runId: run.id,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+      });
+
+      await session.loadExact({ skillId: staleSkill.id, stage: 'executing_actions' });
+      const result = await session.chatCandidate(
+        {
+          candidateId: graceResumeId,
+          displayName: 'Grace Hopper',
+          profileUrl: `${bossLike.baseUrl}/employer/resumes/${graceResumeId}`,
+        },
+        {
+          action: 'chat',
+          priority: 'high',
+          message: '您好，想和您沟通高级后端工程师岗位机会。',
+          reason: 'Java 微服务经验匹配',
+        },
+      );
+
+      const persisted = await getCandidateScreeningRun({ userId, runId: run.id });
+      const repairedWorkflow = await prisma.publishSkill.findUnique({
+        where: { id: persisted?.skillId ?? '' },
+      });
+      const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
+      const chatStep = repairedWorkflow?.steps.find(
+        (step) => step.id === 'chat_candidate' && step.type === 'action',
+      );
+      const targets = chatStep?.params.targets as Record<string, unknown> | undefined;
+
+      expect(result.success).toBe(true);
+      expect(targets).toEqual(
+        expect.objectContaining({
+          greetButton: expect.objectContaining({ name: '开始沟通' }),
+          messageInput: expect.objectContaining({ scope: { kind: 'form' } }),
+          sendButton: expect.objectContaining({ scope: { kind: 'form' } }),
+        }),
+      );
+      expect(events.map((event) => event.message)).toEqual(
+        expect.arrayContaining(['Workflow 修复并升级到 v2', 'Workflow 重试成功：chat_candidate']),
+      );
+      expect(bossLike.requests).toContain(`POST /employer/resumes/${graceResumeId}/messages`);
+    } finally {
+      await session?.close();
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
 
   it('stores live resumes, indexes vectors, evaluates candidates, and links results to the JD', async () => {
     const bossLike = await startBossLikeServer();

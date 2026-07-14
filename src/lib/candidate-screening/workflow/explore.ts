@@ -409,7 +409,9 @@ function buildComposerTargets(
     buttonRequirement: SEND_BUTTON_REQUIREMENT,
     key: 'chatComposer',
   });
-  const scope = formScope(form, '沟通候选人');
+  // The fallback form name is often the candidate heading, so persisting it would make this
+  // reusable workflow fail for every other candidate. The composer is unique on the detail page.
+  const scope = { kind: 'form' } as const;
   return {
     messageInput: fieldTargetFromCandidate({
       candidate: selectCandidate({

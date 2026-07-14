@@ -294,11 +294,10 @@ class ScreeningWorkflowRepairPersistenceError extends Error {
   }
 }
 
-function patchStepTarget(params: {
+function patchStepTargets(params: {
   steps: PublishStep[];
   stepId: string;
-  targetKey: string;
-  target: BrowserTargetInput;
+  targets: Record<string, BrowserTargetInput>;
 }): PublishStep[] {
   return params.steps.map((step) => {
     if (step.id !== params.stepId || step.type !== 'action') return step;
@@ -310,7 +309,7 @@ function patchStepTarget(params: {
         ...step.params,
         targets: {
           ...targets,
-          [params.targetKey]: params.target,
+          ...params.targets,
         },
       },
     };
@@ -563,6 +562,7 @@ export function createCandidateScreeningWorkflowSession(
     if (!executor.snapshotStructured || !executor.resolveTarget) return false;
 
     let report: LocatorMatchReport | null = null;
+    let replacements: Record<string, BrowserTargetInput> | null = null;
     try {
       const snapshot = failureContext?.structuredSnapshot ?? (await executor.snapshotStructured());
       const replacement = repairBossLikeScreeningTargetFromSnapshot({
@@ -576,23 +576,41 @@ export function createCandidateScreeningWorkflowSession(
       if (report.status !== 'unique') {
         throw new ScreeningWorkflowRepairResolutionError(report);
       }
+      replacements = { [failed.targetKey]: replacement };
+      if (failed.stepId === 'chat_candidate') {
+        let composerSnapshot = snapshot;
+        if (failed.targetKey === 'greetButton') {
+          const composerOpened = await executor.click(replacement);
+          if (!composerOpened.success) return false;
+          composerSnapshot = await executor.snapshotStructured();
+        }
+        for (const targetKey of ['messageInput', 'sendButton'] as const) {
+          const composerTarget = repairBossLikeScreeningTargetFromSnapshot({
+            snapshot: composerSnapshot,
+            failedStepId: failed.stepId,
+            targetKey,
+            failedTarget: failed.target,
+          });
+          if (!composerTarget) return false;
+          replacements[targetKey] = composerTarget;
+        }
+      }
     } catch (error) {
       if (error instanceof ScreeningWorkflowRepairResolutionError) throw error;
       return false;
     }
 
-    if (!report) return false;
+    if (!report || !replacements) return false;
 
     let nextSkill: ScreeningWorkflowSkill;
     try {
       nextSkill = screeningSkill(
         await dependencies.createNextSkillVersion({
           previousSkill: currentSkill,
-          steps: patchStepTarget({
+          steps: patchStepTargets({
             steps: currentSkill.steps,
             stepId: failed.stepId,
-            targetKey: failed.targetKey,
-            target: report.target,
+            targets: replacements,
           }),
           meta: {
             ...currentSkill.meta,

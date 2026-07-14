@@ -491,6 +491,30 @@ describe('exploreBossLikeScreeningWorkflow', () => {
     expect(executor.calls).not.toEqual(expect.arrayContaining(['click:发送', 'click:收藏']));
   });
 
+  it('keeps chat composer targets scoped to any composer form instead of one candidate name', async () => {
+    const executor = new ExploringScreeningExecutor();
+
+    const skill = await exploreBossLikeScreeningWorkflow({
+      executor,
+      baseUrl,
+      credentials,
+      searchPlan,
+    });
+    if (!skill) throw new Error('expected workflow exploration to find a candidate detail');
+
+    const chatStep = skill.steps.find((step) => step.id === 'chat_candidate');
+    expect(chatStep).toEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          targets: expect.objectContaining({
+            messageInput: expect.objectContaining({ scope: { kind: 'form' } }),
+            sendButton: expect.objectContaining({ scope: { kind: 'form' } }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it('returns no workflow when the first search has no candidate detail to inspect', async () => {
     const executor = new ExploringScreeningExecutor(false);
 
@@ -652,7 +676,7 @@ describe('exploreBossLikeScreeningWorkflow', () => {
             greetButton: expect.objectContaining({ name: '打招呼' }),
             messageInput: expect.objectContaining({
               name: '消息内容',
-              scope: { kind: 'form', name: '沟通候选人' },
+              scope: { kind: 'form' },
             }),
           }),
         }),

@@ -827,6 +827,111 @@ describe('CandidateScreeningWorkflowSession', () => {
     expect(result.success).toBe(true);
     expect(dependencies.createNextSkillVersion).toHaveBeenCalledTimes(1);
     expect(dependencies.adapter.chatCandidate).toHaveBeenCalledTimes(2);
+    expect(dependencies.createNextSkillVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'chat_candidate',
+            params: expect.objectContaining({
+              targets: expect.objectContaining({
+                messageInput: expect.objectContaining({
+                  name: '消息内容',
+                  scope: { kind: 'form' },
+                  valueHint: 'message',
+                }),
+                sendButton: expect.objectContaining({
+                  name: '确认发送',
+                  scope: { kind: 'form' },
+                }),
+              }),
+            }),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('relearns both composer targets after repairing a greeting button', async () => {
+    const staleSkill = makeSkill({
+      steps: buildBossLikeScreeningSkill(
+        {},
+        {
+          messageInput: {
+            kind: 'field',
+            role: 'textbox',
+            name: '消息',
+            exact: true,
+            valueHint: 'message',
+            scope: { kind: 'form', name: 'Ada Lovelace' },
+          },
+          sendButton: {
+            kind: 'button',
+            role: 'button',
+            name: '发送',
+            exact: true,
+            scope: { kind: 'form', name: 'Ada Lovelace' },
+          },
+        },
+      ).steps,
+    });
+    const dependencies = makeDependencies({
+      getActiveSkill: jest.fn().mockResolvedValue(staleSkill),
+    });
+    dependencies.adapter.chatCandidate
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'not_found_target: 打招呼',
+        targetError: adapterTargetError({
+          target: workflowTarget(staleSkill, 'chat_candidate', 'greetButton'),
+          targetKey: 'greetButton',
+        }),
+      })
+      .mockResolvedValueOnce({ success: true });
+    dependencies.executor.snapshotStructured
+      .mockResolvedValueOnce(repairedDetailSnapshot)
+      .mockResolvedValueOnce(repairedComposerSnapshot);
+    dependencies.executor.resolveTarget.mockResolvedValue(
+      uniqueTargetReport(workflowTarget(staleSkill, 'chat_candidate', 'greetButton')),
+    );
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadOrExplore({ searchPlan, stage: 'executing_actions' });
+    await expect(
+      session.chatCandidate(
+        { candidateId: 'candidate-1', displayName: 'Grace Hopper' },
+        {
+          action: 'chat',
+          priority: 'high',
+          message: 'Hello Grace',
+          reason: 'Strong match',
+        },
+      ),
+    ).resolves.toEqual({ success: true });
+
+    expect(dependencies.createNextSkillVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'chat_candidate',
+            params: expect.objectContaining({
+              targets: expect.objectContaining({
+                messageInput: expect.objectContaining({
+                  name: '消息内容',
+                  scope: { kind: 'form' },
+                }),
+                sendButton: expect.objectContaining({
+                  name: '确认发送',
+                  scope: { kind: 'form' },
+                }),
+              }),
+            }),
+          }),
+        ]),
+      }),
+    );
+    expect(dependencies.executor.click).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '打招呼' }),
+    );
   });
 
   it('keeps an ambiguous chat target failure as a candidate action result', async () => {
