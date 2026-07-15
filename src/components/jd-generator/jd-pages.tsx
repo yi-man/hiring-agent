@@ -20,12 +20,7 @@ import {
 } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
-import { ScreeningRunHistory } from '@/components/candidate-screening/screening-run-history';
-import {
-  createCandidateScreeningRun,
-  fetchCandidateScreeningRuns,
-} from '@/lib/candidate-screening/client';
-import type { CandidateScreeningRunDto } from '@/lib/candidate-screening/repo';
+import { createCandidateScreeningRun } from '@/lib/candidate-screening/client';
 import { fetchCompanyProfile } from '@/lib/company-profile/client';
 import type { CompanyProfileDto } from '@/lib/company-profile/types';
 import {
@@ -963,7 +958,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isScreening, setIsScreening] = useState(false);
-  const [screeningRuns, setScreeningRuns] = useState<CandidateScreeningRunDto[]>([]);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
   const [publishCompany, setPublishCompany] = useState('');
   const [publishSalary, setPublishSalary] = useState('');
@@ -979,15 +973,13 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     setIsLoading(true);
     setError('');
     try {
-      const [data, tasks, profile, creationRuns, regenerationRuns, nextScreeningRuns] =
-        await Promise.all([
-          fetchJobDescription(jobDescriptionId),
-          fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
-          fetchCompanyProfile().catch(() => null),
-          fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
-          fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
-          fetchCandidateScreeningRuns(jobDescriptionId),
-        ]);
+      const [data, tasks, profile, creationRuns, regenerationRuns] = await Promise.all([
+        fetchJobDescription(jobDescriptionId),
+        fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
+        fetchCompanyProfile().catch(() => null),
+        fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
+        fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
+      ]);
       setJobDescription(data);
       setForm(jdToForm(data.content));
       setStatus(data.status);
@@ -995,7 +987,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setPublishTrace(tasks.find((task) => task.trace)?.trace ?? null);
       setCreateRuns(creationRuns);
       setRegenerateRuns(regenerationRuns);
-      setScreeningRuns(nextScreeningRuns);
       setCompanyProfile(profile);
       setPublishCompany(profile?.name ?? '');
       setPublishSalary(data.salaryRange ?? '');
@@ -1093,7 +1084,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         platform: 'boss-like',
         mode: 'execution',
       });
-      setScreeningRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
       router.push(
         withReturnTarget(
           `/jd-generator/${jobDescription.id}/screening-runs/${run.id}`,
@@ -1196,6 +1186,16 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 <ListFilter className="h-4 w-4" aria-hidden />
                 {isScreening ? '启动中' : screeningActionLabel}
               </Button>
+              <Link
+                className="border-input bg-background text-foreground hover:bg-muted inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors"
+                href={withReturnTarget(
+                  `/jd-generator/${jobDescription.id}/candidates`,
+                  detailReturnTarget,
+                )}
+              >
+                <ListFilter className="h-4 w-4" aria-hidden />
+                已筛选候选人
+              </Link>
             </>
           ) : null}
         </div>
@@ -1514,23 +1514,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     合格 {screeningSummary.qualifiedCandidateCount} / 全部{' '}
                     {screeningSummary.totalCandidateCount}
                   </span>
-                </div>
-                <ScreeningRunHistory
-                  jobDescriptionId={jobDescription.id}
-                  returnTarget={detailReturnTarget}
-                  runs={screeningRuns}
-                />
-                <div className="flex flex-wrap gap-x-4 gap-y-2">
-                  <Link
-                    className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
-                    href={withReturnTarget(
-                      `/jd-generator/${jobDescription.id}/candidates`,
-                      detailReturnTarget,
-                    )}
-                  >
-                    <ListFilter className="h-3.5 w-3.5" aria-hidden />
-                    已筛选候选人
-                  </Link>
                 </div>
               </div>
             ) : null}

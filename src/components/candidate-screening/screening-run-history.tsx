@@ -30,18 +30,21 @@ export function ScreeningRunHistory({
   return (
     <div className="space-y-2">
       <div className="text-muted-foreground flex items-center justify-between gap-2 text-xs">
-        <span>筛选历史</span>
+        <span>筛选记录</span>
         <span>{runs.length} 次</span>
       </div>
       {runs.length > 0 ? (
         <div className="space-y-2">
-          {runs.map((run) => (
+          {runs.map((run, index) => (
             <div key={run.id} className="border-border bg-muted/30 rounded-md border px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="text-foreground font-medium">{run.id}</span>
+                <span className="text-foreground font-medium">第 {runs.length - index} 次筛选</span>
                 <span className="text-muted-foreground">
                   {statusLabel[run.status]} · {formatRunTime(run.createdAt)}
                 </span>
+              </div>
+              <div className="text-muted-foreground mt-1 truncate font-mono text-[11px]">
+                {run.id}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
                 <Link

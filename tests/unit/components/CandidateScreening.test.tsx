@@ -1001,15 +1001,28 @@ describe('candidate screening UI', () => {
   });
 
   it('candidate list renders score, decision, source, action status, and interview stage', async () => {
+    fetchCandidateScreeningRunsMock.mockResolvedValueOnce([
+      sampleRun,
+      {
+        ...sampleRun,
+        id: 'run-previous',
+        skillId: 'screen-candidates-v1',
+        workflow: { name: 'screen_candidates', version: 1 },
+        createdAt: '2026-06-28T00:00:00.000Z',
+        updatedAt: '2026-06-28T00:02:00.000Z',
+      },
+    ]);
+
     render(<CandidateList jobDescriptionId="jd-1" />);
 
     const row = await screen.findByRole('link', { name: /Ada Lovelace/ });
     await waitFor(() =>
       expect(fetchJdCandidatesMock).toHaveBeenCalledWith(
         'jd-1',
-        expect.objectContaining({ minScore: 70 }),
+        expect.objectContaining({ minScore: undefined, limit: 100 }),
       ),
     );
+    expect(fetchCandidateScreeningRunsMock).toHaveBeenCalledWith('jd-1');
     expect(screen.getByRole('button', { name: '返回 JD' })).toHaveAttribute(
       'href',
       '/jd-generator/jd-1',
@@ -1027,6 +1040,23 @@ describe('candidate screening UI', () => {
     expect(screen.getAllByText('both').length).toBeGreaterThan(0);
     expect(screen.getByText('planned')).toBeInTheDocument();
     expect(screen.getAllByText('to_contact').length).toBeGreaterThan(0);
+
+    const sourceRunLink = screen.getByRole('link', { name: '来自第 2 次筛选' });
+    expect(parsedHref(sourceRunLink.getAttribute('href') ?? '').pathname).toBe(
+      '/jd-generator/jd-1/screening-runs/run-1',
+    );
+    expectReturnContext(
+      sourceRunLink.getAttribute('href') ?? '',
+      '/jd-generator/jd-1/candidates',
+      '返回已筛选候选人',
+    );
+
+    const runHistory = screen.getByLabelText('筛选记录');
+    expect(within(runHistory).getAllByRole('link', { name: /查看执行日志/ })).toHaveLength(2);
+    const historyRunHref = within(runHistory)
+      .getByRole('link', { name: /run-1.*查看执行日志/ })
+      .getAttribute('href');
+    expectReturnContext(historyRunHref ?? '', '/jd-generator/jd-1/candidates', '返回已筛选候选人');
   });
 
   it('candidate list returns to the supplied source and keeps the JD list as detail parent', async () => {
