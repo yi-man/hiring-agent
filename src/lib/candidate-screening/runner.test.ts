@@ -2033,7 +2033,7 @@ describe('candidate screening runner', () => {
     );
   });
 
-  it('logs existing library candidates during ingest without dropping them from this run', async () => {
+  it('stops existing library candidates before recall, evaluation, and action planning', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() =>
         batches({
@@ -2047,6 +2047,8 @@ describe('candidate screening runner', () => {
       ),
     });
     const dependencies = makeDependencies(adapter);
+    const workflow = makeWorkflowSession(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
     dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
       candidateId: 'candidate-1',
       resumeId: 'resume-1',
@@ -2058,11 +2060,14 @@ describe('candidate screening runner', () => {
       existingCandidateName: 'Ada Existing',
       existingResumeId: 'resume-1',
     });
-    dependencies.mergeAndRank = jest
-      .fn()
-      .mockReturnValueOnce([
-        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
-      ]);
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        displayName: 'Ada Existing',
+      }),
+    ]);
+    dependencies.mergeAndRank = jest.fn().mockReturnValueOnce([]);
 
     await runCandidateScreening({
       runId: 'run-1',
@@ -2072,15 +2077,17 @@ describe('candidate screening runner', () => {
       dependencies,
     });
 
-    expect(dependencies.mergeAndRank).toHaveBeenCalledWith({
-      live: [{ candidateId: 'candidate-1', matchScore: 1 }],
-      vector: [],
-    });
+    expect(dependencies.mergeAndRank).toHaveBeenCalledWith({ live: [], vector: [] });
+    expect(dependencies.evaluateCandidate).not.toHaveBeenCalled();
+    expect(dependencies.repo.upsertResult).not.toHaveBeenCalled();
+    expect(dependencies.repo.createActionLog).not.toHaveBeenCalled();
+    expect(workflow.contactAndCollectCandidate).not.toHaveBeenCalled();
+    expect(workflow.collectCandidate).not.toHaveBeenCalled();
     expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stage: 'indexing_resumes',
         level: 'warning',
-        message: '复用已有候选人：Ada Existing',
+        message: '跳过已有候选人后续流程：Ada Existing',
         detail: expect.objectContaining({
           candidateName: 'Ada Existing',
           candidateWasExisting: true,
@@ -2102,8 +2109,76 @@ describe('candidate screening runner', () => {
           fetched: 1,
           stored: 0,
           deduped: 1,
-          evaluated: 1,
+          evaluated: 0,
+          recommendedChat: 0,
+          recommendedCollect: 0,
         }),
+      }),
+    );
+  });
+
+  it('continues candidates first ingested by the same run when recovering', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-candidate-1',
+              name: 'Ada Recovery',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.repo.listRunEvents = jest.fn().mockResolvedValueOnce([
+      {
+        id: 'event-ingested',
+        userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        stage: 'indexing_resumes',
+        level: 'success',
+        message: '候选人入库：Ada Recovery',
+        detail: null,
+        createdAt,
+      },
+    ]);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 0,
+      candidateContacted: false,
+      candidateWasExisting: true,
+      resumeWasExisting: true,
+      existingCandidateId: 'candidate-1',
+      existingCandidateName: 'Ada Recovery',
+      existingResumeId: 'resume-1',
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ candidateId: 'candidate-1', action: 'chat' }),
+    );
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        message: '恢复本次运行候选人：Ada Recovery',
       }),
     );
   });
@@ -2128,11 +2203,11 @@ describe('candidate screening runner', () => {
       identityHash: 'identity-live',
       chunkCount: 1,
       candidateContacted: true,
-      candidateWasExisting: true,
-      resumeWasExisting: true,
-      existingCandidateId: 'candidate-1',
-      existingCandidateName: 'Ada Contacted',
-      existingResumeId: 'resume-1',
+      candidateWasExisting: false,
+      resumeWasExisting: false,
+      existingCandidateId: null,
+      existingCandidateName: null,
+      existingResumeId: null,
     });
     dependencies.mergeAndRank = jest
       .fn()
@@ -2237,11 +2312,11 @@ describe('candidate screening runner', () => {
       identityHash: 'identity-live',
       chunkCount: 1,
       candidateContacted: true,
-      candidateWasExisting: true,
-      resumeWasExisting: true,
-      existingCandidateId: 'candidate-1',
-      existingCandidateName: 'Ada Contacted',
-      existingResumeId: 'resume-1',
+      candidateWasExisting: false,
+      resumeWasExisting: false,
+      existingCandidateId: null,
+      existingCandidateName: null,
+      existingResumeId: null,
     });
     dependencies.mergeAndRank = jest
       .fn()

@@ -502,7 +502,6 @@ describe('candidate screening API routes', () => {
     expect(listCandidateScreeningRunsMock).toHaveBeenCalledWith({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
-      limit: 10,
     });
   });
 

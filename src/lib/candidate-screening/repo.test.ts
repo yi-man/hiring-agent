@@ -447,9 +447,12 @@ describe('candidate screening repository', () => {
     const runs = await listCandidateScreeningRuns({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
-      limit: 20,
     });
 
+    expect(prismaMock.candidateScreeningRun.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', jobDescriptionId: 'jd-1' },
+      orderBy: { createdAt: 'desc' },
+    });
     expect(prismaMock.publishSkill.findMany).toHaveBeenCalledTimes(1);
     expect(prismaMock.publishSkill.findMany).toHaveBeenCalledWith({
       where: { id: { in: ['screen-v2', 'screen-v3'] } },

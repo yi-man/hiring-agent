@@ -102,6 +102,21 @@ export async function ingestRawCandidate(params: {
     resumeHash,
   });
 
+  if (existingResume) {
+    return {
+      candidateId: candidate.id,
+      resumeId: existingResume.id,
+      identityHash: identity.identityHash,
+      chunkCount: 0,
+      candidateContacted: candidate.contacted,
+      candidateWasExisting: existingCandidate !== null,
+      resumeWasExisting: true,
+      existingCandidateId: existingCandidate?.id ?? null,
+      existingCandidateName: existingCandidate?.displayName ?? null,
+      existingResumeId: existingResume.id,
+    };
+  }
+
   const resume = await createOrReuseCandidateResume({
     userId: params.userId,
     candidateId: candidate.id,
@@ -152,9 +167,9 @@ export async function ingestRawCandidate(params: {
     chunkCount: chunks.length,
     candidateContacted: candidate.contacted,
     candidateWasExisting: existingCandidate !== null,
-    resumeWasExisting: existingResume !== null,
+    resumeWasExisting: false,
     existingCandidateId: existingCandidate?.id ?? null,
     existingCandidateName: existingCandidate?.displayName ?? null,
-    existingResumeId: existingResume?.id ?? null,
+    existingResumeId: null,
   };
 }

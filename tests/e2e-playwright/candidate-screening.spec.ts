@@ -196,6 +196,23 @@ test.describe('candidate screening UI', () => {
       await page.route('**/api/candidate-conversations/runs/comm-run-1', async (route) => {
         await route.fulfill({ json: { run: communicationRun } });
       });
+      const historicalRunBase = {
+        userId: seeded.userId,
+        jobDescriptionId: 'jd-screening-1',
+        platform: 'boss-like',
+        mode: 'execution',
+        status: 'success',
+        currentStage: 'finalizing',
+        currentWorkflowStep: null,
+        searchPlan: null,
+        evaluationSchema: null,
+        stats: null,
+        errorMessage: null,
+        startedAt: '2026-06-28T00:00:00.000Z',
+        finishedAt: '2026-06-28T00:02:00.000Z',
+        createdAt: '2026-06-28T00:00:00.000Z',
+        updatedAt: '2026-06-28T00:02:00.000Z',
+      };
       await page.route('**/api/jd/jd-screening-1/candidate-screening/runs', async (route) => {
         if (route.request().method() === 'POST') {
           expect(route.request().postDataJSON()).toMatchObject({
@@ -229,7 +246,26 @@ test.describe('candidate screening UI', () => {
           });
           return;
         }
-        await route.fulfill({ json: { runs: [] } });
+        await route.fulfill({
+          json: {
+            runs: [
+              {
+                ...historicalRunBase,
+                id: 'run-history-v2',
+                skillId: 'screen-candidates-history-v2',
+                workflow: { name: 'screen_candidates', version: 2 },
+              },
+              {
+                ...historicalRunBase,
+                id: 'run-history-legacy',
+                skillId: null,
+                workflow: null,
+                createdAt: '2026-06-27T00:00:00.000Z',
+                updatedAt: '2026-06-27T00:02:00.000Z',
+              },
+            ],
+          },
+        });
       });
       await page.route('**/api/candidate-screening/runs/run-1', async (route) => {
         await route.fulfill({
@@ -320,6 +356,13 @@ test.describe('candidate screening UI', () => {
         'href',
         '/jd-generator/jd-screening-1/candidates?returnTo=%2Fjd-generator%2Fjd-screening-1&returnLabel=%E8%BF%94%E5%9B%9E+JD',
       );
+      await expect(page.getByText('2 次', { exact: true })).toBeVisible();
+      await expect(page.getByRole('link', { name: /查看执行日志/ })).toHaveCount(2);
+      await expect(page.getByRole('link', { name: 'screen_candidates v2' })).toHaveAttribute(
+        'href',
+        '/workflows/screen-candidates-history-v2?returnTo=%2Fjd-generator%2Fjd-screening-1&returnLabel=%E8%BF%94%E5%9B%9E+JD',
+      );
+      await expect(page.getByText('未关联 Workflow')).toBeVisible();
 
       await startScreeningButton.click();
 
@@ -332,7 +375,7 @@ test.describe('candidate screening UI', () => {
       await expect(page.getByText('当前步骤：等待浏览器操作')).toBeVisible();
       await expect(page.getByRole('link', { name: '查看 Workflow 详情' })).toHaveAttribute(
         'href',
-        '/workflows/screen-candidates-v2',
+        /\/workflows\/screen-candidates-v2\?returnTo=/,
       );
       await expect(page.getByRole('button', { name: '全部候选人' })).toHaveAttribute(
         'href',

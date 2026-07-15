@@ -20,7 +20,11 @@ import {
 } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
-import { createCandidateScreeningRun } from '@/lib/candidate-screening/client';
+import { ScreeningRunHistory } from '@/components/candidate-screening/screening-run-history';
+import {
+  createCandidateScreeningRun,
+  fetchCandidateScreeningRuns,
+} from '@/lib/candidate-screening/client';
 import type { CandidateScreeningRunDto } from '@/lib/candidate-screening/repo';
 import { fetchCompanyProfile } from '@/lib/company-profile/client';
 import type { CompanyProfileDto } from '@/lib/company-profile/types';
@@ -959,9 +963,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isScreening, setIsScreening] = useState(false);
-  const [latestScreeningRun, setLatestScreeningRun] = useState<CandidateScreeningRunDto | null>(
-    null,
-  );
+  const [screeningRuns, setScreeningRuns] = useState<CandidateScreeningRunDto[]>([]);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
   const [publishCompany, setPublishCompany] = useState('');
   const [publishSalary, setPublishSalary] = useState('');
@@ -977,13 +979,15 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     setIsLoading(true);
     setError('');
     try {
-      const [data, tasks, profile, creationRuns, regenerationRuns] = await Promise.all([
-        fetchJobDescription(jobDescriptionId),
-        fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
-        fetchCompanyProfile().catch(() => null),
-        fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
-        fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
-      ]);
+      const [data, tasks, profile, creationRuns, regenerationRuns, nextScreeningRuns] =
+        await Promise.all([
+          fetchJobDescription(jobDescriptionId),
+          fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
+          fetchCompanyProfile().catch(() => null),
+          fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
+          fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
+          fetchCandidateScreeningRuns(jobDescriptionId),
+        ]);
       setJobDescription(data);
       setForm(jdToForm(data.content));
       setStatus(data.status);
@@ -991,6 +995,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setPublishTrace(tasks.find((task) => task.trace)?.trace ?? null);
       setCreateRuns(creationRuns);
       setRegenerateRuns(regenerationRuns);
+      setScreeningRuns(nextScreeningRuns);
       setCompanyProfile(profile);
       setPublishCompany(profile?.name ?? '');
       setPublishSalary(data.salaryRange ?? '');
@@ -1088,7 +1093,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         platform: 'boss-like',
         mode: 'execution',
       });
-      setLatestScreeningRun(run);
+      setScreeningRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
       router.push(
         withReturnTarget(
           `/jd-generator/${jobDescription.id}/screening-runs/${run.id}`,
@@ -1110,7 +1115,6 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     ? getScreeningSummary(jobDescription)
     : defaultScreeningSummary;
   const screeningActionLabel = getScreeningActionLabel(screeningSummary);
-  const latestRunId = latestScreeningRun?.id ?? screeningSummary.latestRunId;
   const latestCreateRun = createRuns[0] ?? null;
   const canPublishWithCompanyProfile = Boolean(
     companyProfile?.name.trim() && companyProfile.locations.length > 0,
@@ -1511,36 +1515,12 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                     {screeningSummary.totalCandidateCount}
                   </span>
                 </div>
-                {latestScreeningRun ? (
-                  <div className="border-border bg-muted/30 rounded-md border px-3 py-2 text-xs">
-                    <div className="text-foreground flex items-center justify-between gap-2 font-medium">
-                      <span>筛选任务 {latestScreeningRun.id}</span>
-                      <span className="text-muted-foreground">{latestScreeningRun.status}</span>
-                    </div>
-                    <Link
-                      className="text-primary mt-1 inline-flex text-xs hover:underline"
-                      href={withReturnTarget(
-                        `/jd-generator/${jobDescription.id}/screening-runs/${latestScreeningRun.id}`,
-                        detailReturnTarget,
-                      )}
-                    >
-                      查看执行日志
-                    </Link>
-                  </div>
-                ) : null}
+                <ScreeningRunHistory
+                  jobDescriptionId={jobDescription.id}
+                  returnTarget={detailReturnTarget}
+                  runs={screeningRuns}
+                />
                 <div className="flex flex-wrap gap-x-4 gap-y-2">
-                  {latestRunId ? (
-                    <Link
-                      className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
-                      href={withReturnTarget(
-                        `/jd-generator/${jobDescription.id}/screening-runs/${latestRunId}`,
-                        detailReturnTarget,
-                      )}
-                    >
-                      <Eye className="h-3.5 w-3.5" aria-hidden />
-                      筛选记录
-                    </Link>
-                  ) : null}
                   <Link
                     className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
                     href={withReturnTarget(

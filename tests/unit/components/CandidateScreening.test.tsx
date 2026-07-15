@@ -30,6 +30,7 @@ const fetchJobDescriptionRegenerateRunsMock = jest.fn();
 const updateJobDescriptionResourceMock = jest.fn();
 const publishJobDescriptionResourceMock = jest.fn();
 const createCandidateScreeningRunMock = jest.fn();
+const fetchCandidateScreeningRunsMock = jest.fn();
 const fetchCandidateScreeningRunMock = jest.fn();
 const fetchCandidateScreeningRunWithEventsMock = jest.fn();
 const fetchJdCandidatesMock = jest.fn();
@@ -67,6 +68,7 @@ jest.mock('@/lib/jd/client', () => ({
 
 jest.mock('@/lib/candidate-screening/client', () => ({
   createCandidateScreeningRun: (...args: unknown[]) => createCandidateScreeningRunMock(...args),
+  fetchCandidateScreeningRuns: (...args: unknown[]) => fetchCandidateScreeningRunsMock(...args),
   fetchCandidateScreeningRun: (...args: unknown[]) => fetchCandidateScreeningRunMock(...args),
   fetchCandidateScreeningRunWithEvents: (...args: unknown[]) =>
     fetchCandidateScreeningRunWithEventsMock(...args),
@@ -619,6 +621,7 @@ describe('candidate screening UI', () => {
     updateJobDescriptionResourceMock.mockReset();
     publishJobDescriptionResourceMock.mockReset();
     createCandidateScreeningRunMock.mockReset();
+    fetchCandidateScreeningRunsMock.mockReset();
     fetchCandidateScreeningRunMock.mockReset();
     fetchCandidateScreeningRunWithEventsMock.mockReset();
     fetchJdCandidatesMock.mockReset();
@@ -651,6 +654,7 @@ describe('candidate screening UI', () => {
     fetchJobDescriptionRegenerateRunsMock.mockResolvedValue([]);
     fetchJobDescriptionPublishTasksMock.mockResolvedValue([]);
     createCandidateScreeningRunMock.mockResolvedValue(sampleRun);
+    fetchCandidateScreeningRunsMock.mockResolvedValue([]);
     fetchCandidateScreeningRunMock.mockResolvedValue({
       ...sampleRun,
       status: 'success',
@@ -893,7 +897,7 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('当前步骤：chat_candidate')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '查看 Workflow 详情' })).toHaveAttribute(
       'href',
-      '/workflows/screen-candidates-v2',
+      '/workflows/screen-candidates-v2?returnTo=%2Fjd-generator%2Fjd-1%2Fscreening-runs%2Frun-1&returnLabel=%E8%BF%94%E5%9B%9E%E7%AD%9B%E9%80%89%E8%AE%B0%E5%BD%95',
     );
     expect(fetchCandidateScreeningRunWithEventsMock).toHaveBeenCalledWith('run-1');
     expect(fetchJdCandidatesMock).toHaveBeenCalledWith('jd-1', {

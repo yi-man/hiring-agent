@@ -979,12 +979,12 @@ export async function createCandidateScreeningRun(
 export async function listCandidateScreeningRuns(params: {
   userId: string;
   jobDescriptionId: string;
-  limit: number;
+  limit?: number;
 }): Promise<CandidateScreeningRunDto[]> {
   const rows = await prisma.candidateScreeningRun.findMany({
     where: { userId: params.userId, jobDescriptionId: params.jobDescriptionId },
     orderBy: { createdAt: 'desc' },
-    take: params.limit,
+    ...(params.limit === undefined ? {} : { take: params.limit }),
   });
   return hydrateRunWorkflows(rows.map((row) => mapRun(row)));
 }

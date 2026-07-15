@@ -634,7 +634,7 @@ export function CandidateScreeningRunLog({
             </div>
             {run.skillId && run.workflow ? (
               <Link
-                href={`/workflows/${run.skillId}`}
+                href={withReturnTarget(`/workflows/${run.skillId}`, runLogReturnTarget)}
                 className="group flex items-center justify-between gap-3"
                 aria-label="查看 Workflow 详情"
               >

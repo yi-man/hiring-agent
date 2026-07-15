@@ -164,6 +164,8 @@ const CandidateScreeningState = Annotation.Root({
   evaluationSchema: Annotation<EvaluationSchema | undefined>(),
   rawCandidates: Annotation<RawCandidate[]>(),
   contexts: Annotation<Map<string, CandidateContext>>(),
+  runIngestedCandidateIds: Annotation<Set<string>>(),
+  deduplicatedCandidateIds: Annotation<Set<string>>(),
   liveInputs: Annotation<RankInput[]>(),
   vectorInputs: Annotation<RankInput[]>(),
   candidatePool: Annotation<RankedCandidate[]>(),
@@ -351,12 +353,20 @@ function getUnusableProfileUrlReason(params: {
 function buildVectorInputs(params: {
   recalledCandidates: Awaited<ReturnType<typeof recallCandidatesForJd>>;
   contexts: Map<string, CandidateContext>;
+  deduplicatedCandidateIds: Set<string>;
   platform: CandidateScreeningPlatform;
 }): { inputs: RankInput[]; skipped: SkippedVectorCandidate[] } {
   const inputs: RankInput[] = [];
   const skipped: SkippedVectorCandidate[] = [];
 
   for (const candidate of params.recalledCandidates) {
+    if (params.deduplicatedCandidateIds.has(candidate.candidateId)) {
+      skipped.push({
+        candidate,
+        reason: 'candidate was deduplicated during live ingest',
+      });
+      continue;
+    }
     if (!params.contexts.has(candidate.candidateId)) {
       const unusableReason = getUnusableProfileUrlReason({
         platform: params.platform,
@@ -537,6 +547,19 @@ function completedSearchKeywordCandidates(
     completed.set(keyword.trim(), parsedCandidates as RawCandidate[]);
   }
   return completed;
+}
+
+function previouslyIngestedCandidateIds(
+  events: Array<{ candidateId: string | null; message: string }>,
+): Set<string> {
+  return new Set(
+    events
+      .filter(
+        (event): event is { candidateId: string; message: string } =>
+          Boolean(event.candidateId) && event.message.startsWith('候选人入库：'),
+      )
+      .map((event) => event.candidateId),
+  );
 }
 
 function createRawSeenIdentityRef(rawCandidate: RawCandidate): SeenIdentityRef {
@@ -1108,6 +1131,8 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       stats: rememberStats(resources, stats),
       rawCandidates: [],
       contexts: new Map(),
+      runIngestedCandidateIds: new Set(),
+      deduplicatedCandidateIds: new Set(),
       liveInputs: [],
       vectorInputs: [],
       candidatePool: [],
@@ -1231,11 +1256,13 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       });
     }
     let rawCandidates: RawCandidate[] = [];
+    let runIngestedCandidateIds = new Set(state.runIngestedCandidateIds);
     if (skill) {
       const existingEvents = await state.dependencies.repo.listRunEvents({
         userId: state.userId,
         runId: state.runId,
       });
+      runIngestedCandidateIds = previouslyIngestedCandidateIds(existingEvents);
       rawCandidates = await collectRawCandidates({
         workflowSession,
         searchPlan,
@@ -1263,7 +1290,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       },
     });
 
-    return { rawCandidates, stats: rememberStats(resources, stats) };
+    return { rawCandidates, runIngestedCandidateIds, stats: rememberStats(resources, stats) };
   }
 
   async function ingestLiveNode(
@@ -1271,6 +1298,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
   ): Promise<CandidateScreeningGraphUpdate> {
     const stats = copyStats(state.stats);
     const contexts = new Map(state.contexts);
+    const deduplicatedCandidateIds = new Set(state.deduplicatedCandidateIds);
     const liveInputs: RankInput[] = [];
     const dedupe = createInMemoryDedupeState();
     const seenIdentityRefs = new Map<string, SeenIdentityRef>();
@@ -1355,6 +1383,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       const storedIdentityRef = createStoredSeenIdentityRef(rawCandidate, stored);
       const candidateWasExisting = stored.candidateWasExisting === true;
       const resumeWasExisting = stored.resumeWasExisting === true;
+      const candidateWasInCurrentRun = state.runIngestedCandidateIds.has(stored.candidateId);
 
       if (
         stored.identityHash !== rawIdentity.identityHash &&
@@ -1379,12 +1408,15 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
             duplicateOf,
           },
         });
+        deduplicatedCandidateIds.add(stored.candidateId);
         continue;
       }
       seenIdentityRefs.set(rawIdentity.identityHash, storedIdentityRef);
       seenIdentityRefs.set(stored.identityHash, storedIdentityRef);
 
-      if (candidateWasExisting) {
+      const wasDeduplicated =
+        (candidateWasExisting || resumeWasExisting) && !candidateWasInCurrentRun;
+      if (wasDeduplicated) {
         stats.deduped += 1;
       } else {
         stats.stored += 1;
@@ -1396,10 +1428,12 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
         jobDescriptionId: state.jobDescription.id,
         candidateId: stored.candidateId,
         stage: 'indexing_resumes',
-        level: candidateWasExisting ? 'warning' : 'success',
-        message: candidateWasExisting
-          ? `复用已有候选人：${rawCandidate.name}`
-          : `候选人入库：${rawCandidate.name}`,
+        level: wasDeduplicated ? 'warning' : 'success',
+        message: wasDeduplicated
+          ? `跳过已有候选人后续流程：${rawCandidate.name}`
+          : candidateWasInCurrentRun
+            ? `恢复本次运行候选人：${rawCandidate.name}`
+            : `候选人入库：${rawCandidate.name}`,
         detail: {
           candidateName: rawCandidate.name,
           candidateId: stored.candidateId,
@@ -1410,8 +1444,8 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
           existingCandidateId: stored.existingCandidateId ?? null,
           existingCandidateName: stored.existingCandidateName ?? null,
           existingResumeId: stored.existingResumeId ?? null,
-          dedupeBy: candidateWasExisting ? 'existing_candidate_identity' : null,
-          duplicateOf: candidateWasExisting
+          dedupeBy: wasDeduplicated ? 'existing_candidate_identity' : null,
+          duplicateOf: wasDeduplicated
             ? {
                 candidateName: stored.existingCandidateName ?? rawCandidate.name,
                 candidateId: stored.existingCandidateId ?? stored.candidateId,
@@ -1426,6 +1460,10 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
           profileUrl: rawCandidate.profileUrl ?? null,
         },
       });
+      if (wasDeduplicated) {
+        deduplicatedCandidateIds.add(stored.candidateId);
+        continue;
+      }
       contexts.set(stored.candidateId, {
         candidateId: stored.candidateId,
         resumeId: stored.resumeId,
@@ -1437,7 +1475,12 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       liveInputs.push({ candidateId: stored.candidateId, matchScore: 1 });
     }
 
-    return { contexts, liveInputs, stats: rememberStats(resources, stats) };
+    return {
+      contexts,
+      deduplicatedCandidateIds,
+      liveInputs,
+      stats: rememberStats(resources, stats),
+    };
   }
 
   async function recallVectorsNode(
@@ -1500,6 +1543,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
     const vectorInputResult = buildVectorInputs({
       recalledCandidates,
       contexts,
+      deduplicatedCandidateIds: state.deduplicatedCandidateIds,
       platform: state.request.platform,
     });
     stats.skipped += vectorInputResult.skipped.length;
@@ -1805,6 +1849,8 @@ export const runCandidateScreeningGraph = async (params: {
         evaluationSchema: undefined,
         rawCandidates: [],
         contexts: new Map(),
+        runIngestedCandidateIds: new Set(),
+        deduplicatedCandidateIds: new Set(),
         liveInputs: [],
         vectorInputs: [],
         candidatePool: [],
