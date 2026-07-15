@@ -1,4 +1,7 @@
-import { candidateEvaluationPromptDefinition } from '@/lib/candidate-screening/prompts';
+import {
+  candidateEvaluationPromptDefinition,
+  candidateWorkflowRepairPromptDefinition,
+} from '@/lib/candidate-screening/prompts';
 import { chatAssistantPromptDefinition } from '@/lib/chat/prompts';
 import { candidateCommunicationPromptDefinition } from '@/lib/candidate-communication/prompts';
 import {
@@ -12,6 +15,7 @@ import type { ManagedPromptDefinition, RenderedManagedPrompt } from '@/lib/promp
 
 const MANAGED_PROMPTS = [
   candidateEvaluationPromptDefinition,
+  candidateWorkflowRepairPromptDefinition,
   jdGeneratePromptDefinition,
   jdEvaluatePromptDefinition,
   jdImprovePromptDefinition,

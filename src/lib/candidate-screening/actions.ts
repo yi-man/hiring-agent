@@ -23,6 +23,12 @@ export type DryRunActionInput = {
   reason: string;
 };
 
+export function plannedActionSequence(action: CandidateDecisionAction): CandidateDecisionAction[] {
+  if (action === 'chat') return ['chat', 'collect'];
+  if (action === 'collect') return ['collect'];
+  return [];
+}
+
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }

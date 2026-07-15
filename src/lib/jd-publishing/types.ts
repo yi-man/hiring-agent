@@ -1,5 +1,7 @@
 import type { BrowserAction, BrowserStepCheck, BrowserStepResult } from '@/lib/browser/types';
 
+export const BROWSER_WORKFLOW_DSL_VERSION = 'browser-v2' as const;
+
 export type {
   BrowserCommand,
   BrowserCommandAction,
@@ -36,9 +38,21 @@ export type BossLikeJobPayload = {
   keywords: string[];
 };
 
-export type PublishSkillAction = BrowserAction;
+export type BrowserWorkflowAction = BrowserAction | 'observe';
+
+export type LegacyScreeningWorkflowAction =
+  | 'ensure_login'
+  | 'search_candidates'
+  | 'enrich_candidate'
+  | 'chat_candidate'
+  | 'collect_candidate';
+
+export type ScreeningWorkflowAction = LegacyScreeningWorkflowAction;
+
+export type PublishSkillAction = BrowserWorkflowAction | LegacyScreeningWorkflowAction;
 
 export type PublishSkillMeta = Record<string, unknown> & {
+  dsl_version?: typeof BROWSER_WORKFLOW_DSL_VERSION;
   success_rate?: number;
   usage_count?: number;
   created_from?: 'explore' | 'agent';
@@ -46,6 +60,11 @@ export type PublishSkillMeta = Record<string, unknown> & {
   repaired_from_version?: number;
   failed_step_id?: string;
   repair_reason?: string;
+  repair_strategy?: 'deterministic' | 'llm';
+  repair_agent_prompt_id?: string;
+  repair_agent_prompt_version?: string;
+  repair_agent_provider?: string;
+  repair_agent_model?: string;
 };
 
 export type PublishStepOnFail = {
@@ -105,6 +124,21 @@ export type PublishTraceStep = {
   action: string;
   params: Record<string, unknown>;
   result: BrowserStepResult;
+};
+
+export type BrowserWorkflowObservation = {
+  key: string;
+  format: 'html';
+  value: string;
+};
+
+export type BrowserWorkflowRunResult = {
+  status: 'success' | 'failed' | 'fallback';
+  currentStepId: string | null;
+  traceSteps: PublishTraceStep[];
+  observations: Record<string, string>;
+  failedStep?: PublishTraceStep;
+  onFail?: PublishStepOnFail;
 };
 
 export type PublishTrace = {

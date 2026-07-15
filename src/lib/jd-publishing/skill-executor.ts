@@ -1,12 +1,17 @@
+import type { BrowserAction } from '@/lib/browser/types';
 import type {
   BrowserExecutor,
   BrowserTargetInput,
   BrowserStepResult,
+  BrowserWorkflowObservation,
+  BrowserWorkflowRunResult,
   PublishActionStep,
   PublishConditionStep,
   PublishExecutionContext,
   PublishSkill,
+  PublishSkillAction,
   PublishStep,
+  PublishStepCheck,
   PublishStepOnFail,
   PublishTaskResult,
   PublishTraceStep,
@@ -68,49 +73,161 @@ function asBrowserTargetInput(preferred: unknown, legacyLocator: unknown): Brows
   return asString(legacyLocator);
 }
 
+function isBrowserAction(action: PublishSkillAction): action is BrowserAction {
+  return [
+    'navigate',
+    'fill',
+    'click',
+    'wait_for_url',
+    'wait_for_text',
+    'wait_for_snapshot_change',
+    'add_keywords',
+  ].includes(action as BrowserAction);
+}
+
+function observationParams(
+  params: Record<string, unknown>,
+): { format: 'html'; saveAs: string } | null {
+  const saveAs = asString(params.saveAs);
+  if (params.format !== 'html' || !saveAs.trim()) {
+    return null;
+  }
+  return { format: 'html', saveAs };
+}
+
+function readyChecks(params: Record<string, unknown>): PublishStepCheck[] {
+  const value = params.readyChecks;
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (candidate): candidate is PublishStepCheck =>
+      Boolean(candidate) &&
+      typeof candidate === 'object' &&
+      ['dom_exists', 'text_contains', 'url_contains'].includes(
+        (candidate as Record<string, unknown>).type as string,
+      ),
+  );
+}
+
+type ActionStepExecutionResult = {
+  result: BrowserStepResult;
+  observation?: BrowserWorkflowObservation;
+};
+
 async function executeActionStep(
   step: PublishActionStep,
   params: Record<string, unknown>,
   executor: BrowserExecutor,
-): Promise<BrowserStepResult> {
+  observations: Record<string, string>,
+): Promise<ActionStepExecutionResult> {
+  if (step.action === 'observe') {
+    const observation = observationParams(params);
+    if (!observation) {
+      return { result: { success: false, error: 'invalid observe params' } };
+    }
+    if (!executor.snapshot) {
+      return { result: { success: false, error: 'executor does not support snapshot' } };
+    }
+    let value: string;
+    try {
+      value = await executor.snapshot();
+    } catch (error) {
+      return {
+        result: {
+          success: false,
+          error: error instanceof Error ? error.message : 'snapshot failed',
+        },
+      };
+    }
+    return {
+      result: { success: true },
+      observation: { key: observation.saveAs, format: observation.format, value },
+    };
+  }
+
+  if (!isBrowserAction(step.action)) {
+    return { result: { success: false, error: `unsupported action: ${step.action}` } };
+  }
+
   if (step.action === 'navigate') {
-    return executor.navigate(asString(params.url));
+    return { result: await executor.navigate(asString(params.url)) };
   }
   if (step.action === 'fill') {
-    return executor.fill(
-      asBrowserTargetInput(params.target, params.locator),
-      asString(params.value),
-    );
+    return {
+      result: await executor.fill(
+        asBrowserTargetInput(params.target, params.locator),
+        asString(params.value),
+      ),
+    };
   }
   if (step.action === 'click') {
-    return executor.click(asBrowserTargetInput(params.target, params.locator));
+    return { result: await executor.click(asBrowserTargetInput(params.target, params.locator)) };
   }
   if (step.action === 'wait_for_url') {
-    return executor.waitForUrl(asString(params.url));
+    return { result: await executor.waitForUrl(asString(params.url)) };
   }
   if (step.action === 'wait_for_text') {
     if (!executor.waitForText) {
-      return { success: false, error: 'executor does not support wait_for_text' };
+      return { result: { success: false, error: 'executor does not support wait_for_text' } };
     }
-    return executor.waitForText(asString(params.text));
+    return { result: await executor.waitForText(asString(params.text)) };
+  }
+  if (step.action === 'wait_for_snapshot_change') {
+    if (!executor.waitForSnapshotChange) {
+      return {
+        result: { success: false, error: 'executor does not support wait_for_snapshot_change' },
+      };
+    }
+    const observationKey = asString(params.previousObservationKey);
+    let previousSnapshot = observations[observationKey];
+    let previousUrl = asString(params.previousUrl) || undefined;
+    if (!observationKey || !previousSnapshot) {
+      return { result: { success: false, error: 'missing snapshot observation' } };
+    }
+    const checks = readyChecks(params);
+    const maxAttempts = checks.length > 0 ? 3 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const result = await executor.waitForSnapshotChange(previousSnapshot, previousUrl);
+      previousUrl = undefined;
+      if (!result.success || checks.length === 0) return { result };
+      if ((await Promise.all(checks.map((check) => executor.check(check)))).some(Boolean)) {
+        return { result };
+      }
+      if (!executor.snapshot) {
+        return { result: { success: false, error: 'executor does not support snapshot' } };
+      }
+      try {
+        previousSnapshot = await executor.snapshot();
+      } catch (error) {
+        return {
+          result: {
+            success: false,
+            error: error instanceof Error ? error.message : 'snapshot failed',
+          },
+        };
+      }
+    }
+    return { result: { success: false, error: 'snapshot readiness checks timed out' } };
   }
   if (step.action === 'add_keywords') {
     if (!executor.addKeywords) {
-      return { success: false, error: 'executor does not support add_keywords' };
+      return { result: { success: false, error: 'executor does not support add_keywords' } };
     }
-    return executor.addKeywords(
-      asBrowserTargetInput(params.target, params.locator),
-      asStringList(params.values),
-      asBrowserTargetInput(params.submitTarget, params.submitLocator),
-    );
+    return {
+      result: await executor.addKeywords(
+        asBrowserTargetInput(params.target, params.locator),
+        asStringList(params.values),
+        asBrowserTargetInput(params.submitTarget, params.submitLocator),
+      ),
+    };
   }
-  return { success: false, error: `unsupported action: ${step.action}` };
+  return { result: { success: false, error: `unsupported action: ${step.action}` } };
 }
 
 export type PublishingStepExecutionResult = {
   status: 'running' | 'success' | 'failed' | 'fallback';
   nextStepId: string | null;
   traceStep?: PublishTraceStep;
+  observation?: BrowserWorkflowObservation;
   onFail?: PublishStepOnFail;
   step?: PublishStep;
 };
@@ -163,6 +280,7 @@ export async function executePublishingStep(params: {
   skill: PublishSkill;
   executor: BrowserExecutor;
   context: PublishExecutionContext;
+  observations?: Record<string, string>;
 }): Promise<PublishingStepExecutionResult> {
   const { stepId, skill, executor, context } = params;
   const step = skill.steps.find((candidate) => candidate.id === stepId);
@@ -193,7 +311,12 @@ export async function executePublishingStep(params: {
   }
 
   const resolvedParams = interpolate(step.params, context) as Record<string, unknown>;
-  const result = await executeActionStep(step, resolvedParams, executor);
+  const { observation, result } = await executeActionStep(
+    step,
+    resolvedParams,
+    executor,
+    params.observations ?? {},
+  );
   const traceStep: PublishTraceStep = {
     stepId: step.id,
     action: step.action,
@@ -207,7 +330,81 @@ export async function executePublishingStep(params: {
     status: 'running',
     nextStepId: step.next,
     traceStep,
+    observation,
     step,
+  };
+}
+
+export async function runBrowserWorkflow(params: {
+  skill: PublishSkill;
+  currentStepId?: string | null;
+  executor: BrowserExecutor;
+  context: PublishExecutionContext;
+  onStep?: (params: { stepId: string; step: PublishStep }) => void | Promise<void>;
+}): Promise<BrowserWorkflowRunResult> {
+  const { skill, executor, context } = params;
+  const traceSteps: PublishTraceStep[] = [];
+  const observations: Record<string, string> = {};
+  let currentStepId: string | null = params.currentStepId ?? skill.steps[0]?.id ?? null;
+  let status: BrowserWorkflowRunResult['status'] = 'success';
+  let failedStep: PublishTraceStep | undefined;
+  let onFail: PublishStepOnFail | undefined;
+  let stoppedByTerminalStep = false;
+  const maxIterations = Math.max(skill.steps.length * 3, 1);
+
+  for (let iteration = 0; currentStepId && iteration < maxIterations; iteration += 1) {
+    const currentStep = skill.steps.find((step) => step.id === currentStepId);
+    if (currentStep && currentStep.type !== 'end') {
+      await params.onStep?.({ stepId: currentStepId, step: currentStep });
+    }
+    const result = await executePublishingStep({
+      stepId: currentStepId,
+      skill,
+      executor,
+      context,
+      observations,
+    });
+    if (result.traceStep) {
+      traceSteps.push(result.traceStep);
+    }
+    if (result.observation) {
+      observations[result.observation.key] = result.observation.value;
+    }
+    if (result.status === 'success') {
+      stoppedByTerminalStep = true;
+      currentStepId = null;
+      break;
+    }
+    if (result.status === 'failed' || result.status === 'fallback') {
+      status = result.status;
+      failedStep = result.traceStep;
+      onFail = result.onFail;
+      break;
+    }
+    currentStepId = result.nextStepId;
+  }
+
+  if (currentStepId && status === 'success' && !stoppedByTerminalStep) {
+    status = 'failed';
+    failedStep = {
+      stepId: currentStepId,
+      action: 'iteration_guard',
+      params: { maxIterations },
+      result: {
+        success: false,
+        error: `step iteration guard exceeded at: ${currentStepId}`,
+      },
+    };
+    traceSteps.push(failedStep);
+  }
+
+  return {
+    status,
+    currentStepId,
+    traceSteps,
+    observations,
+    ...(failedStep ? { failedStep } : {}),
+    ...(onFail ? { onFail } : {}),
   };
 }
 
@@ -218,50 +415,12 @@ export async function runPublishingSkill(params: {
   context: PublishExecutionContext;
 }): Promise<PublishTaskResult> {
   const { taskId, skill, executor, context } = params;
-  const traceSteps: PublishTraceStep[] = [];
-  let currentStepId: string | null = skill.steps[0]?.id ?? null;
-  let status: 'success' | 'failed' = 'success';
-  let stoppedByTerminalStep = false;
-  const maxIterations = Math.max(skill.steps.length * 3, 1);
-
-  for (let iteration = 0; currentStepId && iteration < maxIterations; iteration += 1) {
-    const result = await executePublishingStep({
-      stepId: currentStepId,
-      skill,
-      executor,
-      context,
-    });
-    if (result.traceStep) {
-      traceSteps.push(result.traceStep);
-    }
-    if (result.status === 'success') {
-      stoppedByTerminalStep = true;
-      break;
-    }
-    if (result.status === 'failed' || result.status === 'fallback') {
-      status = 'failed';
-      break;
-    }
-    currentStepId = result.nextStepId;
-  }
-
-  if (currentStepId && status === 'success' && !stoppedByTerminalStep) {
-    status = 'failed';
-    traceSteps.push({
-      stepId: currentStepId,
-      action: 'iteration_guard',
-      params: { maxIterations },
-      result: {
-        success: false,
-        error: `step iteration guard exceeded at: ${currentStepId}`,
-      },
-    });
-  }
-
+  const workflow = await runBrowserWorkflow({ skill, executor, context });
+  const status: 'success' | 'failed' = workflow.status === 'success' ? 'success' : 'failed';
   const trace = {
     taskId,
     skillId: skill.id,
-    steps: traceSteps,
+    steps: workflow.traceSteps,
     status,
     createdAt: new Date().toISOString(),
   };

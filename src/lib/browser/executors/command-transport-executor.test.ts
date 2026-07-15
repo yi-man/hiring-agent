@@ -119,11 +119,50 @@ describe('CommandTransportBrowserExecutor', () => {
       expect.objectContaining({ target, status: 'unique' }),
     );
     await expect(executor.snapshot?.()).resolves.toBe(htmlSnapshot);
+    await expect(
+      executor.waitForSnapshotChange?.(htmlSnapshot, 'https://boss.example.com/employer/resumes'),
+    ).resolves.toEqual(expect.objectContaining({ success: true }));
     await expect(executor.snapshotStructured?.()).resolves.toBe(snapshot);
     expect(transport.commands.map((command) => command.action)).toEqual([
       'resolve_target',
       'snapshot',
+      'wait_for_snapshot_change',
       'snapshot_structured',
+    ]);
+    expect(transport.commands[2]).toEqual(
+      expect.objectContaining({
+        params: {
+          previousSnapshot: htmlSnapshot,
+          previousUrl: 'https://boss.example.com/employer/resumes',
+        },
+      }),
+    );
+  });
+
+  it('preserves a structured target when waiting through the command transport', async () => {
+    const target: TargetDescriptor = {
+      kind: 'container',
+      name: '候选人详情',
+      exact: true,
+      stableAttrs: { testId: 'candidate-detail' },
+      scope: { kind: 'section', name: '候选人资料' },
+    };
+    const transport = new RecordingTransport((command) => ({
+      commandId: command.id,
+      success: true,
+      match: command.target ? uniqueReport(command.target) : undefined,
+    }));
+    const executor = new CommandTransportBrowserExecutor({ transport, taskId: 'task-1' });
+
+    await expect(executor.waitForTarget?.(target)).resolves.toEqual(
+      expect.objectContaining({ success: true }),
+    );
+    expect(transport.commands).toEqual([
+      expect.objectContaining({
+        action: 'wait_for_text',
+        target,
+        params: { text: '候选人详情' },
+      }),
     ]);
   });
 

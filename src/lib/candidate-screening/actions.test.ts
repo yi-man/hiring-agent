@@ -1,4 +1,8 @@
-import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
+import {
+  createActionIdempotencyKey,
+  createDryRunActionPlan,
+  plannedActionSequence,
+} from './actions';
 
 describe('candidate actions', () => {
   it('creates deterministic idempotency keys', () => {
@@ -55,5 +59,11 @@ describe('candidate actions', () => {
 
     expect(plan.message).toContain('王小明');
     expect(plan.message).toContain('高级后端工程师');
+  });
+
+  it('plans collection after a chat greeting in the same browser workflow', () => {
+    expect(plannedActionSequence('chat')).toEqual(['chat', 'collect']);
+    expect(plannedActionSequence('collect')).toEqual(['collect']);
+    expect(plannedActionSequence('skip')).toEqual([]);
   });
 });

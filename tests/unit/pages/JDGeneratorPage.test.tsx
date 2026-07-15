@@ -95,6 +95,27 @@ const screenedJobDescription: JobDescriptionDto = {
   },
 };
 
+const sampleScreeningRun = {
+  id: 'run-1',
+  userId: 'u1',
+  jobDescriptionId: 'jd-1',
+  platform: 'boss-like',
+  mode: 'execution',
+  status: 'success',
+  currentStage: 'finalizing',
+  skillId: 'screen-candidates-v6',
+  workflow: { name: 'screen_candidates', version: 6 },
+  currentWorkflowStep: null,
+  searchPlan: null,
+  evaluationSchema: null,
+  stats: null,
+  errorMessage: null,
+  startedAt: '2026-07-06T02:00:00.000Z',
+  finishedAt: '2026-07-06T03:00:00.000Z',
+  createdAt: '2026-07-06T02:00:00.000Z',
+  updatedAt: '2026-07-06T03:00:00.000Z',
+};
+
 const sampleCompanyProfile = {
   id: 'profile-1',
   userId: 'u1',
@@ -135,7 +156,10 @@ describe('JD pages', () => {
   beforeEach(() => {
     mockSearchParams = new URLSearchParams();
     pushMock.mockReset();
-    global.fetch = jest.fn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ runs: [] }),
+    });
   });
 
   it('renders the JD list with default published status filter and screening summary', async () => {
@@ -543,6 +567,18 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
       });
 
     render(<JDDetailView jobDescriptionId="jd-1" />);
@@ -564,6 +600,18 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [sampleScreeningRun] }),
       });
 
     render(<JDDetailView jobDescriptionId="jd-1" />);
@@ -575,19 +623,15 @@ describe('JD pages', () => {
 
     const topActions = screen.getByLabelText('JD 详情主操作');
     expect(within(topActions).getByRole('button', { name: '继续筛选' })).toBeInTheDocument();
-    expect(
-      within(topActions).queryByRole('link', { name: /已筛选候选人/ }),
-    ).not.toBeInTheDocument();
+    const candidatesLink = within(topActions).getByRole('link', { name: '已筛选候选人' });
+    expect(parsedHref(candidatesLink.getAttribute('href') ?? '').pathname).toBe(
+      '/jd-generator/jd-1/candidates',
+    );
+    expectReturnContext(candidatesLink.getAttribute('href') ?? '', '/jd-generator/jd-1', '返回 JD');
     expect(within(topActions).queryByRole('link', { name: '筛选记录' })).not.toBeInTheDocument();
     expect(within(topActions).queryByRole('button', { name: '批量沟通' })).not.toBeInTheDocument();
-    const candidatesHref =
-      screen.getByRole('link', { name: /已筛选候选人/ }).getAttribute('href') ?? '';
-    expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-1/candidates');
-    expectReturnContext(candidatesHref, '/jd-generator/jd-1', '返回 JD');
-    const screeningRunHref =
-      screen.getByRole('link', { name: '筛选记录' }).getAttribute('href') ?? '';
-    expect(parsedHref(screeningRunHref).pathname).toBe('/jd-generator/jd-1/screening-runs/run-1');
-    expectReturnContext(screeningRunHref, '/jd-generator/jd-1', '返回 JD');
+    expect(screen.queryByRole('link', { name: /查看执行日志/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('筛选历史')).not.toBeInTheDocument();
 
     expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发布到 Boss-like' })).not.toBeInTheDocument();

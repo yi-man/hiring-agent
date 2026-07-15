@@ -498,6 +498,26 @@
     };
   }
 
+  async function waitForSnapshotChange(command) {
+    const previousSnapshot = String(command.params.previousSnapshot || '');
+    const previousUrl = String(command.params.previousUrl || '');
+    const changed = await waitUntil(
+      () =>
+        document.documentElement?.outerHTML.slice(0, 200000) !== previousSnapshot ||
+        (Boolean(previousUrl) && location.href !== previousUrl),
+      command.timeoutMs,
+    );
+    if (!changed) {
+      return {
+        commandId: command.id,
+        success: false,
+        error: 'wait_for_snapshot_change timed out',
+        domSnapshot: snapshotStructured(),
+      };
+    }
+    return { commandId: command.id, success: true };
+  }
+
   async function addKeywords(command) {
     const values = Array.isArray(command.params.values) ? command.params.values : [];
     const submitTarget = command.params.submitTarget;
@@ -549,6 +569,7 @@
       return { commandId: command.id, success: true };
     }
     if (command.action === 'wait_for_text') return waitForText(command);
+    if (command.action === 'wait_for_snapshot_change') return waitForSnapshotChange(command);
     if (command.action === 'add_keywords') return addKeywords(command);
     if (command.action === 'check') return { commandId: command.id, success: check(command) };
     if (command.action === 'snapshot') {

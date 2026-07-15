@@ -95,7 +95,6 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const runs: CandidateScreeningRunDto[] = await listCandidateScreeningRuns({
       userId: auth.user.id,
       jobDescriptionId: id,
-      limit: 10,
     });
 
     return NextResponse.json({ runs });

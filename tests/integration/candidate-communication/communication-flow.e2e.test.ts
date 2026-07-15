@@ -150,7 +150,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
       if (request.method === 'POST' && threadReplyMatch) {
         postedMessages.push(await readRequestBody(request));
         hasUnreadMessage = false;
-        response.end('<!doctype html><html><body>Message sent</body></html>');
+        response.end('<!doctype html><html><body>消息已发送</body></html>');
         return;
       }
 
@@ -158,7 +158,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
       if (request.method === 'POST' && messageMatch) {
         postedMessages.push(await readRequestBody(request));
         hasUnreadMessage = false;
-        response.end('<!doctype html><html><body>Message sent</body></html>');
+        response.end('<!doctype html><html><body>消息已发送</body></html>');
         return;
       }
 

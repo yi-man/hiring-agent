@@ -81,6 +81,45 @@ describe('workflow flow helpers', () => {
     expect(flow.mermaid).not.toContain('failed');
   });
 
+  it('renders observe steps as browser actions', () => {
+    const steps: PublishStep[] = [
+      {
+        id: 'observe_list',
+        type: 'action',
+        action: 'observe',
+        params: { format: 'html', saveAs: 'listHtml' },
+        next: 'done',
+      },
+      { id: 'done', type: 'end' },
+    ];
+
+    expect(buildWorkflowFlow(steps).nodes).toContainEqual(
+      expect.objectContaining({ id: 'observe_list', description: 'observe' }),
+    );
+  });
+
+  it('renders every disconnected executable segment while omitting isolated end placeholders', () => {
+    const steps: PublishStep[] = [
+      { id: 'search_open', type: 'action', action: 'navigate', params: {}, next: 'search_end' },
+      { id: 'search_end', type: 'end' },
+      { id: 'detail_open', type: 'action', action: 'navigate', params: {}, next: 'detail_end' },
+      { id: 'detail_end', type: 'end' },
+      { id: 'unused_failure', type: 'end' },
+    ];
+
+    const flow = buildWorkflowFlow(steps);
+
+    expect(flow.nodes.map((node) => node.id)).toEqual([
+      'search_open',
+      'search_end',
+      'detail_open',
+      'detail_end',
+    ]);
+    expect(flow.edges).toContainEqual({ from: 'detail_open', to: 'detail_end', label: 'next' });
+    expect(flow.mermaid).toContain('detail_open["detail_open\\nnavigate"]');
+    expect(flow.mermaid).not.toContain('unused_failure');
+  });
+
   it('synthesizes referenced missing targets as terminal nodes', () => {
     const steps: PublishStep[] = [
       {

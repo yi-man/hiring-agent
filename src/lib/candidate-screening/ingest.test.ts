@@ -299,6 +299,7 @@ describe('ingestRawCandidate', () => {
       expect.objectContaining({
         candidateId: 'candidate-existing',
         resumeId: 'resume-existing',
+        chunkCount: 0,
         candidateContacted: true,
         candidateWasExisting: true,
         resumeWasExisting: true,
@@ -307,6 +308,10 @@ describe('ingestRawCandidate', () => {
         existingResumeId: 'resume-existing',
       }),
     );
+    expect(createOrReuseCandidateResumeMock).not.toHaveBeenCalled();
+    expect(splitMarkdownToChunksMock).not.toHaveBeenCalled();
+    expect(embedDocumentsMock).not.toHaveBeenCalled();
+    expect(replaceCandidateResumeChunksMock).not.toHaveBeenCalled();
   });
 
   it('rejects empty embedding vectors before writing vectors', async () => {

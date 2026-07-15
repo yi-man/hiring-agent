@@ -2,19 +2,23 @@
 
 import {
   claimCandidateActionLog,
+  claimRetryableCollectActionLog,
   createCandidateActionLog,
   createCandidateScreeningRunEvent,
   createCandidateScreeningRun,
   createOrReuseCandidateResume,
   findCandidateResumeByHash,
+  getCandidateScreeningRun,
   getCandidateTrackingOverview,
   listCandidateInterviewRecords,
   listCandidateResumeLibrary,
   listCandidateScreeningRunEvents,
+  listCandidateScreeningRuns,
   listCandidateScreeningResults,
   replaceCandidateResumeChunks,
   searchCandidateResumeChunks,
   updateCandidateInterviewProgress,
+  updateCandidateScreeningRun,
   upsertCandidateScreeningResult,
   upsertCandidateWithIdentity,
 } from './repo';
@@ -45,6 +49,10 @@ type PrismaMock = {
   candidateScreeningRunEvent: {
     create: jest.Mock;
     findMany: jest.Mock;
+  };
+  publishSkill: {
+    findMany: jest.Mock;
+    findUnique: jest.Mock;
   };
   candidateScreeningResult: {
     create: jest.Mock;
@@ -91,6 +99,10 @@ jest.mock('@/lib/prisma', () => ({
     candidateScreeningRunEvent: {
       create: jest.fn(),
       findMany: jest.fn(),
+    },
+    publishSkill: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
     },
     candidateScreeningResult: {
       create: jest.fn(),
@@ -236,6 +248,8 @@ describe('candidate screening repository', () => {
     prismaMock.candidateScreeningRun.updateMany.mockReset();
     prismaMock.candidateScreeningRunEvent.create.mockReset();
     prismaMock.candidateScreeningRunEvent.findMany.mockReset();
+    prismaMock.publishSkill.findUnique.mockReset();
+    prismaMock.publishSkill.findMany.mockReset();
     prismaMock.candidateScreeningResult.create.mockReset();
     prismaMock.candidateScreeningResult.findFirst.mockReset();
     prismaMock.candidateScreeningResult.findMany.mockReset();
@@ -259,6 +273,8 @@ describe('candidate screening repository', () => {
       mode: 'dry_run',
       status: 'pending',
       currentStage: 'planning',
+      skillId: null,
+      currentWorkflowStep: null,
       searchPlan: { keywords: ['React'] },
       evaluationSchema: { skills: ['React'] },
       stats: { fetched: 0 },
@@ -304,7 +320,215 @@ describe('candidate screening repository', () => {
         currentStage: 'planning',
       }),
     });
-    expect(result.createdAt).toBe(createdAt.toISOString());
+    expect(result).toEqual(
+      expect.objectContaining({
+        skillId: null,
+        currentWorkflowStep: null,
+        createdAt: createdAt.toISOString(),
+      }),
+    );
+  });
+
+  it('persists workflow identity and current browser step on a screening run', async () => {
+    prismaMock.candidateScreeningRun.create.mockResolvedValueOnce({
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'pending',
+      currentStage: 'searching_live',
+      skillId: 'screen-candidates-v1',
+      currentWorkflowStep: 'search_candidates',
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt,
+      updatedAt,
+    });
+
+    const run = await createCandidateScreeningRun({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      skillId: 'screen-candidates-v1',
+      currentWorkflowStep: 'search_candidates',
+    });
+
+    expect(prismaMock.candidateScreeningRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        skillId: 'screen-candidates-v1',
+        currentWorkflowStep: 'search_candidates',
+      }),
+    });
+    expect(run).toEqual(
+      expect.objectContaining({
+        skillId: 'screen-candidates-v1',
+        currentWorkflowStep: 'search_candidates',
+      }),
+    );
+  });
+
+  it('returns the exact persisted workflow metadata for a linked screening run', async () => {
+    prismaMock.candidateScreeningRun.findFirst.mockResolvedValueOnce({
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'running',
+      currentStage: 'searching_live',
+      skillId: 'screen-candidates-v2',
+      currentWorkflowStep: 'search_candidates',
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt,
+      updatedAt,
+    });
+    prismaMock.publishSkill.findUnique.mockResolvedValueOnce({
+      id: 'screen-candidates-v2',
+      name: 'screen_candidates',
+      version: 2,
+    });
+
+    const run = await getCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+    });
+
+    expect(run).toEqual(
+      expect.objectContaining({
+        skillId: 'screen-candidates-v2',
+        workflow: { name: 'screen_candidates', version: 2 },
+      }),
+    );
+    expect(prismaMock.publishSkill.findUnique).toHaveBeenCalledWith({
+      where: { id: 'screen-candidates-v2' },
+      select: { name: true, version: true },
+    });
+  });
+
+  it('hydrates workflow metadata for a run list with one batched query', async () => {
+    const baseRun = {
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'success',
+      currentStage: 'finalizing',
+      currentWorkflowStep: null,
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: updatedAt,
+      createdAt,
+      updatedAt,
+    };
+    prismaMock.candidateScreeningRun.findMany.mockResolvedValueOnce([
+      { ...baseRun, skillId: 'screen-v2' },
+      { ...baseRun, id: 'run-2', skillId: 'screen-v3' },
+    ]);
+    prismaMock.publishSkill.findMany.mockResolvedValueOnce([
+      { id: 'screen-v2', name: 'screen_candidates', version: 2 },
+      { id: 'screen-v3', name: 'screen_candidates', version: 3 },
+    ]);
+
+    const runs = await listCandidateScreeningRuns({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+    });
+
+    expect(prismaMock.candidateScreeningRun.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', jobDescriptionId: 'jd-1' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(prismaMock.publishSkill.findMany).toHaveBeenCalledTimes(1);
+    expect(prismaMock.publishSkill.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['screen-v2', 'screen-v3'] } },
+      select: { id: true, name: true, version: true },
+    });
+    expect(runs.map((run) => run.workflow)).toEqual([
+      { name: 'screen_candidates', version: 2 },
+      { name: 'screen_candidates', version: 3 },
+    ]);
+  });
+
+  it('keeps a missing linked workflow nullable for compatibility', async () => {
+    prismaMock.candidateScreeningRun.findFirst.mockResolvedValueOnce({
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'success',
+      currentStage: 'finalizing',
+      skillId: 'removed-workflow',
+      currentWorkflowStep: null,
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt,
+      updatedAt,
+    });
+    prismaMock.publishSkill.findUnique.mockResolvedValueOnce(null);
+
+    const run = await getCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+    });
+
+    expect(run).toEqual(expect.objectContaining({ skillId: 'removed-workflow', workflow: null }));
+  });
+
+  it('updates workflow fields only when they are provided', async () => {
+    prismaMock.candidateScreeningRun.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    await updateCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+      skillId: 'screen-candidates-v1',
+      currentWorkflowStep: 'search_candidates',
+    });
+    await updateCandidateScreeningRun({ userId: 'u1', runId: 'run-1' });
+    await updateCandidateScreeningRun({
+      userId: 'u1',
+      runId: 'run-1',
+      skillId: null,
+      currentWorkflowStep: null,
+    });
+
+    expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'run-1', userId: 'u1' },
+      data: {
+        skillId: 'screen-candidates-v1',
+        currentWorkflowStep: 'search_candidates',
+      },
+    });
+    expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'run-1', userId: 'u1' },
+      data: {},
+    });
+    expect(prismaMock.candidateScreeningRun.updateMany).toHaveBeenNthCalledWith(3, {
+      where: { id: 'run-1', userId: 'u1' },
+      data: { skillId: null, currentWorkflowStep: null },
+    });
   });
 
   it('creates and lists run events scoped to user and run', async () => {
@@ -1716,6 +1940,41 @@ describe('candidate screening repository', () => {
 
     expect(result).toBeNull();
     expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('claims only a failed collect action when resuming post-contact collection', async () => {
+    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.candidateActionLog.findFirst.mockResolvedValueOnce({
+      id: 'action-collect-1',
+      userId: 'u1',
+      runId: 'run-1',
+      screeningResultId: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      action: 'collect',
+      message: null,
+      status: 'running',
+      idempotencyKey: 'collect-idem-1',
+      browserTrace: null,
+      errorMessage: null,
+      createdAt,
+      updatedAt,
+    });
+
+    const result = await claimRetryableCollectActionLog({ userId: 'u1', id: 'action-collect-1' });
+
+    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'action-collect-1',
+        userId: 'u1',
+        action: 'collect',
+        status: 'failed',
+      },
+      data: { status: 'running', browserTrace: expect.anything(), errorMessage: null },
+    });
+    expect(result?.status).toBe('running');
   });
 
   it('lists JD-scoped results owned by a run or planned by its action logs', async () => {

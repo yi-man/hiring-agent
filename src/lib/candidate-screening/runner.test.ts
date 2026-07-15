@@ -4,6 +4,7 @@ import type { CandidateSourceAdapter, RawCandidateBatch } from './adapters/types
 import type { RawCandidate } from './ingest';
 import { buildCalibrationProfileFromJd, buildScoringQualityPolicy } from './calibration';
 import type {
+  CandidateActionLogDto,
   CandidateScreeningDetailDto,
   CandidateScreeningResultListItem,
   CandidateScreeningRunDto,
@@ -26,11 +27,15 @@ import {
   CANDIDATE_SCREENING_SCORING_VERSION,
 } from './constants';
 import {
+  executeSingleCandidateAction,
   executeScreeningRunActions,
   runCandidateScreeningGraph,
   runCandidateScreening,
   type ScreeningRunnerDependencies,
 } from './runner';
+import { buildBossLikeScreeningSkill } from './workflow/skill-registry';
+import type { CandidateScreeningWorkflowSession } from './workflow/executor';
+import type { ScreeningWorkflowSkill } from './workflow/types';
 import type { JobDescriptionDto } from '@/types';
 
 const createdAt = '2026-06-01T00:00:00.000Z';
@@ -155,6 +160,9 @@ function makeRun(overrides: Partial<CandidateScreeningRunDto> = {}): CandidateSc
     mode: 'dry_run',
     status: 'pending',
     currentStage: null,
+    skillId: null,
+    workflow: null,
+    currentWorkflowStep: null,
     searchPlan: null,
     evaluationSchema: null,
     stats: emptyStats(),
@@ -218,11 +226,58 @@ function makeAdapter(
     platform: 'boss-like',
     loginIfNeeded: jest.fn().mockResolvedValue(undefined),
     searchCandidates: jest.fn(() => batches({ candidates: [] })),
+    enrichCandidate: jest.fn().mockImplementation(async (candidate) => candidate),
     collectCandidate: jest.fn().mockResolvedValue({ success: true }),
     chatCandidate: jest.fn().mockResolvedValue({ success: true }),
     close: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   } as jest.Mocked<CandidateSourceAdapter>;
+}
+
+function makeWorkflowSkill(
+  overrides: Partial<ScreeningWorkflowSkill> = {},
+): ScreeningWorkflowSkill {
+  return {
+    ...buildBossLikeScreeningSkill(),
+    id: 'screen-v1',
+    ...overrides,
+  };
+}
+
+function makeWorkflowSession(
+  adapter: CandidateSourceAdapter,
+  overrides: Partial<CandidateScreeningWorkflowSession> = {},
+): jest.Mocked<CandidateScreeningWorkflowSession> {
+  const skill = overrides.skill ?? makeWorkflowSkill();
+
+  return {
+    skill,
+    loadOrExplore: jest.fn().mockImplementation(async () => {
+      await adapter.loginIfNeeded();
+      return skill;
+    }),
+    loadExact: jest.fn().mockImplementation(async () => {
+      await adapter.loginIfNeeded();
+      return skill;
+    }),
+    runSearchKeyword: jest.fn().mockImplementation(async ({ keyword, maxCandidates }) => {
+      const candidates: RawCandidate[] = [];
+      for await (const batch of adapter.searchCandidates(
+        { ...searchPlan, keywords: [keyword] },
+        { maxCandidates, batchSize: request.batchSize },
+      )) {
+        candidates.push(...batch.candidates);
+      }
+      return { keyword, candidates: candidates.slice(0, maxCandidates) };
+    }),
+    observeCandidateProfile: jest
+      .fn()
+      .mockImplementation((candidate) => adapter.enrichCandidate(candidate)),
+    contactAndCollectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    collectCandidate: jest.fn((candidate) => adapter.collectCandidate(candidate)),
+    close: jest.fn(() => adapter.close()),
+    ...overrides,
+  } as jest.Mocked<CandidateScreeningWorkflowSession>;
 }
 
 function makeResult(
@@ -315,13 +370,43 @@ function makeDetail(
   };
 }
 
+function makePlannedActionLog(
+  result: CandidateScreeningResultListItem,
+  actionPlan: CandidateActionPlan,
+): CandidateActionLogDto {
+  return {
+    id: `action-log-${result.candidateId}`,
+    userId: 'user-1',
+    runId: 'run-1',
+    screeningResultId: result.id,
+    candidateId: result.candidateId,
+    jobDescriptionId: result.jobDescriptionId,
+    platform: 'boss-like',
+    mode: 'execution',
+    action: actionPlan.action,
+    message: actionPlan.message,
+    status: 'planned',
+    idempotencyKey: `execution-${result.candidateId}`,
+    browserTrace: null,
+    errorMessage: null,
+    createdAt,
+    updatedAt,
+  };
+}
+
 function makeDependencies(adapter = makeAdapter()): ScreeningRunnerDependencies & {
   adapter: jest.Mocked<CandidateSourceAdapter>;
+  createWorkflowSession: jest.Mock;
 } {
   return {
     adapter,
     buildPlan: jest.fn().mockReturnValue({ searchPlan, evaluationSchema }),
     createAdapter: jest.fn().mockReturnValue(adapter),
+    createWorkflowSession: jest
+      .fn()
+      .mockImplementation(({ adapter: sessionAdapter }: { adapter: CandidateSourceAdapter }) =>
+        makeWorkflowSession(sessionAdapter),
+      ),
     ingestCandidate: jest.fn().mockResolvedValue({
       candidateId: 'candidate-1',
       resumeId: 'resume-1',
@@ -378,6 +463,8 @@ function makeDependencies(adapter = makeAdapter()): ScreeningRunnerDependencies 
       getDetail: jest.fn().mockResolvedValue(null),
       upsertCandidate: jest.fn().mockResolvedValue(makeResult().candidate),
       claimActionLog: jest.fn().mockResolvedValue(null),
+      claimRetryableCollectActionLog: jest.fn().mockResolvedValue(null),
+      listRunEvents: jest.fn().mockResolvedValue([]),
     },
   };
 }
@@ -385,6 +472,594 @@ function makeDependencies(adapter = makeAdapter()): ScreeningRunnerDependencies 
 describe('candidate screening runner', () => {
   it('exposes a LangGraph screening runner entrypoint', () => {
     expect(runCandidateScreeningGraph).toBe(runCandidateScreening);
+  });
+
+  it('loads a screening workflow before live search and stores its skill id', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      skill: makeWorkflowSkill({ id: 'screen-v1' }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(workflow.loadOrExplore).toHaveBeenCalledWith({
+      searchPlan,
+      stage: 'searching_live',
+    });
+    expect(workflow.runSearchKeyword).toHaveBeenCalledWith({
+      keyword: 'frontend',
+      maxCandidates: 20,
+    });
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: 'screen-v1' }),
+    );
+  });
+
+  it('runs one search segment per keyword and observes each globally unique profile once', async () => {
+    const adapter = makeAdapter();
+    const ada = makeRawCandidate({
+      platformCandidateId: 'ada',
+      name: 'Ada Lovelace',
+      profileUrl: 'https://example.com/ada',
+      resumeText: 'list summary only',
+    });
+    const grace = makeRawCandidate({
+      platformCandidateId: 'grace',
+      name: 'Grace Hopper',
+      profileUrl: 'https://example.com/grace',
+      resumeText: 'list summary only',
+    });
+    const workflow = makeWorkflowSession(adapter, {
+      runSearchKeyword: jest
+        .fn()
+        .mockResolvedValueOnce({ keyword: 'Java', candidates: [ada, grace] })
+        .mockResolvedValueOnce({ keyword: 'PostgreSQL', candidates: [ada] }),
+      observeCandidateProfile: jest.fn().mockImplementation(async (candidate) => ({
+        ...candidate,
+        resumeText: `${candidate.name} full profile`,
+      })),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.buildPlan = jest.fn().mockReturnValue({
+      searchPlan: { ...searchPlan, keywords: ['Java', 'PostgreSQL'] },
+      evaluationSchema,
+    });
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    dependencies.ingestCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-ada',
+        resumeId: 'resume-ada',
+        identityHash: 'identity-ada',
+        chunkCount: 1,
+      })
+      .mockResolvedValueOnce({
+        candidateId: 'candidate-grace',
+        resumeId: 'resume-grace',
+        identityHash: 'identity-grace',
+        chunkCount: 1,
+      });
+    dependencies.mergeAndRank = jest.fn().mockReturnValue([
+      { candidateId: 'candidate-ada', matchScore: 1, source: 'live_search', rank: 1 },
+      { candidateId: 'candidate-grace', matchScore: 1, source: 'live_search', rank: 2 },
+    ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 3 },
+      dependencies,
+    });
+
+    expect(workflow.runSearchKeyword).toHaveBeenNthCalledWith(1, {
+      keyword: 'Java',
+      maxCandidates: 3,
+    });
+    expect(workflow.runSearchKeyword).toHaveBeenNthCalledWith(2, {
+      keyword: 'PostgreSQL',
+      maxCandidates: 1,
+    });
+    expect(workflow.observeCandidateProfile).toHaveBeenCalledTimes(2);
+    expect(workflow.observeCandidateProfile).toHaveBeenNthCalledWith(1, ada);
+    expect(workflow.observeCandidateProfile).toHaveBeenNthCalledWith(2, grace);
+    expect(dependencies.ingestCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawCandidate: expect.objectContaining({ resumeText: 'Ada Lovelace full profile' }),
+      }),
+    );
+  });
+
+  it('observes a profile before evaluating it and never contacts an AI-rejected candidate', async () => {
+    const adapter = makeAdapter();
+    const listCandidate = makeRawCandidate({ resumeText: 'list summary only' });
+    const detailedCandidate = makeRawCandidate({ resumeText: 'full profile: Java and PostgreSQL' });
+    const workflow = makeWorkflowSession(adapter, {
+      runSearchKeyword: jest
+        .fn()
+        .mockResolvedValue({ keyword: 'Java', candidates: [listCandidate] }),
+      observeCandidateProfile: jest.fn().mockResolvedValue(detailedCandidate),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.buildPlan = jest.fn().mockReturnValue({
+      searchPlan: { ...searchPlan, keywords: ['Java'] },
+      evaluationSchema,
+    });
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    dependencies.evaluateCandidate = jest.fn().mockResolvedValue({
+      tags,
+      score,
+      decision: skipDecision,
+    });
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution', maxCandidates: 1 },
+      dependencies,
+    });
+
+    expect(workflow.observeCandidateProfile).toHaveBeenCalledWith(listCandidate);
+    expect(dependencies.ingestCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ rawCandidate: detailedCandidate }),
+    );
+    expect(workflow.contactAndCollectCandidate).not.toHaveBeenCalled();
+    expect(workflow.collectCandidate).not.toHaveBeenCalled();
+  });
+
+  it('does not mark a search keyword completed before every discovered profile is observed', async () => {
+    const adapter = makeAdapter();
+    const listCandidate = makeRawCandidate({ resumeText: 'list summary only' });
+    const workflow = makeWorkflowSession(adapter, {
+      runSearchKeyword: jest
+        .fn()
+        .mockResolvedValue({ keyword: 'Java', candidates: [listCandidate] }),
+      observeCandidateProfile: jest.fn().mockRejectedValue(new Error('profile page crashed')),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.buildPlan = jest.fn().mockReturnValue({
+      searchPlan: { ...searchPlan, keywords: ['Java'] },
+      evaluationSchema,
+    });
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 1 },
+      dependencies,
+    });
+
+    expect(dependencies.repo.createRunEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'search_keyword_completed',
+        detail: expect.objectContaining({ keyword: 'Java' }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed', errorMessage: 'profile page crashed' }),
+    );
+  });
+
+  it('does not re-search a keyword already recorded as completed for this run', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      runSearchKeyword: jest
+        .fn()
+        .mockResolvedValue({ keyword: 'PostgreSQL', candidates: [makeRawCandidate()] }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.buildPlan = jest.fn().mockReturnValue({
+      searchPlan: { ...searchPlan, keywords: ['Java', 'PostgreSQL'] },
+      evaluationSchema,
+    });
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    (dependencies.repo as typeof dependencies.repo & { listRunEvents: jest.Mock }).listRunEvents =
+      jest
+        .fn()
+        .mockResolvedValue([
+          { message: 'search_keyword_completed', detail: { keyword: 'Java', candidates: [] } },
+        ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 2 },
+      dependencies,
+    });
+
+    expect(workflow.runSearchKeyword).toHaveBeenCalledTimes(1);
+    expect(workflow.runSearchKeyword).toHaveBeenCalledWith({
+      keyword: 'PostgreSQL',
+      maxCandidates: 2,
+    });
+  });
+
+  it('rehydrates a completed keyword checkpoint when the previous run crashed before ingest', async () => {
+    const adapter = makeAdapter();
+    const checkpointCandidate = makeRawCandidate({ resumeText: 'list summary only' });
+    const detailedCandidate = makeRawCandidate({ resumeText: 'full profile from the real page' });
+    const workflow = makeWorkflowSession(adapter, {
+      runSearchKeyword: jest.fn().mockRejectedValue(new Error('must not repeat completed search')),
+      observeCandidateProfile: jest.fn().mockResolvedValue(detailedCandidate),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.buildPlan = jest.fn().mockReturnValue({
+      searchPlan: { ...searchPlan, keywords: ['Java'] },
+      evaluationSchema,
+    });
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    (dependencies.repo as typeof dependencies.repo & { listRunEvents: jest.Mock }).listRunEvents =
+      jest.fn().mockResolvedValue([
+        {
+          message: 'search_keyword_completed',
+          detail: { keyword: 'Java', candidates: [checkpointCandidate] },
+        },
+      ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, maxCandidates: 1 },
+      dependencies,
+    });
+
+    expect(workflow.runSearchKeyword).not.toHaveBeenCalled();
+    expect(workflow.observeCandidateProfile).toHaveBeenCalledWith(checkpointCandidate);
+    expect(dependencies.ingestCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ rawCandidate: detailedCandidate }),
+    );
+  });
+
+  it('finishes successfully with zero fetched candidates when first workflow exploration has no usable detail', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      skill: null,
+      loadOrExplore: jest.fn().mockResolvedValue(null),
+      runSearchKeyword: jest.fn().mockRejectedValue(new Error('must not search without a skill')),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        stats: expect.objectContaining({ fetched: 0 }),
+      }),
+    );
+    expect(dependencies.repo.updateRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: expect.any(String) }),
+    );
+    expect(workflow.runSearchKeyword).not.toHaveBeenCalled();
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'searching_live',
+        level: 'success',
+        message: '实时搜索完成：抓取 0 人',
+        detail: expect.objectContaining({ fetched: 0 }),
+      }),
+    );
+  });
+
+  it('uses the same workflow session for planned chat and collect actions', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({
+        success: true,
+        browserTrace: { contact: 'success', collect: 'success' },
+      }),
+      collectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const chatCandidate = {
+      ...makeResult().candidate,
+      id: 'candidate-chat',
+      displayName: 'Ada Lovelace',
+      profileUrl: 'https://example.com/ada',
+    };
+    const collectCandidate = {
+      ...makeResult().candidate,
+      id: 'candidate-collect',
+      displayName: 'Grace Hopper',
+      profileUrl: 'https://example.com/grace',
+    };
+    const chatResult = makeResult({
+      id: 'result-chat',
+      candidateId: 'candidate-chat',
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+      candidate: chatCandidate,
+    });
+    const collectResult = makeResult({
+      id: 'result-collect',
+      candidateId: 'candidate-collect',
+      decisionAction: 'collect',
+      decisionPriority: 'medium',
+      decisionReason: 'needs resume',
+      actionPlan: collectDecision,
+      actionStatus: 'planned',
+      candidate: collectCandidate,
+    });
+    const chatDetail = makeDetail({
+      ...chatResult,
+      actionLogs: [
+        { ...makePlannedActionLog(chatResult, chatDecision), id: 'chat-log-candidate-chat' },
+        { ...makePlannedActionLog(chatResult, collectDecision), id: 'collect-log-candidate-chat' },
+      ],
+    });
+    const collectDetail = makeDetail({
+      ...collectResult,
+      actionLogs: [makePlannedActionLog(collectResult, collectDecision)],
+    });
+
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([chatResult, collectResult]);
+    dependencies.repo.getDetail = jest
+      .fn()
+      .mockImplementation(async ({ candidateId }) =>
+        candidateId === 'candidate-chat' ? chatDetail : collectDetail,
+      );
+    dependencies.repo.claimActionLog = jest
+      .fn()
+      .mockImplementation(async ({ id }) =>
+        id === chatDetail.actionLogs[0]?.id
+          ? chatDetail.actionLogs[0]
+          : collectDetail.actionLogs[0],
+      );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(workflow.contactAndCollectCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: 'candidate-chat',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'https://example.com/ada',
+      },
+      chatDecision,
+    );
+    expect(workflow.collectCandidate).toHaveBeenCalledWith({
+      candidateId: 'candidate-collect',
+      displayName: 'Grace Hopper',
+      profileUrl: 'https://example.com/grace',
+    });
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
+    expect(adapter.collectCandidate).not.toHaveBeenCalled();
+  });
+
+  it('continues the run after a workflow greeting failure for one candidate', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'send button missing',
+        browserTrace: { contact: 'failed', collect: 'not_attempted' },
+      }),
+      collectCandidate: jest.fn().mockResolvedValue({
+        success: true,
+        browserTrace: { action: 'collect' },
+      }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const chatCandidate = {
+      ...makeResult().candidate,
+      id: 'candidate-chat',
+      displayName: 'Ada Lovelace',
+    };
+    const collectCandidate = {
+      ...makeResult().candidate,
+      id: 'candidate-collect',
+      displayName: 'Grace Hopper',
+    };
+    const chatResult = makeResult({
+      id: 'result-chat',
+      candidateId: 'candidate-chat',
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+      candidate: chatCandidate,
+    });
+    const collectResult = makeResult({
+      id: 'result-collect',
+      candidateId: 'candidate-collect',
+      decisionAction: 'collect',
+      decisionPriority: 'medium',
+      decisionReason: 'needs resume',
+      actionPlan: collectDecision,
+      actionStatus: 'planned',
+      candidate: collectCandidate,
+    });
+    const chatDetail = makeDetail({
+      ...chatResult,
+      actionLogs: [
+        { ...makePlannedActionLog(chatResult, chatDecision), id: 'chat-log-candidate-chat' },
+        { ...makePlannedActionLog(chatResult, collectDecision), id: 'collect-log-candidate-chat' },
+      ],
+    });
+    const collectDetail = makeDetail({
+      ...collectResult,
+      actionLogs: [makePlannedActionLog(collectResult, collectDecision)],
+    });
+
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([chatResult, collectResult]);
+    dependencies.repo.getDetail = jest
+      .fn()
+      .mockImplementation(async ({ candidateId }) =>
+        candidateId === 'candidate-chat' ? chatDetail : collectDetail,
+      );
+    dependencies.repo.claimActionLog = jest
+      .fn()
+      .mockImplementation(async ({ id }) =>
+        id === chatDetail.actionLogs[0]?.id
+          ? chatDetail.actionLogs[0]
+          : collectDetail.actionLogs[0],
+      );
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(workflow.collectCandidate).toHaveBeenCalled();
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: chatDetail.actionLogs[0]?.id,
+        status: 'failed',
+        errorMessage: 'send button missing',
+      }),
+    );
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'success' }),
+    );
+  });
+
+  it('executes a chat decision as one contact-then-collect workflow and records both actions', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({
+        success: true,
+        browserTrace: { contact: 'success', collect: 'success' },
+      }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const result = makeResult({ actionPlan: chatDecision, actionStatus: 'planned' });
+    const chatLog = makePlannedActionLog(result, chatDecision);
+    const collectLog = makePlannedActionLog(result, collectDecision);
+    const detail = makeDetail({ ...result, actionLogs: [chatLog, collectLog] });
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([result]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(chatLog);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, mode: 'execution' },
+      dependencies,
+    });
+
+    expect(workflow.contactAndCollectCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: 'candidate-1',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'https://example.com/ada',
+      },
+      chatDecision,
+    );
+    expect(workflow.collectCandidate).not.toHaveBeenCalled();
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ id: chatLog.id, status: 'success' }),
+    );
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ id: collectLog.id, status: 'success' }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({ actionStatus: 'success', interviewStage: 'collected' }),
+    );
+  });
+
+  it('resumes collection without re-sending a successful greeting', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      loadExact: jest.fn().mockResolvedValue(makeWorkflowSkill({ id: 'screen-v1' })),
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'collect target missing',
+        browserTrace: { contact: 'success', collect: 'failed' },
+      }),
+      collectCandidate: jest.fn().mockResolvedValue({
+        success: true,
+        browserTrace: { action: 'collect' },
+      }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const retryableClaim = jest.fn().mockResolvedValue({
+      ...makePlannedActionLog(makeResult(), collectDecision),
+      status: 'running',
+    });
+    (
+      dependencies.repo as typeof dependencies.repo & {
+        claimRetryableCollectActionLog: jest.Mock;
+      }
+    ).claimRetryableCollectActionLog = retryableClaim;
+    const plannedResult = makeResult({ actionPlan: chatDecision, actionStatus: 'planned' });
+    const failedResult = makeResult({ actionPlan: chatDecision, actionStatus: 'failed' });
+    const chatLog = makePlannedActionLog(plannedResult, chatDecision);
+    const collectLog = makePlannedActionLog(plannedResult, collectDecision);
+    const firstDetail = makeDetail({ ...plannedResult, actionLogs: [chatLog, collectLog] });
+    const secondDetail = makeDetail({
+      ...failedResult,
+      actionLogs: [
+        { ...chatLog, status: 'success' },
+        { ...collectLog, status: 'failed', errorMessage: 'collect target missing' },
+      ],
+    });
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(
+      makeRun({
+        status: 'success',
+        skillId: 'screen-v1',
+        searchPlan,
+        evaluationSchema,
+      }),
+    );
+    dependencies.repo.listResults = jest
+      .fn()
+      .mockResolvedValueOnce([plannedResult])
+      .mockResolvedValueOnce([failedResult]);
+    dependencies.repo.getDetail = jest
+      .fn()
+      .mockResolvedValueOnce(firstDetail)
+      .mockResolvedValueOnce(secondDetail);
+    dependencies.repo.claimActionLog = jest
+      .fn()
+      .mockResolvedValue({ ...chatLog, status: 'running' });
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+
+    expect(workflow.contactAndCollectCandidate).toHaveBeenCalledTimes(1);
+    expect(workflow.collectCandidate).toHaveBeenCalledTimes(1);
+    expect(retryableClaim).toHaveBeenCalledWith({ userId: 'user-1', id: collectLog.id });
   });
 
   it('advances a dry-run through planning, live search, ingest, vector recall, evaluation, ranking, and action planning', async () => {
@@ -491,7 +1166,7 @@ describe('candidate screening runner', () => {
       vector: [{ candidateId: 'candidate-vector', matchScore: 0.82 }],
     });
     expect(dependencies.repo.upsertResult).toHaveBeenCalledTimes(2);
-    expect(dependencies.repo.createActionLog).toHaveBeenCalledTimes(2);
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledTimes(3);
     expect(dependencies.repo.createActionLog).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -503,6 +1178,15 @@ describe('candidate screening runner', () => {
     );
     expect(dependencies.repo.createActionLog).toHaveBeenNthCalledWith(
       2,
+      expect.objectContaining({
+        mode: 'dry_run',
+        status: 'planned',
+        action: 'collect',
+        candidateId: 'candidate-vector',
+      }),
+    );
+    expect(dependencies.repo.createActionLog).toHaveBeenNthCalledWith(
+      3,
       expect.objectContaining({
         mode: 'dry_run',
         status: 'planned',
@@ -703,7 +1387,11 @@ describe('candidate screening runner', () => {
         browserTrace: { action: 'chat', candidateId: 'candidate-1' },
       }),
     });
+    const workflow = makeWorkflowSession(adapter, {
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
     const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
     const plannedResult = makeResult({
       id: 'result-1',
       candidateId: 'candidate-1',
@@ -727,6 +1415,24 @@ describe('candidate screening runner', () => {
           message: 'chat candidate',
           status: 'planned',
           idempotencyKey: 'execution-key',
+          browserTrace: null,
+          errorMessage: null,
+          createdAt,
+          updatedAt,
+        },
+        {
+          id: 'collect-log-1',
+          userId: 'user-1',
+          runId: 'run-1',
+          screeningResultId: 'result-1',
+          candidateId: 'candidate-1',
+          jobDescriptionId: 'jd-1',
+          platform: 'boss-like',
+          mode: 'execution',
+          action: 'collect',
+          message: null,
+          status: 'planned',
+          idempotencyKey: 'execution-collect-key',
           browserTrace: null,
           errorMessage: null,
           createdAt,
@@ -764,7 +1470,7 @@ describe('candidate screening runner', () => {
       id: 'action-log-1',
     });
     expect(adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
-    expect(adapter.chatCandidate).toHaveBeenCalledWith(
+    expect(workflow.contactAndCollectCandidate).toHaveBeenCalledWith(
       {
         candidateId: 'candidate-1',
         displayName: 'Ada Lovelace',
@@ -772,13 +1478,7 @@ describe('candidate screening runner', () => {
       },
       chatDecision,
     );
-    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'action-log-1',
-        status: 'success',
-        browserTrace: { action: 'chat', candidateId: 'candidate-1' },
-      }),
-    );
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
     expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
       expect.objectContaining({
         actionStatus: 'success',
@@ -1310,26 +2010,22 @@ describe('candidate screening runner', () => {
         userId: 'user-1',
         runId: 'run-1',
         jobDescriptionId: 'jd-1',
-        stage: 'indexing_resumes',
+        stage: 'searching_live',
         level: 'warning',
-        message: '跳过重复候选人：Ada Again',
+        message: 'search_candidate_duplicate',
         detail: expect.objectContaining({
           candidateName: 'Ada Again',
           dedupeBy: 'raw_identity',
-          duplicateOf: expect.objectContaining({
-            candidateName: 'Ada One',
-            candidateId: 'candidate-1',
-            resumeId: 'resume-1',
-            platformCandidateId: 'platform-candidate-1',
-          }),
+          platformCandidateId: 'platform-candidate-1',
         }),
       }),
     );
     expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
       expect.objectContaining({
         status: 'success',
+        currentWorkflowStep: null,
         stats: expect.objectContaining({
-          fetched: 2,
+          fetched: 1,
           stored: 1,
           deduped: 1,
         }),
@@ -1337,7 +2033,7 @@ describe('candidate screening runner', () => {
     );
   });
 
-  it('logs existing library candidates during ingest without dropping them from this run', async () => {
+  it('stops existing library candidates before recall, evaluation, and action planning', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() =>
         batches({
@@ -1351,6 +2047,8 @@ describe('candidate screening runner', () => {
       ),
     });
     const dependencies = makeDependencies(adapter);
+    const workflow = makeWorkflowSession(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
     dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
       candidateId: 'candidate-1',
       resumeId: 'resume-1',
@@ -1362,11 +2060,14 @@ describe('candidate screening runner', () => {
       existingCandidateName: 'Ada Existing',
       existingResumeId: 'resume-1',
     });
-    dependencies.mergeAndRank = jest
-      .fn()
-      .mockReturnValueOnce([
-        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
-      ]);
+    dependencies.recallCandidates = jest.fn().mockResolvedValueOnce([
+      makeVectorRecallCandidate({
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        displayName: 'Ada Existing',
+      }),
+    ]);
+    dependencies.mergeAndRank = jest.fn().mockReturnValueOnce([]);
 
     await runCandidateScreening({
       runId: 'run-1',
@@ -1376,15 +2077,17 @@ describe('candidate screening runner', () => {
       dependencies,
     });
 
-    expect(dependencies.mergeAndRank).toHaveBeenCalledWith({
-      live: [{ candidateId: 'candidate-1', matchScore: 1 }],
-      vector: [],
-    });
+    expect(dependencies.mergeAndRank).toHaveBeenCalledWith({ live: [], vector: [] });
+    expect(dependencies.evaluateCandidate).not.toHaveBeenCalled();
+    expect(dependencies.repo.upsertResult).not.toHaveBeenCalled();
+    expect(dependencies.repo.createActionLog).not.toHaveBeenCalled();
+    expect(workflow.contactAndCollectCandidate).not.toHaveBeenCalled();
+    expect(workflow.collectCandidate).not.toHaveBeenCalled();
     expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stage: 'indexing_resumes',
         level: 'warning',
-        message: '复用已有候选人：Ada Existing',
+        message: '跳过已有候选人后续流程：Ada Existing',
         detail: expect.objectContaining({
           candidateName: 'Ada Existing',
           candidateWasExisting: true,
@@ -1406,8 +2109,76 @@ describe('candidate screening runner', () => {
           fetched: 1,
           stored: 0,
           deduped: 1,
-          evaluated: 1,
+          evaluated: 0,
+          recommendedChat: 0,
+          recommendedCollect: 0,
         }),
+      }),
+    );
+  });
+
+  it('continues candidates first ingested by the same run when recovering', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-candidate-1',
+              name: 'Ada Recovery',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.repo.listRunEvents = jest.fn().mockResolvedValueOnce([
+      {
+        id: 'event-ingested',
+        userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        stage: 'indexing_resumes',
+        level: 'success',
+        message: '候选人入库：Ada Recovery',
+        detail: null,
+        createdAt,
+      },
+    ]);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 0,
+      candidateContacted: false,
+      candidateWasExisting: true,
+      resumeWasExisting: true,
+      existingCandidateId: 'candidate-1',
+      existingCandidateName: 'Ada Recovery',
+      existingResumeId: 'resume-1',
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ candidateId: 'candidate-1', action: 'chat' }),
+    );
+    expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        message: '恢复本次运行候选人：Ada Recovery',
       }),
     );
   });
@@ -1432,11 +2203,11 @@ describe('candidate screening runner', () => {
       identityHash: 'identity-live',
       chunkCount: 1,
       candidateContacted: true,
-      candidateWasExisting: true,
-      resumeWasExisting: true,
-      existingCandidateId: 'candidate-1',
-      existingCandidateName: 'Ada Contacted',
-      existingResumeId: 'resume-1',
+      candidateWasExisting: false,
+      resumeWasExisting: false,
+      existingCandidateId: null,
+      existingCandidateName: null,
+      existingResumeId: null,
     });
     dependencies.mergeAndRank = jest
       .fn()
@@ -1541,11 +2312,11 @@ describe('candidate screening runner', () => {
       identityHash: 'identity-live',
       chunkCount: 1,
       candidateContacted: true,
-      candidateWasExisting: true,
-      resumeWasExisting: true,
-      existingCandidateId: 'candidate-1',
-      existingCandidateName: 'Ada Contacted',
-      existingResumeId: 'resume-1',
+      candidateWasExisting: false,
+      resumeWasExisting: false,
+      existingCandidateId: null,
+      existingCandidateName: null,
+      existingResumeId: null,
     });
     dependencies.mergeAndRank = jest
       .fn()
@@ -2202,14 +2973,333 @@ describe('candidate screening runner', () => {
       }),
       createActionIdempotencyKey({
         userId: 'user-1',
+        runId: 'run-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        action: 'collect',
+      }),
+      createActionIdempotencyKey({
+        userId: 'user-1',
         runId: 'run-2',
         jobDescriptionId: 'jd-1',
         candidateId: 'candidate-1',
         platform: 'boss-like',
         action: 'chat',
       }),
+      createActionIdempotencyKey({
+        userId: 'user-1',
+        runId: 'run-2',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        action: 'collect',
+      }),
     ]);
-    expect(idempotencyKeys[0]).not.toBe(idempotencyKeys[1]);
+    expect(idempotencyKeys[0]).not.toBe(idempotencyKeys[2]);
+  });
+
+  it('loads the stored workflow skill for manual planned actions instead of falling back to the adapter', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      loadExact: jest.fn().mockResolvedValue(makeWorkflowSkill({ id: 'screen-v1' })),
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const plannedResult = makeResult({
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+      interviewStage: 'to_contact',
+    });
+    const detail = makeDetail({
+      ...plannedResult,
+      actionLogs: [
+        { ...makePlannedActionLog(plannedResult, chatDecision), id: 'chat-log-1' },
+        { ...makePlannedActionLog(plannedResult, collectDecision), id: 'collect-log-1' },
+      ],
+    });
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(
+      makeRun({
+        status: 'success',
+        skillId: 'screen-v1',
+        searchPlan,
+        evaluationSchema,
+      }),
+    );
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+
+    expect(workflow.loadExact).toHaveBeenCalledWith({
+      skillId: 'screen-v1',
+      stage: 'executing_actions',
+    });
+    expect(workflow.contactAndCollectCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: 'candidate-1',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'https://example.com/ada',
+      },
+      chatDecision,
+    );
+    expect(adapter.loginIfNeeded).not.toHaveBeenCalled();
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
+  });
+
+  it('loads the stored workflow skill for a single candidate action', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      loadExact: jest.fn().mockResolvedValue(makeWorkflowSkill({ id: 'screen-v1' })),
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const result = makeResult();
+    const detail = makeDetail({
+      ...result,
+      actionLogs: [
+        { ...makePlannedActionLog(result, chatDecision), id: 'chat-log-1' },
+        { ...makePlannedActionLog(result, collectDecision), id: 'collect-log-1' },
+      ],
+    });
+    dependencies.repo.getRun = jest
+      .fn()
+      .mockResolvedValue(makeRun({ skillId: 'screen-v1', searchPlan, evaluationSchema }));
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).resolves.toMatchObject({ status: 'success', candidateId: 'candidate-1' });
+
+    expect(workflow.loadExact).toHaveBeenCalledWith({
+      skillId: 'screen-v1',
+      stage: 'executing_actions',
+    });
+    expect(workflow.contactAndCollectCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: 'candidate-1',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'https://example.com/ada',
+      },
+      chatDecision,
+    );
+    expect(adapter.loginIfNeeded).not.toHaveBeenCalled();
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
+  });
+
+  it('records both chat and collect logs for a single browser-v2 action', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      loadExact: jest.fn().mockResolvedValue(makeWorkflowSkill({ id: 'screen-v1' })),
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({
+        success: true,
+        browserTrace: { contact: 'success', collect: 'success' },
+      }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const result = makeResult();
+    const chatLog = makePlannedActionLog(result, chatDecision);
+    const collectLog = makePlannedActionLog(result, collectDecision);
+    const detail = makeDetail({ ...result, actionLogs: [chatLog, collectLog] });
+    dependencies.repo.getRun = jest
+      .fn()
+      .mockResolvedValue(makeRun({ skillId: 'screen-v1', searchPlan, evaluationSchema }));
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest
+      .fn()
+      .mockResolvedValue({ ...chatLog, status: 'running' });
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).resolves.toMatchObject({ status: 'success', detail: '已发送单点沟通消息并收藏候选人' });
+
+    expect(workflow.contactAndCollectCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ id: collectLog.id, status: 'success' }),
+    );
+  });
+
+  it('does not run a browser workflow chat without its paired collect audit log', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      loadExact: jest.fn().mockResolvedValue(makeWorkflowSkill({ id: 'screen-v1' })),
+      contactAndCollectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const detail = makeDetail();
+    dependencies.repo.getRun = jest
+      .fn()
+      .mockResolvedValue(makeRun({ skillId: 'screen-v1', searchPlan, evaluationSchema }));
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).resolves.toMatchObject({
+      status: 'failed',
+      errorMessage: 'paired collect action log is required for browser workflow chat',
+    });
+
+    expect(dependencies.createWorkflowSession).not.toHaveBeenCalled();
+    expect(workflow.contactAndCollectCandidate).not.toHaveBeenCalled();
+  });
+
+  it('executes both legacy chat and collect before recording a single candidate action as successful', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+      collectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const result = makeResult();
+    const chatLog = { ...makePlannedActionLog(result, chatDecision), id: 'chat-log-1' };
+    const collectLog = { ...makePlannedActionLog(result, collectDecision), id: 'collect-log-1' };
+    const detail = makeDetail({ ...result, actionLogs: [chatLog, collectLog] });
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(makeRun({ skillId: null }));
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest
+      .fn()
+      .mockResolvedValue({ ...chatLog, status: 'running' });
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).resolves.toMatchObject({ status: 'success', detail: '已发送单点沟通消息并收藏候选人' });
+
+    expect(adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
+    expect(adapter.chatCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: 'candidate-1',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'https://example.com/ada',
+      },
+      chatDecision,
+    );
+    expect(adapter.collectCandidate).toHaveBeenCalledWith({
+      candidateId: 'candidate-1',
+      displayName: 'Ada Lovelace',
+      profileUrl: 'https://example.com/ada',
+    });
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ id: collectLog.id, status: 'success' }),
+    );
+  });
+
+  it('keeps a successful legacy chat when the paired single candidate collect fails', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+      collectCandidate: jest.fn().mockResolvedValue({ success: false, error: 'collect failed' }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const result = makeResult();
+    const chatLog = { ...makePlannedActionLog(result, chatDecision), id: 'chat-log-1' };
+    const collectLog = { ...makePlannedActionLog(result, collectDecision), id: 'collect-log-1' };
+    const detail = makeDetail({ ...result, actionLogs: [chatLog, collectLog] });
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(makeRun({ skillId: null }));
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest
+      .fn()
+      .mockResolvedValue({ ...chatLog, status: 'running' });
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).resolves.toMatchObject({ status: 'failed', errorMessage: 'collect failed' });
+
+    expect(adapter.chatCandidate).toHaveBeenCalledTimes(1);
+    expect(adapter.collectCandidate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({ id: chatLog.id, status: 'success' }),
+    );
+    expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: collectLog.id,
+        status: 'failed',
+        errorMessage: 'collect failed',
+      }),
+    );
+    expect(dependencies.repo.upsertResult).toHaveBeenLastCalledWith(
+      expect.objectContaining({ actionStatus: 'failed', interviewStage: 'contacted' }),
+    );
+  });
+
+  it('clears the active workflow step when a single candidate action throws', async () => {
+    const adapter = makeAdapter();
+    const workflow = makeWorkflowSession(adapter, {
+      loadExact: jest.fn().mockResolvedValue(makeWorkflowSkill({ id: 'screen-v1' })),
+      contactAndCollectCandidate: jest.fn().mockRejectedValue(new Error('browser crashed')),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.createWorkflowSession = jest.fn().mockReturnValue(workflow);
+    const result = makeResult();
+    const detail = makeDetail({
+      ...result,
+      actionLogs: [
+        { ...makePlannedActionLog(result, chatDecision), id: 'chat-log-1' },
+        { ...makePlannedActionLog(result, collectDecision), id: 'collect-log-1' },
+      ],
+    });
+    dependencies.repo.getRun = jest
+      .fn()
+      .mockResolvedValue(makeRun({ skillId: 'screen-v1', searchPlan, evaluationSchema }));
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).resolves.toMatchObject({ status: 'failed', errorMessage: 'browser crashed' });
+
+    expect(dependencies.repo.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        runId: 'run-1',
+        currentWorkflowStep: null,
+      }),
+    );
   });
 
   it('executes planned actions only through executeScreeningRunActions and updates contacted state after successful chat action', async () => {
@@ -2225,7 +3315,13 @@ describe('candidate screening runner', () => {
       actionStatus: 'planned',
       interviewStage: 'to_contact',
     });
-    const detail = makeDetail(plannedResult);
+    const detail = makeDetail({
+      ...plannedResult,
+      actionLogs: [
+        { ...makePlannedActionLog(plannedResult, chatDecision), id: 'action-log-1' },
+        { ...makePlannedActionLog(plannedResult, collectDecision), id: 'collect-log-1' },
+      ],
+    });
     dependencies.repo.getRun = jest.fn().mockResolvedValue(
       makeRun({
         id: 'run-1',
@@ -2288,7 +3384,7 @@ describe('candidate screening runner', () => {
       },
       chatDecision,
     );
-    expect(adapter.collectCandidate).not.toHaveBeenCalled();
+    expect(adapter.collectCandidate).toHaveBeenCalled();
     expect(dependencies.repo.createRunEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stage: 'executing_actions',
@@ -2318,7 +3414,7 @@ describe('candidate screening runner', () => {
         userId: 'user-1',
         id: 'action-log-1',
         status: 'success',
-        browserTrace: null,
+        browserTrace: { contact: 'success', collect: 'success' },
         errorMessage: null,
       }),
     );
@@ -2371,6 +3467,30 @@ describe('candidate screening runner', () => {
       }),
     );
     expect(adapter.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not collect for a legacy chat action without a paired collect log', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+      collectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const plannedResult = makeResult({ actionPlan: chatDecision, actionStatus: 'planned' });
+    const detail = makeDetail(plannedResult);
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(makeRun({ skillId: null }));
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(detail);
+    dependencies.repo.claimActionLog = jest.fn().mockResolvedValue(detail.actionLogs[0]);
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+
+    expect(adapter.chatCandidate).toHaveBeenCalledTimes(1);
+    expect(adapter.collectCandidate).not.toHaveBeenCalled();
   });
 
   it('skips execution when the planned action log cannot be atomically claimed', async () => {
@@ -2472,6 +3592,62 @@ describe('candidate screening runner', () => {
         actionStatus: 'success',
       }),
     );
+  });
+
+  it('does not let paired chat collections exceed the approved collect action limit', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+      collectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const firstResult = makeResult({ id: 'result-1', candidateId: 'candidate-1', rank: 1 });
+    const secondBase = makeResult();
+    const secondResult = makeResult({
+      id: 'result-2',
+      candidateId: 'candidate-2',
+      rank: 2,
+      candidate: {
+        ...secondBase.candidate,
+        id: 'candidate-2',
+        displayName: 'Grace Hopper',
+        platformCandidateId: 'platform-candidate-2',
+        profileUrl: 'https://example.com/grace',
+      },
+    });
+    const details = new Map(
+      [firstResult, secondResult].map((result) => {
+        const chatLog = {
+          ...makePlannedActionLog(result, chatDecision),
+          id: `chat-log-${result.candidateId}`,
+        };
+        const collectLog = {
+          ...makePlannedActionLog(result, collectDecision),
+          id: `collect-log-${result.candidateId}`,
+        };
+        return [result.candidateId, makeDetail({ ...result, actionLogs: [chatLog, collectLog] })];
+      }),
+    );
+    dependencies.repo.getRun = jest.fn().mockResolvedValue(makeRun({ skillId: null }));
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([firstResult, secondResult]);
+    dependencies.repo.getDetail = jest.fn(
+      async ({ candidateId }: { candidateId: string }) => details.get(candidateId) ?? null,
+    );
+    dependencies.repo.claimActionLog = jest.fn(async ({ id }: { id: string }) => {
+      const log = [...details.values()]
+        .flatMap((detail) => detail.actionLogs)
+        .find((candidate) => candidate.id === id);
+      return log ? { ...log, status: 'running' as const } : null;
+    });
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: { confirmExecution: true, maxChatActions: 2, maxCollectActions: 1 },
+      dependencies,
+    });
+
+    expect(adapter.chatCandidate).toHaveBeenCalledTimes(1);
+    expect(adapter.collectCandidate).toHaveBeenCalledTimes(1);
   });
 
   it('requests executable planned actions so skip rows do not block lower-ranked chat execution', async () => {
@@ -2591,6 +3767,7 @@ describe('candidate screening runner', () => {
       expect.objectContaining({
         status: 'success',
         currentStage: 'finalizing',
+        currentWorkflowStep: null,
         stats: expect.objectContaining({ failed: 1 }),
       }),
     );

@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { BROWSER_WORKFLOW_DSL_VERSION } from './types';
 import type {
   PublishPlatform,
   PublishSkill,
@@ -94,6 +95,37 @@ function skillCreateData(skill: PublishSkill): Prisma.PublishSkillCreateInput {
   };
 }
 
+const PUBLISH_SKILL_VERSION_WRITE_MAX_ATTEMPTS = 3;
+
+function isRetryablePublishSkillVersionWriteError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'P2002' || code === 'P2034';
+}
+
+async function retryPublishSkillVersionWrite<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; attempt < PUBLISH_SKILL_VERSION_WRITE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const isLastAttempt = attempt === PUBLISH_SKILL_VERSION_WRITE_MAX_ATTEMPTS - 1;
+      if (isLastAttempt || !isRetryablePublishSkillVersionWriteError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('publish_skill_version_write_retry_exhausted');
+}
+
+async function lockPublishSkillVersion(
+  tx: Prisma.TransactionClient,
+  skill: Pick<PublishSkill, 'name' | 'platform'>,
+): Promise<void> {
+  await tx.$executeRaw`
+    SELECT pg_advisory_xact_lock(hashtext(${skill.name}), hashtext(${skill.platform}))
+  `;
+}
+
 function mapTrace(row: PublishTraceRecord | null): PublishTrace | null {
   if (!row) return null;
   return {
@@ -155,24 +187,34 @@ export async function upsertDefaultPublishSkill(skill: PublishSkill): Promise<Pu
 }
 
 export async function createExploredPublishSkill(skill: PublishSkill): Promise<PublishSkill> {
-  await prisma.publishSkill.updateMany({
-    where: { name: skill.name, platform: skill.platform, isActive: true },
-    data: { isActive: false },
-  });
-  const latest = await prisma.publishSkill.findFirst({
-    where: { name: skill.name, platform: skill.platform },
-    orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
-  });
-  const nextVersion = latest ? Math.max(skill.version, latest.version + 1) : skill.version;
-  const row = await prisma.publishSkill.create({
-    data: skillCreateData({
-      ...skill,
-      version: nextVersion,
-      isActive: true,
-      meta: skill.meta ?? { success_rate: 0, usage_count: 0, created_from: 'explore' },
+  return retryPublishSkillVersionWrite(() =>
+    prisma.$transaction(async (tx) => {
+      await lockPublishSkillVersion(tx, skill);
+      const latest = await tx.publishSkill.findFirst({
+        where: { name: skill.name, platform: skill.platform },
+        orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
+      });
+      const nextVersion = latest ? Math.max(skill.version, latest.version + 1) : skill.version;
+      const row = await tx.publishSkill.create({
+        data: skillCreateData({
+          ...skill,
+          version: nextVersion,
+          isActive: true,
+          meta: skill.meta ?? { success_rate: 0, usage_count: 0, created_from: 'explore' },
+        }),
+      });
+      await tx.publishSkill.updateMany({
+        where: {
+          name: skill.name,
+          platform: skill.platform,
+          isActive: true,
+          id: { not: row.id },
+        },
+        data: { isActive: false },
+      });
+      return mapSkill(row);
     }),
-  });
-  return mapSkill(row);
+  );
 }
 
 export async function createNextActivePublishSkillVersion(params: {
@@ -181,30 +223,64 @@ export async function createNextActivePublishSkillVersion(params: {
   meta?: PublishSkillMeta;
 }): Promise<PublishSkill> {
   const { previousSkill, steps } = params;
-  await prisma.publishSkill.updateMany({
-    where: { name: previousSkill.name, platform: previousSkill.platform, isActive: true },
-    data: { isActive: false },
-  });
-  const nextSkill: PublishSkill = {
-    ...previousSkill,
-    id: `${previousSkill.name}-${previousSkill.platform}-v${previousSkill.version + 1}`,
-    version: previousSkill.version + 1,
-    isActive: true,
-    steps,
-    meta: params.meta ?? { success_rate: 0, usage_count: 0, created_from: 'agent' },
-  };
-  const row = await prisma.publishSkill.create({ data: skillCreateData(nextSkill) });
-  return mapSkill(row);
+  return retryPublishSkillVersionWrite(() =>
+    prisma.$transaction(async (tx) => {
+      await lockPublishSkillVersion(tx, previousSkill);
+      const latest = await tx.publishSkill.findFirst({
+        where: { name: previousSkill.name, platform: previousSkill.platform },
+        orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
+      });
+      const version = Math.max(previousSkill.version + 1, (latest?.version ?? 0) + 1);
+      const nextSkill: PublishSkill = {
+        ...previousSkill,
+        id: `${previousSkill.name}-${previousSkill.platform}-v${version}`,
+        version,
+        isActive: true,
+        steps,
+        meta: params.meta ?? { success_rate: 0, usage_count: 0, created_from: 'agent' },
+      };
+      const row = await tx.publishSkill.create({ data: skillCreateData(nextSkill) });
+      await tx.publishSkill.updateMany({
+        where: {
+          name: previousSkill.name,
+          platform: previousSkill.platform,
+          isActive: true,
+          id: { not: row.id },
+        },
+        data: { isActive: false },
+      });
+      return mapSkill(row);
+    }),
+  );
 }
 
-export async function getActivePublishSkillFromDb(
-  platform: PublishPlatform,
-): Promise<PublishSkill | null> {
+export async function getActivePublishSkillByName(params: {
+  name: string;
+  platform: PublishPlatform;
+}): Promise<PublishSkill | null> {
   const row = await prisma.publishSkill.findFirst({
-    where: { name: 'publish_jd', platform, isActive: true },
+    where: { name: params.name, platform: params.platform, isActive: true },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
   });
   return row ? mapSkill(row) : null;
+}
+
+export function isBrowserV2Skill(skill: Pick<PublishSkill, 'meta'>): boolean {
+  return skill.meta?.dsl_version === BROWSER_WORKFLOW_DSL_VERSION;
+}
+
+export async function getActiveBrowserV2SkillByName(params: {
+  name: string;
+  platform: PublishPlatform;
+}): Promise<PublishSkill | null> {
+  const active = await getActivePublishSkillByName(params);
+  return active && isBrowserV2Skill(active) ? active : null;
+}
+
+export function getActivePublishSkillFromDb(
+  platform: PublishPlatform,
+): Promise<PublishSkill | null> {
+  return getActivePublishSkillByName({ name: 'publish_jd', platform });
 }
 
 export async function createPublishTask(params: {

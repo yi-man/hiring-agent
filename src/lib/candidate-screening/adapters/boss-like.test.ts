@@ -9,7 +9,11 @@ import type {
   StructuredDomSnapshot,
 } from '@/lib/browser/types';
 import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
-import { BossLikeCandidateSourceAdapter, extractBossLikeCandidatesFromHtml } from './boss-like';
+import {
+  BossLikeCandidateSourceAdapter,
+  extractBossLikeCandidatesFromHtml,
+  mergeBossLikeCandidateWithDetail,
+} from './boss-like';
 import { createCandidateSourceAdapter } from './factory';
 import type { RawCandidateBatch } from './types';
 import type { CandidateActionPlan, SearchPlan } from '../types';
@@ -200,6 +204,39 @@ class AmbiguousResumeTextExecutor extends FakeBrowserExecutor {
   }
 }
 
+class SearchTargetFailureExecutor extends FakeBrowserExecutor {
+  readonly failure: BrowserStepResult = {
+    success: false,
+    error: 'not_found_target: 搜索候选人',
+    domSnapshot: '<main>target missing</main>',
+  };
+
+  async fill(target: BrowserTargetInput, value: string): Promise<BrowserStepResult> {
+    this.calls.push(`fill:${targetName(target)}:${value}`);
+    return this.failure;
+  }
+}
+
+class CollectTargetFailureExecutor extends FakeBrowserExecutor {
+  readonly failure: BrowserStepResult = {
+    success: false,
+    error: 'not_found_target: 收藏',
+    domSnapshot: '<main>target missing</main>',
+  };
+
+  async click(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    this.calls.push(`click:${targetName(target)}`);
+    return this.failure;
+  }
+}
+
+class MissingChatSuccessExecutor extends FakeBrowserExecutor {
+  async waitForText(text: string): Promise<BrowserStepResult> {
+    this.calls.push(`waitForText:${text}`);
+    return { success: false, error: `wait_for_text timed out: ${text}` };
+  }
+}
+
 class EmptyThenResultExecutor extends FakeBrowserExecutor {
   private cardChecks = 0;
 
@@ -210,6 +247,16 @@ class EmptyThenResultExecutor extends FakeBrowserExecutor {
       return this.cardChecks > 1;
     }
     return true;
+  }
+}
+
+class TargetAwareDetailExecutor extends FakeBrowserExecutor {
+  readonly detailTargets: BrowserTargetInput[] = [];
+
+  async waitForTarget(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    this.detailTargets.push(target);
+    this.calls.push(`waitForTarget:${targetName(target)}`);
+    return { success: true };
   }
 }
 
@@ -291,6 +338,23 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
+  it('exposes its normalized workflow exploration context', () => {
+    const adapter = new BossLikeCandidateSourceAdapter({
+      executor: new FakeBrowserExecutor(),
+      baseUrl: 'http://boss-like.fixture/',
+      username: 'fixture-user',
+      password: 'fixture-password',
+    });
+
+    expect(adapter.getWorkflowExploreContext()).toEqual({
+      baseUrl: 'http://boss-like.fixture',
+      credentials: {
+        username: 'fixture-user',
+        password: 'fixture-password',
+      },
+    });
+  });
+
   it('keeps structured snapshot failures best-effort during login detection', async () => {
     const executor = new StructuredSnapshotFailureExecutor(['<main>候选人列表</main>']);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
@@ -333,7 +397,20 @@ describe('BossLikeCandidateSourceAdapter', () => {
     ]);
   });
 
-  it('opens detail pages when list cards have short resume text', async () => {
+  it('merges a profile observation with its list candidate without browser actions', () => {
+    const listCandidate = extractBossLikeCandidatesFromHtml(shortResumeListFixture)[0]!;
+    const detailCandidate = extractBossLikeCandidatesFromHtml(detailFixture)[0]!;
+
+    expect(mergeBossLikeCandidateWithDetail(listCandidate, detailCandidate)).toEqual(
+      expect.objectContaining({
+        platformCandidateId: '1',
+        name: '王小明',
+        resumeText: 'Java Spring Boot 高并发 微服务 分布式 系统设计',
+      }),
+    );
+  });
+
+  it('keeps legacy direct callers enriching short resume text when deferEnrichment is omitted', async () => {
     const executor = new FakeBrowserExecutor([shortResumeListFixture, detailFixture]);
     const adapter = new BossLikeCandidateSourceAdapter({ executor });
 
@@ -349,6 +426,61 @@ describe('BossLikeCandidateSourceAdapter', () => {
         resumeText: 'Java Spring Boot 高并发 微服务 分布式 系统设计',
       }),
     ]);
+  });
+
+  it('defers short resume enrichment when the caller requests it', async () => {
+    const executor = new FakeBrowserExecutor([shortResumeListFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const batches = await collectAsyncBatches(
+      adapter.searchCandidates(searchPlan, {
+        maxCandidates: 1,
+        batchSize: 1,
+        deferEnrichment: true,
+      }),
+    );
+
+    expect(executor.calls).not.toContain('navigate:http://localhost:6183/employer/resumes/1');
+    expect(batches).toEqual([
+      {
+        candidates: [
+          expect.objectContaining({
+            platformCandidateId: '1',
+            resumeText: 'Java',
+          }),
+        ],
+        cursor: '1',
+      },
+    ]);
+  });
+
+  it('uses the complete persisted detail target when the executor supports target-aware waits', async () => {
+    const executor = new TargetAwareDetailExecutor([detailFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+    const detailTarget = {
+      kind: 'container' as const,
+      name: '候选人详情',
+      exact: true,
+      stableAttrs: { testId: 'candidate-detail-1' },
+      scope: { kind: 'section' as const, name: '候选人资料' },
+    };
+
+    await adapter.enrichCandidate(
+      {
+        platformCandidateId: '1',
+        profileUrl: '/employer/resumes/1',
+        name: '王小明',
+        title: '高级后端工程师',
+        company: '星河智能',
+        resumeText: 'Java',
+      },
+      {
+        targets: { detailContent: detailTarget },
+      },
+    );
+
+    expect(executor.detailTargets).toEqual([detailTarget]);
+    expect(executor.calls).not.toContain('waitForText:候选人详情');
   });
 
   it('uses the caller-authenticated session without performing a second login check while searching', async () => {
@@ -377,6 +509,19 @@ describe('BossLikeCandidateSourceAdapter', () => {
     expect(executor.calls).toContain('check:article[data-candidate-id]');
     expect(executor.calls).not.toContain('waitForText:简历');
     expect(batches[0]?.candidates[0]?.platformCandidateId).toBe('1');
+  });
+
+  it('throws typed target metadata for failed search browser steps', async () => {
+    const executor = new SearchTargetFailureExecutor();
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    await expect(
+      collectAsyncBatches(adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 })),
+    ).rejects.toMatchObject({
+      result: executor.failure,
+      target: '搜索候选人',
+      targetKey: 'searchInput',
+    });
   });
 
   it('submits each keyword search and continues after an empty result page', async () => {
@@ -528,7 +673,107 @@ describe('BossLikeCandidateSourceAdapter', () => {
       'click:打招呼',
       `fill:消息:${chatPlan.message}`,
       'click:发送',
+      'waitForText:消息已发送',
     ]);
+  });
+
+  it('does not report a legacy chat as successful without visible page confirmation', async () => {
+    const executor = new MissingChatSuccessExecutor();
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const result = await adapter.chatCandidate(
+      {
+        candidateId: 'candidate-1',
+        displayName: '王小明',
+        profileUrl: '/employer/resumes/1',
+      },
+      chatPlan,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: false,
+        error: 'wait_for_text timed out: 消息已发送',
+      }),
+    );
+    expect(executor.calls).toContain('waitForText:消息已发送');
+  });
+
+  it('keeps failed collect browser target metadata in the action result', async () => {
+    const executor = new CollectTargetFailureExecutor();
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const result = await adapter.collectCandidate({
+      candidateId: 'candidate-1',
+      displayName: '王小明',
+      profileUrl: '/employer/resumes/1',
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'not_found_target: 收藏',
+      targetError: {
+        result: executor.failure,
+        target: '收藏',
+        targetKey: 'collectButton',
+      },
+    });
+  });
+
+  it('uses discovered screening targets for search and greeting actions', async () => {
+    const executor = new FakeBrowserExecutor([resumeListFixture, detailFixture]);
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+    const targets = {
+      searchInput: {
+        kind: 'field' as const,
+        role: 'textbox' as const,
+        name: '人才关键词',
+        exact: true,
+      },
+      searchSubmit: {
+        kind: 'button' as const,
+        role: 'button' as const,
+        name: '开始检索',
+        exact: true,
+      },
+      greetButton: {
+        kind: 'button' as const,
+        role: 'button' as const,
+        name: '立即沟通',
+        exact: true,
+      },
+      messageInput: {
+        kind: 'field' as const,
+        role: 'textbox' as const,
+        name: '沟通内容',
+        exact: true,
+      },
+      sendButton: {
+        kind: 'button' as const,
+        role: 'button' as const,
+        name: '确认发送',
+        exact: true,
+      },
+    };
+
+    await collectAsyncBatches(
+      adapter.searchCandidates(searchPlan, { maxCandidates: 1, batchSize: 1 }, { targets }),
+    );
+    await adapter.chatCandidate(
+      { candidateId: '1', displayName: '王小明', profileUrl: '/employer/resumes/1' },
+      chatPlan,
+      { targets },
+    );
+
+    expect(executor.calls).toEqual(
+      expect.arrayContaining([
+        'fill:人才关键词:Java',
+        'click:开始检索',
+        'click:立即沟通',
+        'fill:沟通内容:你好，我们正在招聘高级后端工程师，方便聊聊吗？',
+        'click:确认发送',
+      ]),
+    );
   });
 
   it('rejects unsafe collect and chat profile URLs without navigating', async () => {

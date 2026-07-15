@@ -156,6 +156,11 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
     );
   }
 
+  async waitForTarget(target: BrowserTargetInput): Promise<BrowserStepResult> {
+    const text = typeof target === 'string' ? target : target.name;
+    return normalizeResult(await this.send('wait_for_text', { text }, target));
+  }
+
   async addKeywords(
     target: BrowserTargetInput,
     values: string[],
@@ -191,6 +196,15 @@ export class CommandTransportBrowserExecutor implements BrowserExecutor {
       throw new Error(result.error ?? 'snapshot command returned no HTML snapshot');
     }
     return result.htmlSnapshot;
+  }
+
+  async waitForSnapshotChange(
+    previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult> {
+    return normalizeResult(
+      await this.send('wait_for_snapshot_change', { previousSnapshot, previousUrl }),
+    );
   }
 
   async resolveTarget(

@@ -1,9 +1,10 @@
-import { executePublishingStep, runPublishingSkill } from './skill-executor';
+import { executePublishingStep, runBrowserWorkflow, runPublishingSkill } from './skill-executor';
 import type { BrowserExecutor, BrowserStepResult, PublishSkill } from './types';
 
 class RecordingExecutor implements BrowserExecutor {
   readonly calls: string[] = [];
   readonly fillCalls: Array<{ target: unknown; value: string }> = [];
+  snapshot?: () => Promise<string>;
 
   constructor(private readonly checks: Record<string, boolean> = {}) {}
 
@@ -25,6 +26,16 @@ class RecordingExecutor implements BrowserExecutor {
 
   async waitForUrl(url: string): Promise<BrowserStepResult> {
     this.calls.push(`waitForUrl:${url}`);
+    return { success: true };
+  }
+
+  async waitForSnapshotChange(
+    previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult> {
+    this.calls.push(
+      `waitForSnapshotChange:${previousSnapshot}${previousUrl ? `:${previousUrl}` : ''}`,
+    );
     return { success: true };
   }
 
@@ -106,7 +117,260 @@ const skill: PublishSkill = {
   ],
 };
 
+const emptyContext = { input: {}, credentials: {}, target: {} };
+
+const contextWithTitle = {
+  input: { title: '高级前端工程师' },
+  credentials: {},
+  target: {},
+};
+
+function skillWith(steps: PublishSkill['steps']): PublishSkill {
+  return { ...skill, steps };
+}
+
 describe('runPublishingSkill', () => {
+  it('captures HTML without embedding it in the trace', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockResolvedValue('<main>candidate list</main>');
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_list',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'listHtml' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      currentStepId: 'observe_list',
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result.observations).toEqual({ listHtml: '<main>candidate list</main>' });
+    expect(result.traceSteps[0]?.result).toEqual({ success: true });
+  });
+
+  it('waits for a saved observation to change without putting HTML in the trace', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockResolvedValue('<main>before search</main>');
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_before_search',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'previousListHtml' },
+          next: 'wait_for_results',
+        },
+        {
+          id: 'wait_for_results',
+          type: 'action',
+          action: 'wait_for_snapshot_change' as never,
+          params: { previousObservationKey: 'previousListHtml' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result.status).toBe('success');
+    expect(executor.calls).toContain('waitForSnapshotChange:<main>before search</main>');
+    expect(result.traceSteps[1]).toEqual(
+      expect.objectContaining({
+        action: 'wait_for_snapshot_change',
+        params: { previousObservationKey: 'previousListHtml' },
+      }),
+    );
+  });
+
+  it('keeps waiting through an intermediate snapshot until a readiness check succeeds', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest
+      .fn()
+      .mockResolvedValueOnce('<main>before search</main>')
+      .mockResolvedValueOnce('<main>loading</main>');
+    executor.check = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_before_search',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'previousListHtml' },
+          next: 'wait_for_results',
+        },
+        {
+          id: 'wait_for_results',
+          type: 'action',
+          action: 'wait_for_snapshot_change',
+          params: {
+            previousObservationKey: 'previousListHtml',
+            readyChecks: [{ type: 'dom_exists', selector: 'article[data-candidate-id]' }],
+          },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result.status).toBe('success');
+    expect(executor.calls.filter((call) => call.startsWith('waitForSnapshotChange:'))).toHaveLength(
+      2,
+    );
+    expect(executor.calls).toContain('waitForSnapshotChange:<main>loading</main>');
+  });
+
+  it('treats a URL change as an alternative search completion signal', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockResolvedValue('<main>same candidates</main>');
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_before_search',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'previousListHtml' },
+          next: 'wait_for_results',
+        },
+        {
+          id: 'wait_for_results',
+          type: 'action',
+          action: 'wait_for_snapshot_change',
+          params: {
+            previousObservationKey: 'previousListHtml',
+            previousUrl: '{{input.previousUrl}}',
+          },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor,
+      context: {
+        ...emptyContext,
+        input: { previousUrl: 'https://boss.example.com/employer/resumes' },
+      },
+    });
+
+    expect(result.status).toBe('success');
+    expect(executor.calls).toContain(
+      'waitForSnapshotChange:<main>same candidates</main>:https://boss.example.com/employer/resumes',
+    );
+  });
+
+  it('starts at the supplied currentStepId', async () => {
+    const result = await runBrowserWorkflow({
+      skill,
+      currentStepId: 'fill_title',
+      executor: new RecordingExecutor(),
+      context: contextWithTitle,
+    });
+
+    expect(result.traceSteps.map((step) => step.stepId)).toEqual(['fill_title']);
+  });
+
+  it('notifies callers before each non-terminal workflow step', async () => {
+    const onStep = jest.fn();
+
+    await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'fill_title',
+          type: 'action',
+          action: 'fill',
+          params: { locator: '职位名称', value: '{{input.title}}' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      currentStepId: 'fill_title',
+      executor: new RecordingExecutor(),
+      context: contextWithTitle,
+      onStep,
+    });
+
+    expect(onStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stepId: 'fill_title',
+        step: expect.objectContaining({ type: 'action' }),
+      }),
+    );
+    expect(onStep).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an observe step without the supported format and save key', async () => {
+    const result = await executePublishingStep({
+      stepId: 'observe_list',
+      skill: skillWith([
+        {
+          id: 'observe_list',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'text', saveAs: '' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor: new RecordingExecutor(),
+      context: emptyContext,
+    });
+
+    expect(result.traceStep?.result).toEqual({
+      success: false,
+      error: 'invalid observe params',
+    });
+  });
+
+  it('routes a rejected observation snapshot through its failure handler', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockRejectedValue(new Error('snapshot unavailable'));
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_list',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'listHtml' },
+          next: 'done',
+          onFail: { type: 'fallback_agent', reason: 'snapshot unavailable' },
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      currentStepId: 'observe_list',
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result).toMatchObject({
+      status: 'fallback',
+      currentStepId: 'observe_list',
+      observations: {},
+      traceSteps: [
+        {
+          stepId: 'observe_list',
+          action: 'observe',
+          result: { success: false, error: 'snapshot unavailable' },
+        },
+      ],
+      failedStep: {
+        stepId: 'observe_list',
+        result: { success: false, error: 'snapshot unavailable' },
+      },
+      onFail: { type: 'fallback_agent', reason: 'snapshot unavailable' },
+    });
+  });
+
   it('executes one action step and returns the next step for graph routing', async () => {
     const executor = new RecordingExecutor();
 
@@ -174,6 +438,38 @@ describe('runPublishingSkill', () => {
       error: 'selector not found',
       domSnapshot: '<form />',
     });
+  });
+
+  it('rejects screening-only actions without dispatching a browser command', async () => {
+    const executor = new RecordingExecutor();
+
+    const result = await executePublishingStep({
+      stepId: 'search_candidates',
+      skill: {
+        ...skill,
+        steps: [
+          {
+            id: 'search_candidates',
+            type: 'action',
+            action: 'search_candidates',
+            params: {},
+            next: 'done',
+          },
+          { id: 'done', type: 'end' },
+        ],
+      },
+      executor,
+      context: { input: {}, credentials: {}, target: {} },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.traceStep).toEqual({
+      stepId: 'search_candidates',
+      action: 'search_candidates',
+      params: {},
+      result: { success: false, error: 'unsupported action: search_candidates' },
+    });
+    expect(executor.calls).toEqual([]);
   });
 
   it('passes structured target descriptors to browser actions', async () => {

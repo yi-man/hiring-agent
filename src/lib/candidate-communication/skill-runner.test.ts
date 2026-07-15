@@ -22,9 +22,11 @@ function createAdapter(
 
   return {
     platform: 'boss-like',
+    getBrowserExecutor: jest.fn(),
     loginIfNeeded: jest.fn().mockResolvedValue(undefined),
     listUnreadMessages,
     searchCandidates: jest.fn(),
+    enrichCandidate: jest.fn(async (candidate: RawCandidate) => candidate),
     collectCandidate: jest.fn(),
     chatCandidate: jest.fn().mockResolvedValue({ success: true }),
     close: jest.fn().mockResolvedValue(undefined),

@@ -30,6 +30,7 @@ const fetchJobDescriptionRegenerateRunsMock = jest.fn();
 const updateJobDescriptionResourceMock = jest.fn();
 const publishJobDescriptionResourceMock = jest.fn();
 const createCandidateScreeningRunMock = jest.fn();
+const fetchCandidateScreeningRunsMock = jest.fn();
 const fetchCandidateScreeningRunMock = jest.fn();
 const fetchCandidateScreeningRunWithEventsMock = jest.fn();
 const fetchJdCandidatesMock = jest.fn();
@@ -67,6 +68,7 @@ jest.mock('@/lib/jd/client', () => ({
 
 jest.mock('@/lib/candidate-screening/client', () => ({
   createCandidateScreeningRun: (...args: unknown[]) => createCandidateScreeningRunMock(...args),
+  fetchCandidateScreeningRuns: (...args: unknown[]) => fetchCandidateScreeningRunsMock(...args),
   fetchCandidateScreeningRun: (...args: unknown[]) => fetchCandidateScreeningRunMock(...args),
   fetchCandidateScreeningRunWithEvents: (...args: unknown[]) =>
     fetchCandidateScreeningRunWithEventsMock(...args),
@@ -187,6 +189,9 @@ const sampleRun: CandidateScreeningRunDto = {
   mode: 'execution',
   status: 'pending',
   currentStage: 'planning',
+  skillId: 'screen-candidates-v2',
+  workflow: { name: 'screen_candidates', version: 2 },
+  currentWorkflowStep: 'chat_candidate',
   searchPlan: null,
   evaluationSchema: null,
   stats: null,
@@ -616,6 +621,7 @@ describe('candidate screening UI', () => {
     updateJobDescriptionResourceMock.mockReset();
     publishJobDescriptionResourceMock.mockReset();
     createCandidateScreeningRunMock.mockReset();
+    fetchCandidateScreeningRunsMock.mockReset();
     fetchCandidateScreeningRunMock.mockReset();
     fetchCandidateScreeningRunWithEventsMock.mockReset();
     fetchJdCandidatesMock.mockReset();
@@ -648,6 +654,7 @@ describe('candidate screening UI', () => {
     fetchJobDescriptionRegenerateRunsMock.mockResolvedValue([]);
     fetchJobDescriptionPublishTasksMock.mockResolvedValue([]);
     createCandidateScreeningRunMock.mockResolvedValue(sampleRun);
+    fetchCandidateScreeningRunsMock.mockResolvedValue([]);
     fetchCandidateScreeningRunMock.mockResolvedValue({
       ...sampleRun,
       status: 'success',
@@ -885,6 +892,13 @@ describe('candidate screening UI', () => {
     render(<CandidateScreeningRunLog jobDescriptionId="jd-1" runId="run-1" />);
 
     expect(await screen.findByText('筛选执行日志')).toBeInTheDocument();
+    expect(await screen.findByText('筛选浏览器 Workflow')).toBeInTheDocument();
+    expect(screen.getByText('screen_candidates · v2')).toBeInTheDocument();
+    expect(screen.getByText('当前步骤：chat_candidate')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看 Workflow 详情' })).toHaveAttribute(
+      'href',
+      '/workflows/screen-candidates-v2?returnTo=%2Fjd-generator%2Fjd-1%2Fscreening-runs%2Frun-1&returnLabel=%E8%BF%94%E5%9B%9E%E7%AD%9B%E9%80%89%E8%AE%B0%E5%BD%95',
+    );
     expect(fetchCandidateScreeningRunWithEventsMock).toHaveBeenCalledWith('run-1');
     expect(fetchJdCandidatesMock).toHaveBeenCalledWith('jd-1', {
       runId: 'run-1',
@@ -925,6 +939,39 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('已跳过')).toBeInTheDocument();
   });
 
+  it('screening run log identifies historical runs without a linked Workflow', async () => {
+    fetchCandidateScreeningRunWithEventsMock.mockResolvedValueOnce({
+      run: {
+        ...sampleRun,
+        skillId: null,
+        workflow: null,
+        currentWorkflowStep: null,
+      },
+      events: sampleRunEvents,
+    });
+
+    render(<CandidateScreeningRunLog jobDescriptionId="jd-1" runId="run-1" />);
+
+    expect(await screen.findByText('历史任务未关联 Workflow')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '查看 Workflow 详情' })).not.toBeInTheDocument();
+  });
+
+  it('screening run log avoids a dead link when the linked Workflow was removed', async () => {
+    fetchCandidateScreeningRunWithEventsMock.mockResolvedValueOnce({
+      run: {
+        ...sampleRun,
+        workflow: null,
+      },
+      events: sampleRunEvents,
+    });
+
+    render(<CandidateScreeningRunLog jobDescriptionId="jd-1" runId="run-1" />);
+
+    expect(await screen.findByText('关联的 Workflow 已不可用')).toBeInTheDocument();
+    expect(screen.getByText('Skill ID: screen-candidates-v2')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '查看 Workflow 详情' })).not.toBeInTheDocument();
+  });
+
   it('screening run log returns to the supplied source context', async () => {
     mockSearchParams = new URLSearchParams('returnTo=/jd-generator&returnLabel=返回列表');
 
@@ -954,15 +1001,28 @@ describe('candidate screening UI', () => {
   });
 
   it('candidate list renders score, decision, source, action status, and interview stage', async () => {
+    fetchCandidateScreeningRunsMock.mockResolvedValueOnce([
+      sampleRun,
+      {
+        ...sampleRun,
+        id: 'run-previous',
+        skillId: 'screen-candidates-v1',
+        workflow: { name: 'screen_candidates', version: 1 },
+        createdAt: '2026-06-28T00:00:00.000Z',
+        updatedAt: '2026-06-28T00:02:00.000Z',
+      },
+    ]);
+
     render(<CandidateList jobDescriptionId="jd-1" />);
 
     const row = await screen.findByRole('link', { name: /Ada Lovelace/ });
     await waitFor(() =>
       expect(fetchJdCandidatesMock).toHaveBeenCalledWith(
         'jd-1',
-        expect.objectContaining({ minScore: 70 }),
+        expect.objectContaining({ minScore: undefined, limit: 100 }),
       ),
     );
+    expect(fetchCandidateScreeningRunsMock).toHaveBeenCalledWith('jd-1');
     expect(screen.getByRole('button', { name: '返回 JD' })).toHaveAttribute(
       'href',
       '/jd-generator/jd-1',
@@ -980,6 +1040,23 @@ describe('candidate screening UI', () => {
     expect(screen.getAllByText('both').length).toBeGreaterThan(0);
     expect(screen.getByText('planned')).toBeInTheDocument();
     expect(screen.getAllByText('to_contact').length).toBeGreaterThan(0);
+
+    const sourceRunLink = screen.getByRole('link', { name: '来自第 2 次筛选' });
+    expect(parsedHref(sourceRunLink.getAttribute('href') ?? '').pathname).toBe(
+      '/jd-generator/jd-1/screening-runs/run-1',
+    );
+    expectReturnContext(
+      sourceRunLink.getAttribute('href') ?? '',
+      '/jd-generator/jd-1/candidates',
+      '返回已筛选候选人',
+    );
+
+    const runHistory = screen.getByLabelText('筛选记录');
+    expect(within(runHistory).getAllByRole('link', { name: /查看执行日志/ })).toHaveLength(2);
+    const historyRunHref = within(runHistory)
+      .getByRole('link', { name: /run-1.*查看执行日志/ })
+      .getAttribute('href');
+    expectReturnContext(historyRunHref ?? '', '/jd-generator/jd-1/candidates', '返回已筛选候选人');
   });
 
   it('candidate list returns to the supplied source and keeps the JD list as detail parent', async () => {

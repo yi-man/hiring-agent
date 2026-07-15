@@ -1,8 +1,16 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
-import { createActionIdempotencyKey, createDryRunActionPlan } from './actions';
+import {
+  createActionIdempotencyKey,
+  createDryRunActionPlan,
+  plannedActionSequence,
+} from './actions';
 import { resolveBossLikeProfileUrl } from './adapters/boss-like';
 import { createCandidateSourceAdapter } from './adapters/factory';
-import type { CandidateSourceAdapter, StoredCandidateRef } from './adapters/types';
+import type {
+  ActionExecutionResult,
+  CandidateSourceAdapter,
+  StoredCandidateRef,
+} from './adapters/types';
 import {
   CANDIDATE_EVALUATION_PROMPT_VERSION,
   CANDIDATE_SCREENING_CALIBRATION_VERSION,
@@ -19,9 +27,11 @@ import { mergeAndRankCandidates, type RankInput, type RankedCandidate } from './
 import { recallCandidatesForJd } from './recall';
 import {
   claimCandidateActionLog,
+  claimRetryableCollectActionLog,
   createCandidateActionLog,
   getCandidateScreeningDetail,
   getCandidateScreeningRun,
+  listCandidateScreeningRunEvents,
   listCandidateScreeningResults,
   updateCandidateActionLog,
   updateCandidateScreeningRun,
@@ -32,6 +42,10 @@ import {
   type CandidateScreeningDetailDto,
   type CandidateScreeningResultListItem,
 } from './repo';
+import {
+  createCandidateScreeningWorkflowSession,
+  type CandidateScreeningWorkflowSession,
+} from './workflow/executor';
 import type {
   CandidateActionPlan,
   CandidateDecisionAction,
@@ -75,6 +89,7 @@ type SeenIdentityRef = {
 export type ScreeningRunnerDependencies = {
   buildPlan: typeof buildScreeningPlanFromJd;
   createAdapter: typeof createCandidateSourceAdapter;
+  createWorkflowSession: typeof createCandidateScreeningWorkflowSession;
   ingestCandidate: typeof ingestRawCandidate;
   recallCandidates: typeof recallCandidatesForJd;
   evaluateCandidate: typeof evaluateCandidateForJd;
@@ -90,6 +105,8 @@ export type ScreeningRunnerDependencies = {
     getDetail: typeof getCandidateScreeningDetail;
     upsertCandidate: typeof upsertCandidateWithIdentity;
     claimActionLog: typeof claimCandidateActionLog;
+    claimRetryableCollectActionLog: typeof claimRetryableCollectActionLog;
+    listRunEvents: typeof listCandidateScreeningRunEvents;
   };
 };
 
@@ -108,6 +125,7 @@ export type ExecuteSingleCandidateActionResult = {
 const defaultDependencies: ScreeningRunnerDependencies = {
   buildPlan: buildScreeningPlanFromJd,
   createAdapter: createCandidateSourceAdapter,
+  createWorkflowSession: createCandidateScreeningWorkflowSession,
   ingestCandidate: ingestRawCandidate,
   recallCandidates: recallCandidatesForJd,
   evaluateCandidate: evaluateCandidateForJd,
@@ -123,6 +141,8 @@ const defaultDependencies: ScreeningRunnerDependencies = {
     getDetail: getCandidateScreeningDetail,
     upsertCandidate: upsertCandidateWithIdentity,
     claimActionLog: claimCandidateActionLog,
+    claimRetryableCollectActionLog: claimRetryableCollectActionLog,
+    listRunEvents: listCandidateScreeningRunEvents,
   },
 };
 
@@ -144,6 +164,8 @@ const CandidateScreeningState = Annotation.Root({
   evaluationSchema: Annotation<EvaluationSchema | undefined>(),
   rawCandidates: Annotation<RawCandidate[]>(),
   contexts: Annotation<Map<string, CandidateContext>>(),
+  runIngestedCandidateIds: Annotation<Set<string>>(),
+  deduplicatedCandidateIds: Annotation<Set<string>>(),
   liveInputs: Annotation<RankInput[]>(),
   vectorInputs: Annotation<RankInput[]>(),
   candidatePool: Annotation<RankedCandidate[]>(),
@@ -157,6 +179,7 @@ type CandidateScreeningGraphUpdate = typeof CandidateScreeningState.Update;
 
 type CandidateScreeningGraphResources = {
   adapter: CandidateSourceAdapter | null;
+  workflowSession: CandidateScreeningWorkflowSession | null;
   latestStats: ScreeningRunStats;
 };
 
@@ -330,12 +353,20 @@ function getUnusableProfileUrlReason(params: {
 function buildVectorInputs(params: {
   recalledCandidates: Awaited<ReturnType<typeof recallCandidatesForJd>>;
   contexts: Map<string, CandidateContext>;
+  deduplicatedCandidateIds: Set<string>;
   platform: CandidateScreeningPlatform;
 }): { inputs: RankInput[]; skipped: SkippedVectorCandidate[] } {
   const inputs: RankInput[] = [];
   const skipped: SkippedVectorCandidate[] = [];
 
   for (const candidate of params.recalledCandidates) {
+    if (params.deduplicatedCandidateIds.has(candidate.candidateId)) {
+      skipped.push({
+        candidate,
+        reason: 'candidate was deduplicated during live ingest',
+      });
+      continue;
+    }
     if (!params.contexts.has(candidate.candidateId)) {
       const unusableReason = getUnusableProfileUrlReason({
         platform: params.platform,
@@ -365,28 +396,170 @@ function buildVectorInputs(params: {
   return { inputs, skipped };
 }
 
+function uniqueSearchValues(keywords: string[], fallback: string): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const value of keywords) {
+    const keyword = value.trim();
+    if (keyword && !seen.has(keyword)) {
+      seen.add(keyword);
+      values.push(keyword);
+    }
+  }
+  if (values.length === 0 && fallback.trim()) {
+    values.push(fallback.trim());
+  }
+  return values;
+}
+
 async function collectRawCandidates(params: {
-  adapter: CandidateSourceAdapter;
+  workflowSession: Pick<
+    CandidateScreeningWorkflowSession,
+    'runSearchKeyword' | 'observeCandidateProfile'
+  >;
   searchPlan: SearchPlan;
   request: CreateScreeningRunRequest;
   stats: ScreeningRunStats;
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  jobDescriptionId: string;
+  completedKeywordCandidates?: ReadonlyMap<string, RawCandidate[]>;
 }): Promise<RawCandidate[]> {
   const rawCandidates: RawCandidate[] = [];
+  const seenIdentityHashes = new Set<string>();
 
-  for await (const batch of params.adapter.searchCandidates(params.searchPlan, {
-    maxCandidates: params.request.maxCandidates,
-    batchSize: params.request.batchSize,
-  })) {
-    for (const rawCandidate of batch.candidates) {
-      if (rawCandidates.length >= params.request.maxCandidates) {
-        return rawCandidates;
+  const observeUniqueCandidates = async (
+    keyword: string,
+    listCandidates: RawCandidate[],
+  ): Promise<RawCandidate[]> => {
+    const checkpointCandidates: RawCandidate[] = [];
+    for (const listCandidate of listCandidates) {
+      if (rawCandidates.length >= params.request.maxCandidates) break;
+      const identity = createCandidateIdentity({
+        sourcePlatform: params.request.platform,
+        platformCandidateId: listCandidate.platformCandidateId,
+        profileUrl: listCandidate.profileUrl,
+        name: listCandidate.name,
+        company: listCandidate.company,
+        title: listCandidate.title,
+      });
+      if (seenIdentityHashes.has(identity.identityHash)) {
+        params.stats.deduped += 1;
+        await recordRunEvent({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          jobDescriptionId: params.jobDescriptionId,
+          stage: 'searching_live',
+          level: 'warning',
+          message: 'search_candidate_duplicate',
+          detail: {
+            keyword,
+            candidateName: listCandidate.name,
+            profileUrl: listCandidate.profileUrl ?? null,
+            platformCandidateId: listCandidate.platformCandidateId ?? null,
+            dedupeBy: 'raw_identity',
+          },
+        });
+        continue;
       }
-      rawCandidates.push(rawCandidate);
+      seenIdentityHashes.add(identity.identityHash);
+      checkpointCandidates.push(listCandidate);
+      rawCandidates.push(await params.workflowSession.observeCandidateProfile(listCandidate));
       params.stats.fetched += 1;
     }
+    return checkpointCandidates;
+  };
+
+  for (const keyword of uniqueSearchValues(
+    params.searchPlan.keywords,
+    params.searchPlan.retrievalQuery,
+  )) {
+    if (rawCandidates.length >= params.request.maxCandidates) break;
+    const completedCandidates = params.completedKeywordCandidates?.get(keyword);
+    if (completedCandidates) {
+      await observeUniqueCandidates(keyword, completedCandidates);
+      continue;
+    }
+    const remaining = params.request.maxCandidates - rawCandidates.length;
+    const searched = await params.workflowSession.runSearchKeyword({
+      keyword,
+      maxCandidates: remaining,
+    });
+    const checkpointCandidates = await observeUniqueCandidates(keyword, searched.candidates);
+
+    await recordRunEvent({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescriptionId,
+      stage: 'searching_live',
+      level: 'success',
+      message: 'search_keyword_completed',
+      detail: {
+        keyword,
+        candidateCount: searched.candidates.length,
+        remaining,
+        candidates: checkpointCandidates,
+      },
+    });
   }
 
   return rawCandidates;
+}
+
+function rawCandidateFromSearchCheckpoint(value: unknown): RawCandidate | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.name !== 'string' || typeof candidate.resumeText !== 'string') return null;
+
+  const optionalString = (key: string): string | null | undefined => {
+    const item = candidate[key];
+    return typeof item === 'string' || item === null ? item : undefined;
+  };
+  const experienceYears = candidate.experienceYears;
+  return {
+    name: candidate.name,
+    resumeText: candidate.resumeText,
+    platformCandidateId: optionalString('platformCandidateId'),
+    title: optionalString('title'),
+    company: optionalString('company'),
+    location: optionalString('location'),
+    experienceYears:
+      typeof experienceYears === 'number' || experienceYears === null ? experienceYears : undefined,
+    profileUrl: optionalString('profileUrl'),
+    lastActiveAt: optionalString('lastActiveAt'),
+  };
+}
+
+function completedSearchKeywordCandidates(
+  events: Array<{ message: string; detail: Record<string, unknown> | null }>,
+): Map<string, RawCandidate[]> {
+  const completed = new Map<string, RawCandidate[]>();
+  for (const event of events) {
+    if (event.message !== 'search_keyword_completed') continue;
+    const keyword = event.detail?.keyword;
+    const candidates = event.detail?.candidates;
+    if (typeof keyword !== 'string' || !keyword.trim() || !Array.isArray(candidates)) continue;
+    const parsedCandidates = candidates.map(rawCandidateFromSearchCheckpoint);
+    if (parsedCandidates.some((candidate) => candidate === null)) continue;
+    completed.set(keyword.trim(), parsedCandidates as RawCandidate[]);
+  }
+  return completed;
+}
+
+function previouslyIngestedCandidateIds(
+  events: Array<{ candidateId: string | null; message: string }>,
+): Set<string> {
+  return new Set(
+    events
+      .filter(
+        (event): event is { candidateId: string; message: string } =>
+          Boolean(event.candidateId) && event.message.startsWith('候选人入库：'),
+      )
+      .map((event) => event.candidateId),
+  );
 }
 
 function createRawSeenIdentityRef(rawCandidate: RawCandidate): SeenIdentityRef {
@@ -874,26 +1047,30 @@ async function createPlannedActions(params: {
           }),
     });
 
-    await params.dependencies.repo.createActionLog({
-      userId: params.userId,
-      runId: params.runId,
-      screeningResultId: result.id,
-      candidateId: rankedCandidate.candidateId,
-      jobDescriptionId: params.jobDescription.id,
-      platform: params.request.platform,
-      mode: params.request.mode,
-      action: actionPlan.action,
-      message: actionPlan.message,
-      status: actionStatus,
-      idempotencyKey: createActionIdempotencyKey({
+    const actionsToLog =
+      actionPlan.action === 'skip' ? (['skip'] as const) : plannedActionSequence(actionPlan.action);
+    for (const action of actionsToLog) {
+      await params.dependencies.repo.createActionLog({
         userId: params.userId,
         runId: params.runId,
-        jobDescriptionId: params.jobDescription.id,
+        screeningResultId: result.id,
         candidateId: rankedCandidate.candidateId,
+        jobDescriptionId: params.jobDescription.id,
         platform: params.request.platform,
-        action: actionPlan.action,
-      }),
-    });
+        mode: params.request.mode,
+        action,
+        message: action === 'chat' ? actionPlan.message : null,
+        status: actionStatus,
+        idempotencyKey: createActionIdempotencyKey({
+          userId: params.userId,
+          runId: params.runId,
+          jobDescriptionId: params.jobDescription.id,
+          candidateId: rankedCandidate.candidateId,
+          platform: params.request.platform,
+          action,
+        }),
+      });
+    }
     await recordRunEvent({
       dependencies: params.dependencies,
       userId: params.userId,
@@ -954,6 +1131,8 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       stats: rememberStats(resources, stats),
       rawCandidates: [],
       contexts: new Map(),
+      runIngestedCandidateIds: new Set(),
+      deduplicatedCandidateIds: new Set(),
       liveInputs: [],
       vectorInputs: [],
       candidatePool: [],
@@ -1056,13 +1235,46 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       userId: state.userId,
     });
     resources.adapter = adapter;
-    await adapter.loginIfNeeded();
-    const rawCandidates = await collectRawCandidates({
+    const workflowSession = state.dependencies.createWorkflowSession({
       adapter,
-      searchPlan,
-      request: state.request,
-      stats,
+      userId: state.userId,
+      runId: state.runId,
+      jobDescriptionId: state.jobDescription.id,
+      platform: state.request.platform,
+      repo: state.dependencies.repo,
     });
+    resources.workflowSession = workflowSession;
+    const skill = await workflowSession.loadOrExplore({
+      searchPlan,
+      stage: 'searching_live',
+    });
+    if (skill) {
+      await state.dependencies.repo.updateRun({
+        userId: state.userId,
+        runId: state.runId,
+        skillId: skill.id,
+      });
+    }
+    let rawCandidates: RawCandidate[] = [];
+    let runIngestedCandidateIds = new Set(state.runIngestedCandidateIds);
+    if (skill) {
+      const existingEvents = await state.dependencies.repo.listRunEvents({
+        userId: state.userId,
+        runId: state.runId,
+      });
+      runIngestedCandidateIds = previouslyIngestedCandidateIds(existingEvents);
+      rawCandidates = await collectRawCandidates({
+        workflowSession,
+        searchPlan,
+        request: state.request,
+        stats,
+        dependencies: state.dependencies,
+        userId: state.userId,
+        runId: state.runId,
+        jobDescriptionId: state.jobDescription.id,
+        completedKeywordCandidates: completedSearchKeywordCandidates(existingEvents),
+      });
+    }
     await recordRunEvent({
       dependencies: state.dependencies,
       userId: state.userId,
@@ -1078,7 +1290,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       },
     });
 
-    return { rawCandidates, stats: rememberStats(resources, stats) };
+    return { rawCandidates, runIngestedCandidateIds, stats: rememberStats(resources, stats) };
   }
 
   async function ingestLiveNode(
@@ -1086,6 +1298,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
   ): Promise<CandidateScreeningGraphUpdate> {
     const stats = copyStats(state.stats);
     const contexts = new Map(state.contexts);
+    const deduplicatedCandidateIds = new Set(state.deduplicatedCandidateIds);
     const liveInputs: RankInput[] = [];
     const dedupe = createInMemoryDedupeState();
     const seenIdentityRefs = new Map<string, SeenIdentityRef>();
@@ -1170,6 +1383,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       const storedIdentityRef = createStoredSeenIdentityRef(rawCandidate, stored);
       const candidateWasExisting = stored.candidateWasExisting === true;
       const resumeWasExisting = stored.resumeWasExisting === true;
+      const candidateWasInCurrentRun = state.runIngestedCandidateIds.has(stored.candidateId);
 
       if (
         stored.identityHash !== rawIdentity.identityHash &&
@@ -1194,12 +1408,15 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
             duplicateOf,
           },
         });
+        deduplicatedCandidateIds.add(stored.candidateId);
         continue;
       }
       seenIdentityRefs.set(rawIdentity.identityHash, storedIdentityRef);
       seenIdentityRefs.set(stored.identityHash, storedIdentityRef);
 
-      if (candidateWasExisting) {
+      const wasDeduplicated =
+        (candidateWasExisting || resumeWasExisting) && !candidateWasInCurrentRun;
+      if (wasDeduplicated) {
         stats.deduped += 1;
       } else {
         stats.stored += 1;
@@ -1211,10 +1428,12 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
         jobDescriptionId: state.jobDescription.id,
         candidateId: stored.candidateId,
         stage: 'indexing_resumes',
-        level: candidateWasExisting ? 'warning' : 'success',
-        message: candidateWasExisting
-          ? `复用已有候选人：${rawCandidate.name}`
-          : `候选人入库：${rawCandidate.name}`,
+        level: wasDeduplicated ? 'warning' : 'success',
+        message: wasDeduplicated
+          ? `跳过已有候选人后续流程：${rawCandidate.name}`
+          : candidateWasInCurrentRun
+            ? `恢复本次运行候选人：${rawCandidate.name}`
+            : `候选人入库：${rawCandidate.name}`,
         detail: {
           candidateName: rawCandidate.name,
           candidateId: stored.candidateId,
@@ -1225,8 +1444,8 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
           existingCandidateId: stored.existingCandidateId ?? null,
           existingCandidateName: stored.existingCandidateName ?? null,
           existingResumeId: stored.existingResumeId ?? null,
-          dedupeBy: candidateWasExisting ? 'existing_candidate_identity' : null,
-          duplicateOf: candidateWasExisting
+          dedupeBy: wasDeduplicated ? 'existing_candidate_identity' : null,
+          duplicateOf: wasDeduplicated
             ? {
                 candidateName: stored.existingCandidateName ?? rawCandidate.name,
                 candidateId: stored.existingCandidateId ?? stored.candidateId,
@@ -1241,6 +1460,10 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
           profileUrl: rawCandidate.profileUrl ?? null,
         },
       });
+      if (wasDeduplicated) {
+        deduplicatedCandidateIds.add(stored.candidateId);
+        continue;
+      }
       contexts.set(stored.candidateId, {
         candidateId: stored.candidateId,
         resumeId: stored.resumeId,
@@ -1252,7 +1475,12 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       liveInputs.push({ candidateId: stored.candidateId, matchScore: 1 });
     }
 
-    return { contexts, liveInputs, stats: rememberStats(resources, stats) };
+    return {
+      contexts,
+      deduplicatedCandidateIds,
+      liveInputs,
+      stats: rememberStats(resources, stats),
+    };
   }
 
   async function recallVectorsNode(
@@ -1315,6 +1543,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
     const vectorInputResult = buildVectorInputs({
       recalledCandidates,
       contexts,
+      deduplicatedCandidateIds: state.deduplicatedCandidateIds,
       platform: state.request.platform,
     });
     stats.skipped += vectorInputResult.skipped.length;
@@ -1500,9 +1729,9 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
     state: CandidateScreeningGraphState,
   ): Promise<CandidateScreeningGraphUpdate> {
     const stats = copyStats(state.stats);
-    const adapter = resources.adapter;
-    if (!adapter) {
-      throw new Error('candidate screening execution requires an initialized adapter');
+    const workflowSession = resources.workflowSession;
+    if (!workflowSession) {
+      throw new Error('candidate screening execution requires an initialized workflow session');
     }
 
     await updateStage({
@@ -1517,7 +1746,9 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       userId: state.userId,
       runId: state.runId,
       jobDescriptionId: state.jobDescription.id,
-      getAdapterAfterClaim: async () => adapter,
+      executeContactAndCollect: (candidate, actionPlan) =>
+        workflowSession.contactAndCollectCandidate(candidate, actionPlan),
+      executeCollect: (candidate) => workflowSession.collectCandidate(candidate),
       request: {
         confirmExecution: true,
         maxChatActions: state.request.maxCandidates,
@@ -1551,6 +1782,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       currentStage: 'finalizing',
       errorMessage: null,
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(state.stats),
     });
     return {};
@@ -1599,6 +1831,7 @@ export const runCandidateScreeningGraph = async (params: {
   const initialStats = createEmptyStats();
   const resources: CandidateScreeningGraphResources = {
     adapter: null,
+    workflowSession: null,
     latestStats: copyStats(initialStats),
   };
   const graph = makeCandidateScreeningGraph(resources);
@@ -1616,6 +1849,8 @@ export const runCandidateScreeningGraph = async (params: {
         evaluationSchema: undefined,
         rawCandidates: [],
         contexts: new Map(),
+        runIngestedCandidateIds: new Set(),
+        deduplicatedCandidateIds: new Set(),
         liveInputs: [],
         vectorInputs: [],
         candidatePool: [],
@@ -1634,6 +1869,7 @@ export const runCandidateScreeningGraph = async (params: {
       status: 'failed',
       errorMessage: getErrorMessage(error),
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(stats),
     });
   } finally {
@@ -1652,6 +1888,18 @@ function getPlannedActionLog(
     detail.actionLogs.find(
       (actionLog) =>
         actionLog.runId === runId && actionLog.action === action && actionLog.status === 'planned',
+    ) ?? null
+  );
+}
+
+function getActionLog(
+  detail: CandidateScreeningDetailDto,
+  action: CandidateDecisionAction,
+  runId: string,
+): CandidateActionLogDto | null {
+  return (
+    detail.actionLogs.find(
+      (actionLog) => actionLog.runId === runId && actionLog.action === action,
     ) ?? null
   );
 }
@@ -1802,12 +2050,206 @@ async function markExecutionFailed(params: {
   });
 }
 
+function contactAndCollectStatus(executionResult: ActionExecutionResult): {
+  contactSucceeded: boolean;
+  collectSucceeded: boolean;
+} {
+  const trace = executionResult.browserTrace;
+  const contact = trace?.contact;
+  const collect = trace?.collect;
+  return {
+    contactSucceeded: contact === 'success' || (executionResult.success && contact !== 'failed'),
+    collectSucceeded: collect === 'success' || (executionResult.success && collect !== 'failed'),
+  };
+}
+
+async function persistContactAndCollectExecutionResult(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  result: CandidateScreeningResultListItem;
+  actionPlan: CandidateActionPlan;
+  chatActionLog: CandidateActionLogDto;
+  collectActionLog: CandidateActionLogDto;
+  executionResult: ActionExecutionResult;
+  stats: ScreeningRunStats;
+}): Promise<void> {
+  const status = contactAndCollectStatus(params.executionResult);
+  if (!status.contactSucceeded) {
+    await markExecutionFailed({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      result: params.result,
+      actionPlan: params.actionPlan,
+      actionLog: params.chatActionLog,
+      errorMessage: params.executionResult.error ?? 'contact execution failed',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      stats: params.stats,
+    });
+    await params.dependencies.repo.updateActionLog({
+      userId: params.userId,
+      id: params.collectActionLog.id,
+      status: 'skipped',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      errorMessage: 'contact was not sent',
+    });
+    return;
+  }
+
+  await persistExecutionResult({
+    dependencies: params.dependencies,
+    userId: params.userId,
+    runId: params.runId,
+    result: params.result,
+    actionPlan: params.actionPlan,
+    actionLog: params.chatActionLog,
+    executionResult: { success: true, browserTrace: params.executionResult.browserTrace },
+    stats: params.stats,
+  });
+
+  if (status.collectSucceeded) {
+    await params.dependencies.repo.updateActionLog({
+      userId: params.userId,
+      id: params.collectActionLog.id,
+      status: 'success',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      errorMessage: null,
+    });
+    await params.dependencies.repo.upsertResult({
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.result.jobDescriptionId,
+      candidateId: params.result.candidateId,
+      resumeId: params.result.resumeId,
+      source: params.result.source,
+      tags: params.result.tags,
+      scoreDetail: params.result.scoreDetail,
+      finalScore: params.result.finalScore,
+      rank: params.result.rank,
+      decisionAction: params.result.decisionAction,
+      decisionPriority: params.result.decisionPriority,
+      decisionReason: params.result.decisionReason,
+      actionPlan: params.actionPlan,
+      actionStatus: 'success',
+      interviewStage: 'collected',
+      notes: params.result.notes,
+    });
+    return;
+  }
+
+  params.stats.failed += 1;
+  await params.dependencies.repo.updateActionLog({
+    userId: params.userId,
+    id: params.collectActionLog.id,
+    status: 'failed',
+    browserTrace: params.executionResult.browserTrace ?? null,
+    errorMessage: params.executionResult.error ?? 'collect execution failed',
+  });
+  await params.dependencies.repo.upsertResult({
+    userId: params.userId,
+    runId: params.runId,
+    jobDescriptionId: params.result.jobDescriptionId,
+    candidateId: params.result.candidateId,
+    resumeId: params.result.resumeId,
+    source: params.result.source,
+    tags: params.result.tags,
+    scoreDetail: params.result.scoreDetail,
+    finalScore: params.result.finalScore,
+    rank: params.result.rank,
+    decisionAction: params.result.decisionAction,
+    decisionPriority: params.result.decisionPriority,
+    decisionReason: params.result.decisionReason,
+    actionPlan: params.actionPlan,
+    actionStatus: 'failed',
+    interviewStage: 'contacted',
+    notes: params.result.notes,
+  });
+}
+
+async function persistCollectRetryExecutionResult(params: {
+  dependencies: ScreeningRunnerDependencies;
+  userId: string;
+  runId: string;
+  result: CandidateScreeningResultListItem;
+  actionPlan: CandidateActionPlan;
+  collectActionLog: CandidateActionLogDto;
+  executionResult: ActionExecutionResult;
+  stats: ScreeningRunStats;
+}): Promise<void> {
+  if (params.executionResult.success) {
+    await params.dependencies.repo.updateActionLog({
+      userId: params.userId,
+      id: params.collectActionLog.id,
+      status: 'success',
+      browserTrace: params.executionResult.browserTrace ?? null,
+      errorMessage: null,
+    });
+    await params.dependencies.repo.upsertResult({
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.result.jobDescriptionId,
+      candidateId: params.result.candidateId,
+      resumeId: params.result.resumeId,
+      source: params.result.source,
+      tags: params.result.tags,
+      scoreDetail: params.result.scoreDetail,
+      finalScore: params.result.finalScore,
+      rank: params.result.rank,
+      decisionAction: params.result.decisionAction,
+      decisionPriority: params.result.decisionPriority,
+      decisionReason: params.result.decisionReason,
+      actionPlan: params.actionPlan,
+      actionStatus: 'success',
+      interviewStage: 'collected',
+      notes: params.result.notes,
+    });
+    return;
+  }
+
+  params.stats.failed += 1;
+  await params.dependencies.repo.updateActionLog({
+    userId: params.userId,
+    id: params.collectActionLog.id,
+    status: 'failed',
+    browserTrace: params.executionResult.browserTrace ?? null,
+    errorMessage: params.executionResult.error ?? 'collect execution failed',
+  });
+  await params.dependencies.repo.upsertResult({
+    userId: params.userId,
+    runId: params.runId,
+    jobDescriptionId: params.result.jobDescriptionId,
+    candidateId: params.result.candidateId,
+    resumeId: params.result.resumeId,
+    source: params.result.source,
+    tags: params.result.tags,
+    scoreDetail: params.result.scoreDetail,
+    finalScore: params.result.finalScore,
+    rank: params.result.rank,
+    decisionAction: params.result.decisionAction,
+    decisionPriority: params.result.decisionPriority,
+    decisionReason: params.result.decisionReason,
+    actionPlan: params.actionPlan,
+    actionStatus: 'failed',
+    interviewStage: 'contacted',
+    notes: params.result.notes,
+  });
+}
+
 async function executePlannedActionsForRun(params: {
   dependencies: ScreeningRunnerDependencies;
   userId: string;
   runId: string;
   jobDescriptionId: string;
-  getAdapterAfterClaim: () => Promise<CandidateSourceAdapter>;
+  executeContactAndCollect: (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ) => Promise<ActionExecutionResult>;
+  executeContact?: (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ) => Promise<ActionExecutionResult>;
+  executeCollect: CandidateSourceAdapter['collectCandidate'];
   request: ExecuteActionsRequest;
   stats: ScreeningRunStats;
 }): Promise<void> {
@@ -1824,14 +2266,20 @@ async function executePlannedActionsForRun(params: {
   });
 
   for (const result of results) {
+    if (!result.actionPlan) {
+      continue;
+    }
+
+    const isRetryingCollect =
+      result.actionPlan.action === 'chat' && result.actionStatus === 'failed';
     if (
+      !isRetryingCollect &&
       !shouldExecuteAction({
         result,
         chatCount,
         collectCount,
         request: params.request,
-      }) ||
-      !result.actionPlan
+      })
     ) {
       continue;
     }
@@ -1843,6 +2291,62 @@ async function executePlannedActionsForRun(params: {
     });
     if (!detail) continue;
 
+    const pairedCollectActionLog =
+      result.actionPlan.action === 'chat'
+        ? getPlannedActionLog(detail, 'collect', params.runId)
+        : null;
+    if (
+      !isRetryingCollect &&
+      pairedCollectActionLog &&
+      collectCount >= params.request.maxCollectActions
+    ) {
+      continue;
+    }
+
+    if (isRetryingCollect) {
+      const chatActionLog = getActionLog(detail, 'chat', params.runId);
+      const collectActionLog = getActionLog(detail, 'collect', params.runId);
+      if (
+        chatActionLog?.status !== 'success' ||
+        collectActionLog?.status !== 'failed' ||
+        collectCount >= params.request.maxCollectActions
+      ) {
+        continue;
+      }
+      const claimedCollectLog = await params.dependencies.repo.claimRetryableCollectActionLog({
+        userId: params.userId,
+        id: collectActionLog.id,
+      });
+      if (!claimedCollectLog) continue;
+
+      try {
+        const executionResult = await params.executeCollect(createStoredCandidateRef(result));
+        await persistCollectRetryExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          collectActionLog: claimedCollectLog,
+          executionResult,
+          stats: params.stats,
+        });
+        collectCount += 1;
+      } catch (error) {
+        await persistCollectRetryExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          collectActionLog: claimedCollectLog,
+          executionResult: { success: false, error: getErrorMessage(error) },
+          stats: params.stats,
+        });
+      }
+      continue;
+    }
+
     const actionLog = getPlannedActionLog(detail, result.actionPlan.action, params.runId);
     if (!actionLog) continue;
 
@@ -1853,7 +2357,6 @@ async function executePlannedActionsForRun(params: {
     if (!claimedActionLog) continue;
 
     try {
-      const adapter = await params.getAdapterAfterClaim();
       const storedCandidate = createStoredCandidateRef(result);
       await recordRunEvent({
         dependencies: params.dependencies,
@@ -1871,20 +2374,41 @@ async function executePlannedActionsForRun(params: {
         },
       });
       const executionResult =
-        result.actionPlan.action === 'chat'
-          ? await adapter.chatCandidate(storedCandidate, result.actionPlan)
-          : await adapter.collectCandidate(storedCandidate);
+        result.actionPlan.action === 'chat' && pairedCollectActionLog
+          ? await params.executeContactAndCollect(storedCandidate, result.actionPlan)
+          : result.actionPlan.action === 'chat' && params.executeContact
+            ? await params.executeContact(storedCandidate, result.actionPlan)
+            : result.actionPlan.action === 'chat'
+              ? {
+                  success: false,
+                  error: 'paired collect action log is required for browser workflow chat',
+                }
+              : await params.executeCollect(storedCandidate);
 
-      await persistExecutionResult({
-        dependencies: params.dependencies,
-        userId: params.userId,
-        runId: params.runId,
-        result,
-        actionPlan: result.actionPlan,
-        actionLog: claimedActionLog,
-        executionResult,
-        stats: params.stats,
-      });
+      if (result.actionPlan.action === 'chat' && pairedCollectActionLog) {
+        await persistContactAndCollectExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          chatActionLog: claimedActionLog,
+          collectActionLog: pairedCollectActionLog,
+          executionResult,
+          stats: params.stats,
+        });
+      } else {
+        await persistExecutionResult({
+          dependencies: params.dependencies,
+          userId: params.userId,
+          runId: params.runId,
+          result,
+          actionPlan: result.actionPlan,
+          actionLog: claimedActionLog,
+          executionResult,
+          stats: params.stats,
+        });
+      }
       await recordRunEvent({
         dependencies: params.dependencies,
         userId: params.userId,
@@ -1935,6 +2459,7 @@ async function executePlannedActionsForRun(params: {
 
     if (result.actionPlan.action === 'chat') {
       chatCount += 1;
+      if (pairedCollectActionLog) collectCount += 1;
     } else {
       collectCount += 1;
     }
@@ -1956,8 +2481,9 @@ export async function executeScreeningRunActions(params: {
   const currentRun = run;
   const stats = currentRun.stats ? copyStats(currentRun.stats) : createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
+  let workflowSession: CandidateScreeningWorkflowSession | null = null;
 
-  async function getAdapterAfterClaim(): Promise<CandidateSourceAdapter> {
+  async function getLegacyAdapterAfterClaim(): Promise<CandidateSourceAdapter> {
     if (adapter) {
       return adapter;
     }
@@ -1975,6 +2501,89 @@ export async function executeScreeningRunActions(params: {
     return adapter;
   }
 
+  async function getWorkflowSessionAfterClaim(): Promise<CandidateScreeningWorkflowSession> {
+    if (workflowSession) {
+      return workflowSession;
+    }
+    if (currentRun.skillId === null) {
+      throw new Error('stored workflow skill id is required for workflow execution');
+    }
+
+    const nextAdapter = dependencies.createAdapter(currentRun.platform, {
+      userId: params.userId,
+    });
+    const nextWorkflowSession = dependencies.createWorkflowSession({
+      adapter: nextAdapter,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: currentRun.jobDescriptionId,
+      platform: currentRun.platform,
+      repo: dependencies.repo,
+    });
+    try {
+      await nextWorkflowSession.loadExact({
+        skillId: currentRun.skillId,
+        stage: 'executing_actions',
+      });
+    } catch (error) {
+      await closeAdapterSafely(nextAdapter);
+      throw error;
+    }
+    adapter = nextAdapter;
+    workflowSession = nextWorkflowSession;
+    return workflowSession;
+  }
+
+  const executeContactAndCollect = async (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ): Promise<ActionExecutionResult> => {
+    if (currentRun.skillId === null) {
+      const legacyAdapter = await getLegacyAdapterAfterClaim();
+      const contact = await legacyAdapter.chatCandidate(candidate, actionPlan);
+      if (!contact.success) {
+        return {
+          ...contact,
+          browserTrace: { contact: 'failed', collect: 'not_attempted' },
+        };
+      }
+      const collect = await legacyAdapter.collectCandidate(candidate);
+      return {
+        success: collect.success,
+        error: collect.error,
+        browserTrace: {
+          contact: 'success',
+          collect: collect.success ? 'success' : 'failed',
+        },
+      };
+    }
+    const session = await getWorkflowSessionAfterClaim();
+    return session.contactAndCollectCandidate(candidate, actionPlan);
+  };
+
+  const executeContact = async (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ): Promise<ActionExecutionResult> => {
+    if (currentRun.skillId !== null) {
+      return {
+        success: false,
+        error: 'paired collect action log is required for browser workflow chat',
+      };
+    }
+    const legacyAdapter = await getLegacyAdapterAfterClaim();
+    return legacyAdapter.chatCandidate(candidate, actionPlan);
+  };
+
+  const executeCollect: CandidateSourceAdapter['collectCandidate'] = async (candidate) => {
+    if (currentRun.skillId === null) {
+      const legacyAdapter = await getLegacyAdapterAfterClaim();
+      return legacyAdapter.collectCandidate(candidate);
+    }
+    const session = await getWorkflowSessionAfterClaim();
+    return session.collectCandidate(candidate);
+  };
+
   try {
     await dependencies.repo.updateRun({
       userId: params.userId,
@@ -1991,7 +2600,9 @@ export async function executeScreeningRunActions(params: {
       userId: params.userId,
       runId: params.runId,
       jobDescriptionId: currentRun.jobDescriptionId,
-      getAdapterAfterClaim,
+      executeContactAndCollect,
+      executeContact,
+      executeCollect,
       request: params.request,
       stats,
     });
@@ -2003,6 +2614,7 @@ export async function executeScreeningRunActions(params: {
       currentStage: 'finalizing',
       errorMessage: null,
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(stats),
     });
   } catch (error) {
@@ -2013,6 +2625,7 @@ export async function executeScreeningRunActions(params: {
       status: 'failed',
       errorMessage: getErrorMessage(error),
       finishedAt: new Date(),
+      currentWorkflowStep: null,
       stats: copyStats(stats),
     });
   } finally {
@@ -2059,18 +2672,107 @@ export async function executeSingleCandidateAction(params: {
   if (!claimedActionLog) {
     throw new Error('candidate planned chat action is already running or finished');
   }
+  const collectActionLog = getPlannedActionLog(detail, 'collect', params.runId);
 
   const stats = createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
   try {
-    adapter = dependencies.createAdapter(run.platform, {
+    if (run.skillId !== null && !collectActionLog) {
+      const errorMessage = 'paired collect action log is required for browser workflow chat';
+      await markExecutionFailed({
+        dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        result: detail,
+        actionPlan,
+        actionLog: claimedActionLog,
+        errorMessage,
+        stats,
+      });
+      return {
+        status: 'failed',
+        candidateId: params.candidateId,
+        candidateName: detail.candidate.displayName,
+        detail: errorMessage,
+        errorMessage,
+      };
+    }
+
+    const nextAdapter = dependencies.createAdapter(run.platform, {
       userId: params.userId,
     });
-    await adapter.loginIfNeeded();
-    const executionResult = await adapter.chatCandidate(
-      createStoredCandidateRef(detail),
-      actionPlan,
-    );
+    adapter = nextAdapter;
+    const storedCandidate = createStoredCandidateRef(detail);
+    let executionResult: ActionExecutionResult;
+    if (run.skillId === null) {
+      await nextAdapter.loginIfNeeded();
+      const contact = await nextAdapter.chatCandidate(storedCandidate, actionPlan);
+      if (!collectActionLog) {
+        executionResult = contact;
+      } else if (!contact.success) {
+        executionResult = {
+          ...contact,
+          browserTrace: { contact: 'failed', collect: 'not_attempted' },
+        };
+      } else {
+        const collect = await nextAdapter.collectCandidate(storedCandidate);
+        executionResult = {
+          success: collect.success,
+          error: collect.error,
+          browserTrace: {
+            contact: 'success',
+            collect: collect.success ? 'success' : 'failed',
+          },
+        };
+      }
+    } else {
+      const workflowSession = dependencies.createWorkflowSession({
+        adapter: nextAdapter,
+        userId: params.userId,
+        runId: params.runId,
+        jobDescriptionId: params.jobDescriptionId,
+        platform: run.platform,
+        repo: dependencies.repo,
+      });
+      await workflowSession.loadExact({
+        skillId: run.skillId,
+        stage: 'executing_actions',
+      });
+      executionResult = await workflowSession.contactAndCollectCandidate(
+        storedCandidate,
+        actionPlan,
+      );
+    }
+
+    if (collectActionLog) {
+      await persistContactAndCollectExecutionResult({
+        dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        result: detail,
+        actionPlan,
+        chatActionLog: claimedActionLog,
+        collectActionLog,
+        executionResult,
+        stats,
+      });
+      if (!executionResult.success) {
+        return {
+          status: 'failed',
+          candidateId: params.candidateId,
+          candidateName: detail.candidate.displayName,
+          detail: executionResult.error ?? '单点沟通或收藏失败',
+          errorMessage: executionResult.error ?? 'action execution failed',
+        };
+      }
+      return {
+        status: 'success',
+        candidateId: params.candidateId,
+        candidateName: detail.candidate.displayName,
+        detail: '已发送单点沟通消息并收藏候选人',
+        errorMessage: null,
+      };
+    }
 
     if (!executionResult.success) {
       await markExecutionFailed({
@@ -2112,6 +2814,13 @@ export async function executeSingleCandidateAction(params: {
     };
   } catch (error) {
     const errorMessage = getErrorMessage(error);
+    await dependencies.repo
+      .updateRun({
+        userId: params.userId,
+        runId: params.runId,
+        currentWorkflowStep: null,
+      })
+      .catch(() => undefined);
     await markExecutionFailed({
       dependencies,
       userId: params.userId,

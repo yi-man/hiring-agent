@@ -37,6 +37,8 @@ type CandidateScreeningRunRecord = {
   mode: string;
   status: string;
   currentStage: string | null;
+  skillId: string | null;
+  currentWorkflowStep: string | null;
   searchPlan: unknown | null;
   evaluationSchema: unknown | null;
   stats: unknown | null;
@@ -193,6 +195,9 @@ export type CandidateScreeningRunDto = {
   mode: CandidateScreeningMode;
   status: CandidateScreeningRunStatus;
   currentStage: CandidateScreeningRunStage | null;
+  skillId: string | null;
+  workflow: CandidateScreeningWorkflowDto | null;
+  currentWorkflowStep: string | null;
   searchPlan: SearchPlan | null;
   evaluationSchema: EvaluationSchema | null;
   stats: ScreeningRunStats | null;
@@ -201,6 +206,11 @@ export type CandidateScreeningRunDto = {
   finishedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CandidateScreeningWorkflowDto = {
+  name: string;
+  version: number;
 };
 
 export type CandidateScreeningRunEventDto = {
@@ -396,6 +406,8 @@ export type CreateRunParams = {
   mode: CandidateScreeningMode;
   status?: CandidateScreeningRunStatus;
   currentStage?: CandidateScreeningRunStage | null;
+  skillId?: string | null;
+  currentWorkflowStep?: string | null;
   searchPlan?: SearchPlan | null;
   evaluationSchema?: EvaluationSchema | null;
   stats?: ScreeningRunStats | null;
@@ -410,6 +422,8 @@ export type UpdateRunParams = {
   jobDescriptionId?: string;
   status?: CandidateScreeningRunStatus;
   currentStage?: CandidateScreeningRunStage | null;
+  skillId?: string | null;
+  currentWorkflowStep?: string | null;
   searchPlan?: SearchPlan | null;
   evaluationSchema?: EvaluationSchema | null;
   stats?: ScreeningRunStats | null;
@@ -612,7 +626,10 @@ function clampEventLimit(value: number | undefined): number {
   return Math.max(1, Math.min(MAX_EVENT_LIMIT, Math.trunc(value)));
 }
 
-function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
+function mapRun(
+  row: CandidateScreeningRunRecord,
+  workflow: CandidateScreeningWorkflowDto | null = null,
+): CandidateScreeningRunDto {
   return {
     id: row.id,
     userId: row.userId,
@@ -621,6 +638,9 @@ function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
     mode: row.mode as CandidateScreeningMode,
     status: row.status as CandidateScreeningRunStatus,
     currentStage: row.currentStage as CandidateScreeningRunStage | null,
+    skillId: row.skillId,
+    workflow,
+    currentWorkflowStep: row.currentWorkflowStep,
     searchPlan: row.searchPlan ? (row.searchPlan as SearchPlan) : null,
     evaluationSchema: row.evaluationSchema ? (row.evaluationSchema as EvaluationSchema) : null,
     stats: row.stats ? (row.stats as ScreeningRunStats) : null,
@@ -630,6 +650,47 @@ function mapRun(row: CandidateScreeningRunRecord): CandidateScreeningRunDto {
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
   };
+}
+
+async function hydrateRunWorkflow(
+  run: CandidateScreeningRunDto,
+): Promise<CandidateScreeningRunDto> {
+  if (!run.skillId) {
+    return run;
+  }
+
+  const workflow = await prisma.publishSkill.findUnique({
+    where: { id: run.skillId },
+    select: { name: true, version: true },
+  });
+
+  return {
+    ...run,
+    workflow: workflow ? { name: workflow.name, version: workflow.version } : null,
+  };
+}
+
+async function hydrateRunWorkflows(
+  runs: CandidateScreeningRunDto[],
+): Promise<CandidateScreeningRunDto[]> {
+  const skillIds = Array.from(
+    new Set(
+      runs.map((run) => run.skillId).filter((skillId): skillId is string => Boolean(skillId)),
+    ),
+  );
+  if (skillIds.length === 0) return runs;
+
+  const workflows = await prisma.publishSkill.findMany({
+    where: { id: { in: skillIds } },
+    select: { id: true, name: true, version: true },
+  });
+  const workflowById = new Map(
+    workflows.map((workflow) => [workflow.id, { name: workflow.name, version: workflow.version }]),
+  );
+  return runs.map((run) => ({
+    ...run,
+    workflow: run.skillId ? (workflowById.get(run.skillId) ?? null) : null,
+  }));
 }
 
 function mapRunEvent(row: CandidateScreeningRunEventRecord): CandidateScreeningRunEventDto {
@@ -886,40 +947,46 @@ function isInterviewingCandidate(row: CandidateScreeningResultDto): boolean {
 export async function createCandidateScreeningRun(
   params: CreateRunParams,
 ): Promise<CandidateScreeningRunDto> {
+  const data: Prisma.CandidateScreeningRunUncheckedCreateInput = {
+    userId: params.userId,
+    jobDescriptionId: params.jobDescriptionId,
+    platform: params.platform,
+    mode: params.mode,
+    status: params.status ?? 'pending',
+    currentStage: params.currentStage ?? null,
+    searchPlan:
+      params.searchPlan === undefined ? Prisma.JsonNull : toNullableJson(params.searchPlan),
+    evaluationSchema:
+      params.evaluationSchema === undefined
+        ? Prisma.JsonNull
+        : toNullableJson(params.evaluationSchema),
+    stats: params.stats === undefined ? Prisma.JsonNull : toNullableJson(params.stats),
+    errorMessage: params.errorMessage ?? null,
+    startedAt: params.startedAt ?? null,
+    finishedAt: params.finishedAt ?? null,
+  };
+  if (params.skillId !== undefined) data.skillId = params.skillId;
+  if (params.currentWorkflowStep !== undefined) {
+    data.currentWorkflowStep = params.currentWorkflowStep;
+  }
+
   const row = await prisma.candidateScreeningRun.create({
-    data: {
-      userId: params.userId,
-      jobDescriptionId: params.jobDescriptionId,
-      platform: params.platform,
-      mode: params.mode,
-      status: params.status ?? 'pending',
-      currentStage: params.currentStage ?? null,
-      searchPlan:
-        params.searchPlan === undefined ? Prisma.JsonNull : toNullableJson(params.searchPlan),
-      evaluationSchema:
-        params.evaluationSchema === undefined
-          ? Prisma.JsonNull
-          : toNullableJson(params.evaluationSchema),
-      stats: params.stats === undefined ? Prisma.JsonNull : toNullableJson(params.stats),
-      errorMessage: params.errorMessage ?? null,
-      startedAt: params.startedAt ?? null,
-      finishedAt: params.finishedAt ?? null,
-    },
+    data,
   });
-  return mapRun(row);
+  return hydrateRunWorkflow(mapRun(row));
 }
 
 export async function listCandidateScreeningRuns(params: {
   userId: string;
   jobDescriptionId: string;
-  limit: number;
+  limit?: number;
 }): Promise<CandidateScreeningRunDto[]> {
   const rows = await prisma.candidateScreeningRun.findMany({
     where: { userId: params.userId, jobDescriptionId: params.jobDescriptionId },
     orderBy: { createdAt: 'desc' },
-    take: params.limit,
+    ...(params.limit === undefined ? {} : { take: params.limit }),
   });
-  return rows.map(mapRun);
+  return hydrateRunWorkflows(rows.map((row) => mapRun(row)));
 }
 
 export async function getCandidateScreeningRun(params: {
@@ -929,7 +996,7 @@ export async function getCandidateScreeningRun(params: {
   const row = await prisma.candidateScreeningRun.findFirst({
     where: { id: params.runId, userId: params.userId },
   });
-  return row ? mapRun(row) : null;
+  return row ? hydrateRunWorkflow(mapRun(row)) : null;
 }
 
 export async function updateCandidateScreeningRun(
@@ -938,6 +1005,10 @@ export async function updateCandidateScreeningRun(
   const data: Prisma.CandidateScreeningRunUpdateManyMutationInput = {};
   if (params.status !== undefined) data.status = params.status;
   if (params.currentStage !== undefined) data.currentStage = params.currentStage;
+  if (params.skillId !== undefined) data.skillId = params.skillId;
+  if (params.currentWorkflowStep !== undefined) {
+    data.currentWorkflowStep = params.currentWorkflowStep;
+  }
   if (params.searchPlan !== undefined) data.searchPlan = toNullableJson(params.searchPlan);
   if (params.evaluationSchema !== undefined) {
     data.evaluationSchema = toNullableJson(params.evaluationSchema);
@@ -1669,6 +1740,28 @@ export async function claimCandidateActionLog(params: {
     return null;
   }
 
+  const row = await prisma.candidateActionLog.findFirst({
+    where: { id: params.id, userId: params.userId },
+  });
+  return row ? mapActionLog(row) : null;
+}
+
+export async function claimRetryableCollectActionLog(params: {
+  userId: string;
+  id: string;
+}): Promise<CandidateActionLogDto | null> {
+  const where = { id: params.id, userId: params.userId, action: 'collect', status: 'failed' };
+  const result = await prisma.candidateActionLog.updateMany({
+    where,
+    data: {
+      status: 'running',
+      browserTrace: Prisma.JsonNull,
+      errorMessage: null,
+    },
+  });
+  if (result.count === 0) {
+    return null;
+  }
   const row = await prisma.candidateActionLog.findFirst({
     where: { id: params.id, userId: params.userId },
   });

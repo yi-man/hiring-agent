@@ -104,4 +104,31 @@ describe('Workflow detail page', () => {
     );
     expect(screen.getByText(/Input Schema/i)).toBeInTheDocument();
   });
+
+  it('returns to the originating screening page and preserves it across version navigation', async () => {
+    getServerAuthSessionMock.mockResolvedValueOnce({
+      user: { id: 'u1', username: 'alice', name: 'Alice', email: null, image: null },
+    });
+    getPublishedWorkflowDetailMock.mockResolvedValueOnce({
+      workflow,
+      versions: [
+        workflow,
+        { ...workflow, id: 'boss-like-publish-jd-v2', version: 2, isActive: false },
+      ],
+    });
+    const returnTo = '/jd-generator/jd-1/screening-runs/run-1?returnTo=%2Fjd-generator%2Fjd-1';
+
+    render(
+      await WorkflowDetailPage({
+        params: Promise.resolve({ id: 'boss-like-publish-jd-v3' }),
+        searchParams: Promise.resolve({ returnTo, returnLabel: '返回筛选记录' }),
+      }),
+    );
+
+    expect(screen.getByRole('link', { name: '返回筛选记录' })).toHaveAttribute('href', returnTo);
+    expect(screen.getByRole('link', { name: /v2/i })).toHaveAttribute(
+      'href',
+      `/workflows/boss-like-publish-jd-v2?returnTo=${encodeURIComponent(returnTo)}&returnLabel=${encodeURIComponent('返回筛选记录')}`,
+    );
+  });
 });

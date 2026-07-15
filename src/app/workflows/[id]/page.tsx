@@ -17,9 +17,16 @@ import { getPublishedWorkflowDetail } from '@/lib/workflows/published-workflows'
 import type { PublishedWorkflowSummary } from '@/lib/workflows/published-workflows';
 import { buildWorkflowFlow, type WorkflowFlow } from '@/lib/workflows/flow';
 import type { PublishStep } from '@/lib/jd-publishing/types';
+import {
+  getOptionalReturnTarget,
+  getReturnTarget,
+  withReturnTarget,
+  type ReturnTarget,
+} from '@/lib/navigation/return-url';
 
 type WorkflowDetailPageProps = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export const metadata: Metadata = {
@@ -171,9 +178,11 @@ function StepTimeline({ steps }: { steps: PublishStep[] }) {
 
 function VersionHistory({
   activeId,
+  returnTarget,
   versions,
 }: {
   activeId: string;
+  returnTarget: ReturnTarget | null;
   versions: PublishedWorkflowSummary[];
 }) {
   return (
@@ -189,7 +198,7 @@ function VersionHistory({
             return (
               <Link
                 key={version.id}
-                href={`/workflows/${version.id}`}
+                href={withReturnTarget(`/workflows/${version.id}`, returnTarget)}
                 className={`block rounded-lg border px-3 py-3 text-sm transition-colors ${
                   isCurrent
                     ? 'border-primary/35 bg-primary/10 text-primary'
@@ -220,7 +229,22 @@ function VersionHistory({
   );
 }
 
-export default async function WorkflowDetailPage({ params }: WorkflowDetailPageProps) {
+function toUrlSearchParams(values: Record<string, string | string[] | undefined>): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (Array.isArray(value)) {
+      for (const item of value) params.append(key, item);
+    } else if (value !== undefined) {
+      params.set(key, value);
+    }
+  }
+  return params;
+}
+
+export default async function WorkflowDetailPage({
+  params,
+  searchParams,
+}: WorkflowDetailPageProps) {
   const session = await getServerAuthSession();
 
   if (!session?.user) {
@@ -238,16 +262,22 @@ export default async function WorkflowDetailPage({ params }: WorkflowDetailPageP
   const { workflow, versions } = detail;
   const flow = buildWorkflowFlow(workflow.steps);
   const usageCount = readNumberMeta(workflow, 'usage_count');
+  const resolvedSearchParams = toUrlSearchParams((await searchParams) ?? {});
+  const optionalReturnTarget = getOptionalReturnTarget(resolvedSearchParams);
+  const returnTarget = getReturnTarget(resolvedSearchParams, {
+    href: '/workflows',
+    label: 'Workflow 库',
+  });
 
   return (
     <main className="bg-background text-foreground min-h-screen">
       <div className="container mx-auto space-y-5 px-4 py-6">
         <Link
-          href="/workflows"
+          href={returnTarget.href}
           className="text-muted-foreground hover:text-primary inline-flex items-center gap-2 text-sm font-medium"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          Workflow 库
+          {returnTarget.label}
         </Link>
 
         <div className="border-border flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-start lg:justify-between">
@@ -335,7 +365,11 @@ export default async function WorkflowDetailPage({ params }: WorkflowDetailPageP
             </section>
           </div>
 
-          <VersionHistory activeId={workflow.id} versions={versions} />
+          <VersionHistory
+            activeId={workflow.id}
+            returnTarget={optionalReturnTarget}
+            versions={versions}
+          />
         </div>
       </div>
     </main>

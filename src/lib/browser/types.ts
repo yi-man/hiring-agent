@@ -4,6 +4,7 @@ export type BrowserAction =
   | 'click'
   | 'wait_for_url'
   | 'wait_for_text'
+  | 'wait_for_snapshot_change'
   | 'add_keywords';
 
 export type TargetDescriptor = {
@@ -76,6 +77,7 @@ export type BrowserCommandAction =
   | 'fill_selector'
   | 'snapshot'
   | 'snapshot_structured'
+  | 'wait_for_snapshot_change'
   | 'resolve_target';
 
 export type BrowserCommand = {
@@ -140,12 +142,17 @@ export type BrowserExecutor = {
   waitForUrl(url: string): Promise<BrowserStepResult>;
   check(check: BrowserStepCheck): Promise<boolean>;
   waitForText?(text: string): Promise<BrowserStepResult>;
+  waitForTarget?(target: BrowserTargetInput): Promise<BrowserStepResult>;
   addKeywords?(
     target: BrowserTargetInput,
     values: string[],
     submitTarget: BrowserTargetInput,
   ): Promise<BrowserStepResult>;
   snapshot?(): Promise<string>;
+  waitForSnapshotChange?(
+    previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult>;
   snapshotStructured?(): Promise<StructuredDomSnapshot>;
   resolveTarget?(
     target: BrowserTargetInput,

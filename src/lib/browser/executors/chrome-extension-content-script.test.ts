@@ -54,6 +54,27 @@ afterAll(async () => {
 });
 
 describe('Chrome extension content script resolver', () => {
+  it('waits for a DOM snapshot or URL change', async () => {
+    await withContentScriptPage('<main><div id="results">加载中</div></main>', async (page) => {
+      const previousSnapshot = await page.evaluate('document.documentElement.outerHTML');
+      await page.evaluate(
+        "setTimeout(() => { document.querySelector('#results').textContent = '候选人已加载'; }, 100)",
+      );
+      const command: BrowserCommand = {
+        id: 'cmd-wait-snapshot',
+        taskId: 'task-1',
+        stepId: 'search_candidates',
+        action: 'wait_for_snapshot_change',
+        params: { previousSnapshot, previousUrl: page.url() },
+        timeoutMs: 1_000,
+      };
+
+      await expect(runCommand(page, command)).resolves.toEqual(
+        expect.objectContaining({ commandId: command.id, success: true }),
+      );
+    });
+  });
+
   it('resolves exact field labels with required markers', async () => {
     await withContentScriptPage(
       `

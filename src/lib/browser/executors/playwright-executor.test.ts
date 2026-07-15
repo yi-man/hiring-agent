@@ -164,6 +164,76 @@ describe('PlaywrightBrowserExecutor', () => {
     }
   });
 
+  it('waits for an actual DOM change from the supplied raw snapshot', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <div id="root">加载中</div>
+            <script>
+              setTimeout(() => {
+                document.querySelector('#root').textContent = '候选人列表已更新';
+              }, 150);
+            </script>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const snapshot = await executor.snapshot();
+      const startedAt = Date.now();
+      const result = await executor.waitForSnapshotChange(snapshot);
+
+      expect(result).toEqual(expect.objectContaining({ success: true }));
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(75);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  it('waits for an exact structured detail target without matching duplicate detail text', async () => {
+    const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
+    try {
+      const target: TargetDescriptor = {
+        kind: 'container',
+        name: '候选人详情',
+        exact: true,
+        stableAttrs: { testId: 'candidate-2-detail' },
+        scope: { kind: 'section', name: '目标候选人' },
+      };
+      const html = encodeURIComponent(`
+        <!doctype html>
+        <html>
+          <body>
+            <section aria-label="其他候选人">
+              <div data-testid="candidate-1-detail">候选人详情</div>
+            </section>
+            <section aria-label="目标候选人">
+              <div data-testid="candidate-2-detail">候选人详情</div>
+            </section>
+          </body>
+        </html>
+      `);
+
+      await executor.navigate(`data:text/html;charset=utf-8,${html}`);
+      const result = await executor.waitForTarget?.(target);
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          match: expect.objectContaining({
+            status: 'unique',
+            chosen: expect.objectContaining({ testId: 'candidate-2-detail' }),
+          }),
+        }),
+      );
+    } finally {
+      await executor.close();
+    }
+  });
+
   it('clicks the matching button instead of earlier text with the same label fragment', async () => {
     const executor = new PlaywrightBrowserExecutor({ timeoutMs: 1_000, headless: true });
     try {

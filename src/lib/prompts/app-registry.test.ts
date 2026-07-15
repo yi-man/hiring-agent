@@ -1,6 +1,12 @@
 import { getManagedPrompt, listManagedPrompts, renderManagedPrompt } from './app-registry';
-import { CANDIDATE_SCREENING_EVALUATION_PROMPT_ID } from '@/lib/candidate-screening/prompts';
-import { CANDIDATE_EVALUATION_PROMPT_VERSION } from '@/lib/candidate-screening/constants';
+import {
+  CANDIDATE_SCREENING_EVALUATION_PROMPT_ID,
+  CANDIDATE_SCREENING_WORKFLOW_REPAIR_PROMPT_ID,
+} from '@/lib/candidate-screening/prompts';
+import {
+  CANDIDATE_EVALUATION_PROMPT_VERSION,
+  CANDIDATE_WORKFLOW_REPAIR_PROMPT_VERSION,
+} from '@/lib/candidate-screening/constants';
 import {
   JD_EVALUATE_PROMPT_ID,
   JD_GENERATE_PROMPT_ID,
@@ -26,7 +32,33 @@ describe('managed prompt registry', () => {
           version: CANDIDATE_EVALUATION_PROMPT_VERSION,
           owner: 'candidate-screening',
         }),
+        expect.objectContaining({
+          id: CANDIDATE_SCREENING_WORKFLOW_REPAIR_PROMPT_ID,
+          version: CANDIDATE_WORKFLOW_REPAIR_PROMPT_VERSION,
+          owner: 'candidate-screening',
+          options: { temperature: 0, responseFormat: 'json_object' },
+        }),
       ]),
+    );
+  });
+
+  it('renders the workflow repair prompt with its constrained target contract', async () => {
+    const rendered = await renderManagedPrompt(CANDIDATE_SCREENING_WORKFLOW_REPAIR_PROMPT_ID, {
+      payload: JSON.stringify({ failedStepId: 'search_submit' }),
+    });
+
+    expect(rendered.definition.version).toBe(CANDIDATE_WORKFLOW_REPAIR_PROMPT_VERSION);
+    expect(rendered.messages[0]).toEqual(
+      expect.objectContaining({
+        role: 'system',
+        content: expect.stringContaining('不得输出 CSS/XPath'),
+      }),
+    );
+    expect(rendered.messages[1]).toEqual(
+      expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('search_submit'),
+      }),
     );
   });
 

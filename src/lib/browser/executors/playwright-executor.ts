@@ -29,6 +29,10 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function normalizeSnapshotForComparison(snapshot: string): string {
+  return snapshot.replace(/^\s*<!doctype[^>]*>\s*/i, '').slice(0, DOM_SNAPSHOT_MAX_CHARS);
+}
+
 async function waitForAnyVisibleText(
   page: Page,
   text: string,
@@ -82,10 +86,10 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
 
   private async domSnapshot(): Promise<string> {
     const page = await this.getPage();
-    return page
-      .content()
-      .then((html) => html.slice(0, DOM_SNAPSHOT_MAX_CHARS))
+    const snapshot = await page
+      .evaluate(`document.documentElement.outerHTML.slice(0, ${DOM_SNAPSHOT_MAX_CHARS})`)
       .catch(() => '');
+    return typeof snapshot === 'string' ? snapshot : '';
   }
 
   private async structuredDomSnapshot(): Promise<StructuredDomSnapshot> {
@@ -217,10 +221,19 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
   }
 
   async waitForText(text: string): Promise<BrowserStepResult> {
+    return this.wrap(async () => {
+      const page = await this.getPage();
+      if (!(await waitForAnyVisibleText(page, text, this.timeoutMs))) {
+        throw new Error(`wait_for_text timed out: ${text}`);
+      }
+    });
+  }
+
+  async waitForTarget(target: BrowserTargetInput): Promise<BrowserStepResult> {
     let match: LocatorMatchReport | undefined;
     try {
       const resolved = await this.resolveForAction(
-        { kind: 'text', name: text, exact: false },
+        typeof target === 'string' ? { kind: 'text', name: target, exact: false } : target,
         { action: 'wait_for_text' },
       );
       match = resolved.report;
@@ -236,6 +249,27 @@ export class PlaywrightBrowserExecutor implements BrowserExecutor {
 
   async snapshot(): Promise<string> {
     return this.domSnapshot();
+  }
+
+  async waitForSnapshotChange(
+    previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult> {
+    return this.wrap(async () => {
+      const page = await this.getPage();
+      const expectedSnapshot = normalizeSnapshotForComparison(previousSnapshot);
+      const deadline = Date.now() + this.timeoutMs;
+      do {
+        const currentSnapshot = await page.evaluate(
+          `document.documentElement.outerHTML.slice(0, ${DOM_SNAPSHOT_MAX_CHARS})`,
+        );
+        if (currentSnapshot !== expectedSnapshot || (previousUrl && page.url() !== previousUrl)) {
+          return;
+        }
+        await sleep(RESOLVE_POLL_INTERVAL_MS);
+      } while (Date.now() < deadline);
+      throw new Error('browser_snapshot_change_timeout');
+    });
   }
 
   async snapshotStructured(): Promise<StructuredDomSnapshot> {
