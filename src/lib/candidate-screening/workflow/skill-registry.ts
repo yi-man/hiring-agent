@@ -40,6 +40,55 @@ function actionStep(
   );
 }
 
+function conditionStep(
+  skill: PublishSkill,
+  stepId: string,
+): Extract<PublishStep, { type: 'condition' }> | null {
+  return (
+    skill.steps.find(
+      (step): step is Extract<PublishStep, { type: 'condition' }> =>
+        step.id === stepId && step.type === 'condition',
+    ) ?? null
+  );
+}
+
+function hasEndStep(skill: PublishSkill, stepId: string): boolean {
+  return skill.steps.some((step) => step.id === stepId && step.type === 'end');
+}
+
+function hasActionRoute(
+  skill: PublishSkill,
+  stepId: string,
+  action: Extract<PublishStep, { type: 'action' }>['action'],
+  next: string,
+): boolean {
+  const step = actionStep(skill, stepId);
+  return step?.action === action && step.next === next;
+}
+
+function hasTarget(step: Extract<PublishStep, { type: 'action' }> | null): boolean {
+  const target = step?.params.target;
+  return (
+    typeof target === 'string' ||
+    (Boolean(target) &&
+      typeof target === 'object' &&
+      !Array.isArray(target) &&
+      typeof (target as Record<string, unknown>).kind === 'string' &&
+      typeof (target as Record<string, unknown>).name === 'string')
+  );
+}
+
+function hasActionParams(
+  skill: PublishSkill,
+  stepId: string,
+  expected: Record<string, unknown>,
+): boolean {
+  const step = actionStep(skill, stepId);
+  return Boolean(
+    step && Object.entries(expected).every(([key, value]) => step.params[key] === value),
+  );
+}
+
 function hasReadyCheck(
   step: Extract<PublishStep, { type: 'action' }>,
   expected: Record<string, string>,
@@ -74,6 +123,105 @@ export function isCompatibleBossLikeScreeningSkill(skill: PublishSkill): boolean
   const contactSend = actionStep(skill, SCREENING_STEP_IDS.contactSend);
   const contactWait = actionStep(skill, SCREENING_STEP_IDS.contactWaitSuccess);
 
+  const requiredActionRoutes = [
+    [SCREENING_STEP_IDS.searchOpen, 'navigate', SCREENING_STEP_IDS.authRequired],
+    [SCREENING_STEP_IDS.loginFillUsername, 'fill', SCREENING_STEP_IDS.loginFillPassword],
+    [SCREENING_STEP_IDS.loginFillPassword, 'fill', SCREENING_STEP_IDS.loginSubmit],
+    [SCREENING_STEP_IDS.loginSubmit, 'click', SCREENING_STEP_IDS.loginWait],
+    [SCREENING_STEP_IDS.loginWait, 'wait_for_url', SCREENING_STEP_IDS.searchFill],
+    [SCREENING_STEP_IDS.searchFill, 'fill', SCREENING_STEP_IDS.searchSnapshotBeforeSubmit],
+    [SCREENING_STEP_IDS.searchSnapshotBeforeSubmit, 'observe', SCREENING_STEP_IDS.searchSubmit],
+    [SCREENING_STEP_IDS.searchSubmit, 'click', SCREENING_STEP_IDS.searchWait],
+    [SCREENING_STEP_IDS.searchWait, 'wait_for_snapshot_change', SCREENING_STEP_IDS.searchObserve],
+    [SCREENING_STEP_IDS.searchObserve, 'observe', SCREENING_STEP_IDS.searchComplete],
+    [SCREENING_STEP_IDS.detailOpen, 'navigate', SCREENING_STEP_IDS.detailWait],
+    [SCREENING_STEP_IDS.detailWait, 'wait_for_text', SCREENING_STEP_IDS.detailObserve],
+    [SCREENING_STEP_IDS.detailObserve, 'observe', SCREENING_STEP_IDS.detailComplete],
+    [SCREENING_STEP_IDS.contactOpen, 'navigate', SCREENING_STEP_IDS.contactOpenGreeting],
+    [SCREENING_STEP_IDS.contactOpenGreeting, 'click', SCREENING_STEP_IDS.contactFillMessage],
+    [SCREENING_STEP_IDS.contactFillMessage, 'fill', SCREENING_STEP_IDS.contactSend],
+    [SCREENING_STEP_IDS.contactSend, 'click', SCREENING_STEP_IDS.contactWaitSuccess],
+    [SCREENING_STEP_IDS.contactWaitSuccess, 'wait_for_text', SCREENING_STEP_IDS.collectOpen],
+    [SCREENING_STEP_IDS.collectOpen, 'navigate', SCREENING_STEP_IDS.collectClick],
+    [SCREENING_STEP_IDS.collectClick, 'click', SCREENING_STEP_IDS.actionComplete],
+  ] as const;
+  if (
+    !requiredActionRoutes.every(([stepId, action, next]) =>
+      hasActionRoute(skill, stepId, action, next),
+    ) ||
+    ![
+      SCREENING_STEP_IDS.searchComplete,
+      SCREENING_STEP_IDS.detailComplete,
+      SCREENING_STEP_IDS.actionComplete,
+    ].every((stepId) => hasEndStep(skill, stepId))
+  ) {
+    return false;
+  }
+
+  const authRequired = conditionStep(skill, SCREENING_STEP_IDS.authRequired);
+  if (
+    authRequired?.check.type !== 'url_contains' ||
+    authRequired.check.text !== '/login' ||
+    authRequired.ifTrue?.next !== SCREENING_STEP_IDS.loginFillUsername ||
+    authRequired.ifFalse?.next !== SCREENING_STEP_IDS.searchFill
+  ) {
+    return false;
+  }
+
+  const targetStepIds = [
+    SCREENING_STEP_IDS.loginFillUsername,
+    SCREENING_STEP_IDS.loginFillPassword,
+    SCREENING_STEP_IDS.loginSubmit,
+    SCREENING_STEP_IDS.searchFill,
+    SCREENING_STEP_IDS.searchSubmit,
+    SCREENING_STEP_IDS.contactOpenGreeting,
+    SCREENING_STEP_IDS.contactFillMessage,
+    SCREENING_STEP_IDS.contactSend,
+    SCREENING_STEP_IDS.collectClick,
+  ];
+  if (!targetStepIds.every((stepId) => hasTarget(actionStep(skill, stepId)))) return false;
+
+  const requiredInputSchema = ['baseUrl', 'keyword', 'searchUrl', 'profileUrl', 'message'];
+  if (!requiredInputSchema.every((key) => skill.inputSchema[key] === 'string')) return false;
+  if (
+    !hasActionParams(skill, SCREENING_STEP_IDS.searchOpen, {
+      url: '{{input.baseUrl}}/employer/resumes',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.loginFillUsername, {
+      value: '{{credentials.username}}',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.loginFillPassword, {
+      value: '{{credentials.password}}',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.loginWait, {
+      url: '{{input.baseUrl}}/employer/resumes',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.searchFill, { value: '{{input.keyword}}' }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.searchSnapshotBeforeSubmit, {
+      format: 'html',
+      saveAs: 'previousListHtml',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.searchObserve, {
+      format: 'html',
+      saveAs: 'listHtml',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.detailOpen, { url: '{{input.profileUrl}}' }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.detailObserve, {
+      format: 'html',
+      saveAs: 'profileHtml',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.contactOpen, { url: '{{input.profileUrl}}' }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.contactFillMessage, {
+      value: '{{input.message}}',
+    }) ||
+    !hasActionParams(skill, SCREENING_STEP_IDS.collectOpen, { url: '{{input.profileUrl}}' })
+  ) {
+    return false;
+  }
+
+  const detailWaitText = actionStep(skill, SCREENING_STEP_IDS.detailWait)?.params.text;
+  if (typeof detailWaitText !== 'string' || !detailWaitText.trim()) return false;
+
   return Boolean(
     searchFill?.action === 'fill' &&
     searchFill.next === SCREENING_STEP_IDS.searchSnapshotBeforeSubmit &&
@@ -94,7 +242,10 @@ export function isCompatibleBossLikeScreeningSkill(skill: PublishSkill): boolean
     contactSend.next === SCREENING_STEP_IDS.contactWaitSuccess &&
     contactWait?.action === 'wait_for_text' &&
     contactWait.params.text === '消息已发送' &&
-    contactWait.next === SCREENING_STEP_IDS.collectOpen,
+    contactWait.next === SCREENING_STEP_IDS.collectOpen &&
+    actionStep(skill, SCREENING_STEP_IDS.searchObserve)?.params.saveAs === 'listHtml' &&
+    actionStep(skill, SCREENING_STEP_IDS.detailObserve)?.params.saveAs === 'profileHtml' &&
+    actionStep(skill, SCREENING_STEP_IDS.contactFillMessage)?.params.value === '{{input.message}}',
   );
 }
 

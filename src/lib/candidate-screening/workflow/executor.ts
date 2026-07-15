@@ -570,6 +570,7 @@ export function createCandidateScreeningWorkflowSession(
     failure: TargetFailure;
     context: BrowserFailureContext;
     candidateId?: string;
+    profileUrl?: string;
   }): Promise<boolean> {
     const currentSkill = requireSkill();
     const executor = dependencies.adapter.getBrowserExecutor();
@@ -578,24 +579,34 @@ export function createCandidateScreeningWorkflowSession(
 
     try {
       const targets: Partial<BossLikeScreeningTargets> = {};
-      const replacement = repairBossLikeScreeningTargetFromSnapshot({
-        snapshot,
-        failedStepId: params.failure.stepId,
-        targetKey: params.failure.targetKey,
-        failedTarget: params.failure.target,
-      });
-      if (!replacement) return false;
-      targets[params.failure.targetKey] = replacement;
+      let targetsValidated = false;
 
       if (CONTACT_REPAIR_STEP_IDS.has(params.failure.stepId)) {
-        let composerSnapshot = snapshot;
-        if (params.failure.stepId === SCREENING_STEP_IDS.contactOpenGreeting) {
-          const opened = await executor.click(replacement);
-          if (!opened.success) return false;
-          composerSnapshot = await executor.snapshotStructured();
+        let detailSnapshot = snapshot;
+        if (params.failure.stepId !== SCREENING_STEP_IDS.contactOpenGreeting) {
+          if (!params.profileUrl) return false;
+          const navigated = await executor.navigate(params.profileUrl);
+          if (!navigated.success) return false;
+          detailSnapshot = await executor.snapshotStructured();
         }
+
+        const greetingStepId = SCREENING_STEP_IDS.contactOpenGreeting;
+        const greetingTarget = targetForStep(currentSkill, greetingStepId);
+        if (!greetingTarget) return false;
+        const repairedGreeting = repairBossLikeScreeningTargetFromSnapshot({
+          snapshot: detailSnapshot,
+          failedStepId: greetingStepId,
+          targetKey: 'greetButton',
+          failedTarget: greetingTarget,
+        });
+        if (!repairedGreeting) return false;
+        await requireUniqueTarget(executor, repairedGreeting, 'greetButton');
+        targets.greetButton = repairedGreeting;
+
+        const opened = await executor.click(repairedGreeting);
+        if (!opened.success) return false;
+        const composerSnapshot = await executor.snapshotStructured();
         for (const stepId of [
-          SCREENING_STEP_IDS.contactOpenGreeting,
           SCREENING_STEP_IDS.contactFillMessage,
           SCREENING_STEP_IDS.contactSend,
         ]) {
@@ -603,20 +614,32 @@ export function createCandidateScreeningWorkflowSession(
           const failedTarget = targetForStep(currentSkill, stepId);
           if (!targetKey || !failedTarget) return false;
           const repairedTarget = repairBossLikeScreeningTargetFromSnapshot({
-            snapshot:
-              stepId === SCREENING_STEP_IDS.contactOpenGreeting ? snapshot : composerSnapshot,
+            snapshot: composerSnapshot,
             failedStepId: stepId,
             targetKey,
             failedTarget,
           });
           if (!repairedTarget) return false;
+          await requireUniqueTarget(executor, repairedTarget, targetKey);
           targets[targetKey] = repairedTarget;
         }
+        targetsValidated = true;
+      } else {
+        const replacement = repairBossLikeScreeningTargetFromSnapshot({
+          snapshot,
+          failedStepId: params.failure.stepId,
+          targetKey: params.failure.targetKey,
+          failedTarget: params.failure.target,
+        });
+        if (!replacement) return false;
+        targets[params.failure.targetKey] = replacement;
       }
 
-      for (const [targetKey, target] of Object.entries(targets)) {
-        if (!target) return false;
-        await requireUniqueTarget(executor, target, targetKey as keyof BossLikeScreeningTargets);
+      if (!targetsValidated) {
+        for (const [targetKey, target] of Object.entries(targets)) {
+          if (!target) return false;
+          await requireUniqueTarget(executor, target, targetKey as keyof BossLikeScreeningTargets);
+        }
       }
 
       const repairedSteps = repairBossLikeScreeningSteps({
@@ -663,35 +686,46 @@ export function createCandidateScreeningWorkflowSession(
   ): Promise<BrowserWorkflowRunResult> {
     let retry = false;
     let startStepId = params.startStepId;
+    let previousTraceSteps: BrowserWorkflowRunResult['traceSteps'] = [];
+    let previousObservations: BrowserWorkflowRunResult['observations'] = {};
 
     while (true) {
       const run = await runSegmentOnce({ ...params, startStepId }, retry);
-      if (run.status === 'success') return run;
+      const combinedRun: BrowserWorkflowRunResult = {
+        ...run,
+        traceSteps: [...previousTraceSteps, ...run.traceSteps],
+        observations: { ...previousObservations, ...run.observations },
+      };
+      if (run.status === 'success') return combinedRun;
 
       const targetFailure = targetFailureFromRun(run);
       const context = await captureBrowserFailure(run);
       await recordWorkflowFailure({
         segment: { ...params, startStepId },
-        run,
+        run: combinedRun,
         retry,
         targetFailure,
         context,
       });
       if (retry || !targetFailure) {
         await clearCurrentWorkflowStep();
-        return run;
+        return combinedRun;
       }
       if (
         !(await repairTarget({
           failure: targetFailure,
           context,
           candidateId: params.candidate?.candidateId,
+          profileUrl:
+            typeof params.input.profileUrl === 'string' ? params.input.profileUrl : undefined,
         }))
       ) {
         await clearCurrentWorkflowStep();
-        return run;
+        return combinedRun;
       }
 
+      previousTraceSteps = combinedRun.traceSteps;
+      previousObservations = combinedRun.observations;
       retry = true;
       startStepId = CONTACT_REPAIR_STEP_IDS.has(targetFailure.stepId)
         ? SCREENING_STEP_IDS.contactOpen

@@ -360,7 +360,7 @@ test.describe('candidate screening UI', () => {
     }
   });
 
-  test('renders the persisted browser-v2 workflow with primitive observe steps', async ({
+  test('renders every persisted browser-v2 segment with primitive steps', async ({
     context,
     page,
   }, testInfo) => {
@@ -399,6 +399,14 @@ test.describe('candidate screening UI', () => {
             next: 'search_complete',
           },
           { id: 'search_complete', type: 'end' },
+          {
+            id: 'contact_open',
+            type: 'action',
+            action: 'navigate',
+            params: { url: '{{input.profileUrl}}' },
+            next: 'contact_complete',
+          },
+          { id: 'contact_complete', type: 'end' },
         ],
         meta: { dsl_version: 'browser-v2', created_from: 'explore' },
       },
@@ -408,6 +416,7 @@ test.describe('candidate screening UI', () => {
       await page.goto(`/workflows/${workflowId}`);
 
       await expect(page.getByText('search_observe · observe', { exact: true })).toBeVisible();
+      await expect(page.getByText('contact_open · navigate', { exact: true })).toBeVisible();
       await expect(page.getByText('search_candidates', { exact: true })).toHaveCount(0);
       await expect(page.getByText('chat_candidate', { exact: true })).toHaveCount(0);
     } finally {

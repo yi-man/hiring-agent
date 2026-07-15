@@ -414,38 +414,17 @@ async function collectRawCandidates(params: {
   userId: string;
   runId: string;
   jobDescriptionId: string;
-  completedKeywords?: ReadonlySet<string>;
+  completedKeywordCandidates?: ReadonlyMap<string, RawCandidate[]>;
 }): Promise<RawCandidate[]> {
   const rawCandidates: RawCandidate[] = [];
   const seenIdentityHashes = new Set<string>();
 
-  for (const keyword of uniqueSearchValues(
-    params.searchPlan.keywords,
-    params.searchPlan.retrievalQuery,
-  )) {
-    if (params.completedKeywords?.has(keyword)) continue;
-    if (rawCandidates.length >= params.request.maxCandidates) break;
-    const remaining = params.request.maxCandidates - rawCandidates.length;
-    const searched = await params.workflowSession.runSearchKeyword({
-      keyword,
-      maxCandidates: remaining,
-    });
-    await recordRunEvent({
-      dependencies: params.dependencies,
-      userId: params.userId,
-      runId: params.runId,
-      jobDescriptionId: params.jobDescriptionId,
-      stage: 'searching_live',
-      level: 'success',
-      message: 'search_keyword_completed',
-      detail: {
-        keyword,
-        candidateCount: searched.candidates.length,
-        remaining,
-      },
-    });
-
-    for (const listCandidate of searched.candidates) {
+  const observeUniqueCandidates = async (
+    keyword: string,
+    listCandidates: RawCandidate[],
+  ): Promise<RawCandidate[]> => {
+    const checkpointCandidates: RawCandidate[] = [];
+    for (const listCandidate of listCandidates) {
       if (rawCandidates.length >= params.request.maxCandidates) break;
       const identity = createCandidateIdentity({
         sourcePlatform: params.request.platform,
@@ -476,26 +455,88 @@ async function collectRawCandidates(params: {
         continue;
       }
       seenIdentityHashes.add(identity.identityHash);
+      checkpointCandidates.push(listCandidate);
       rawCandidates.push(await params.workflowSession.observeCandidateProfile(listCandidate));
       params.stats.fetched += 1;
     }
+    return checkpointCandidates;
+  };
+
+  for (const keyword of uniqueSearchValues(
+    params.searchPlan.keywords,
+    params.searchPlan.retrievalQuery,
+  )) {
+    if (rawCandidates.length >= params.request.maxCandidates) break;
+    const completedCandidates = params.completedKeywordCandidates?.get(keyword);
+    if (completedCandidates) {
+      await observeUniqueCandidates(keyword, completedCandidates);
+      continue;
+    }
+    const remaining = params.request.maxCandidates - rawCandidates.length;
+    const searched = await params.workflowSession.runSearchKeyword({
+      keyword,
+      maxCandidates: remaining,
+    });
+    const checkpointCandidates = await observeUniqueCandidates(keyword, searched.candidates);
+
+    await recordRunEvent({
+      dependencies: params.dependencies,
+      userId: params.userId,
+      runId: params.runId,
+      jobDescriptionId: params.jobDescriptionId,
+      stage: 'searching_live',
+      level: 'success',
+      message: 'search_keyword_completed',
+      detail: {
+        keyword,
+        candidateCount: searched.candidates.length,
+        remaining,
+        candidates: checkpointCandidates,
+      },
+    });
   }
 
   return rawCandidates;
 }
 
-function completedSearchKeywords(
+function rawCandidateFromSearchCheckpoint(value: unknown): RawCandidate | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.name !== 'string' || typeof candidate.resumeText !== 'string') return null;
+
+  const optionalString = (key: string): string | null | undefined => {
+    const item = candidate[key];
+    return typeof item === 'string' || item === null ? item : undefined;
+  };
+  const experienceYears = candidate.experienceYears;
+  return {
+    name: candidate.name,
+    resumeText: candidate.resumeText,
+    platformCandidateId: optionalString('platformCandidateId'),
+    title: optionalString('title'),
+    company: optionalString('company'),
+    location: optionalString('location'),
+    experienceYears:
+      typeof experienceYears === 'number' || experienceYears === null ? experienceYears : undefined,
+    profileUrl: optionalString('profileUrl'),
+    lastActiveAt: optionalString('lastActiveAt'),
+  };
+}
+
+function completedSearchKeywordCandidates(
   events: Array<{ message: string; detail: Record<string, unknown> | null }>,
-): Set<string> {
-  const keywords = new Set<string>();
+): Map<string, RawCandidate[]> {
+  const completed = new Map<string, RawCandidate[]>();
   for (const event of events) {
     if (event.message !== 'search_keyword_completed') continue;
     const keyword = event.detail?.keyword;
-    if (typeof keyword === 'string' && keyword.trim()) {
-      keywords.add(keyword.trim());
-    }
+    const candidates = event.detail?.candidates;
+    if (typeof keyword !== 'string' || !keyword.trim() || !Array.isArray(candidates)) continue;
+    const parsedCandidates = candidates.map(rawCandidateFromSearchCheckpoint);
+    if (parsedCandidates.some((candidate) => candidate === null)) continue;
+    completed.set(keyword.trim(), parsedCandidates as RawCandidate[]);
   }
-  return keywords;
+  return completed;
 }
 
 function createRawSeenIdentityRef(rawCandidate: RawCandidate): SeenIdentityRef {
@@ -1204,7 +1245,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
         userId: state.userId,
         runId: state.runId,
         jobDescriptionId: state.jobDescription.id,
-        completedKeywords: completedSearchKeywords(existingEvents),
+        completedKeywordCandidates: completedSearchKeywordCandidates(existingEvents),
       });
     }
     await recordRunEvent({
@@ -2158,6 +2199,10 @@ async function executePlannedActionsForRun(params: {
     candidate: StoredCandidateRef,
     actionPlan: CandidateActionPlan,
   ) => Promise<ActionExecutionResult>;
+  executeContact?: (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ) => Promise<ActionExecutionResult>;
   executeCollect: CandidateSourceAdapter['collectCandidate'];
   request: ExecuteActionsRequest;
   stats: ScreeningRunStats;
@@ -2199,6 +2244,18 @@ async function executePlannedActionsForRun(params: {
       candidateId: result.candidateId,
     });
     if (!detail) continue;
+
+    const pairedCollectActionLog =
+      result.actionPlan.action === 'chat'
+        ? getPlannedActionLog(detail, 'collect', params.runId)
+        : null;
+    if (
+      !isRetryingCollect &&
+      pairedCollectActionLog &&
+      collectCount >= params.request.maxCollectActions
+    ) {
+      continue;
+    }
 
     if (isRetryingCollect) {
       const chatActionLog = getActionLog(detail, 'chat', params.runId);
@@ -2270,14 +2327,19 @@ async function executePlannedActionsForRun(params: {
           priority: result.actionPlan.priority,
         },
       });
-      const collectActionLog =
-        result.actionPlan.action === 'chat' ? getActionLog(detail, 'collect', params.runId) : null;
       const executionResult =
-        result.actionPlan.action === 'chat'
+        result.actionPlan.action === 'chat' && pairedCollectActionLog
           ? await params.executeContactAndCollect(storedCandidate, result.actionPlan)
-          : await params.executeCollect(storedCandidate);
+          : result.actionPlan.action === 'chat' && params.executeContact
+            ? await params.executeContact(storedCandidate, result.actionPlan)
+            : result.actionPlan.action === 'chat'
+              ? {
+                  success: false,
+                  error: 'paired collect action log is required for browser workflow chat',
+                }
+              : await params.executeCollect(storedCandidate);
 
-      if (result.actionPlan.action === 'chat' && collectActionLog) {
+      if (result.actionPlan.action === 'chat' && pairedCollectActionLog) {
         await persistContactAndCollectExecutionResult({
           dependencies: params.dependencies,
           userId: params.userId,
@@ -2285,7 +2347,7 @@ async function executePlannedActionsForRun(params: {
           result,
           actionPlan: result.actionPlan,
           chatActionLog: claimedActionLog,
-          collectActionLog,
+          collectActionLog: pairedCollectActionLog,
           executionResult,
           stats: params.stats,
         });
@@ -2351,6 +2413,7 @@ async function executePlannedActionsForRun(params: {
 
     if (result.actionPlan.action === 'chat') {
       chatCount += 1;
+      if (pairedCollectActionLog) collectCount += 1;
     } else {
       collectCount += 1;
     }
@@ -2452,6 +2515,20 @@ export async function executeScreeningRunActions(params: {
     return session.contactAndCollectCandidate(candidate, actionPlan);
   };
 
+  const executeContact = async (
+    candidate: StoredCandidateRef,
+    actionPlan: CandidateActionPlan,
+  ): Promise<ActionExecutionResult> => {
+    if (currentRun.skillId !== null) {
+      return {
+        success: false,
+        error: 'paired collect action log is required for browser workflow chat',
+      };
+    }
+    const legacyAdapter = await getLegacyAdapterAfterClaim();
+    return legacyAdapter.chatCandidate(candidate, actionPlan);
+  };
+
   const executeCollect: CandidateSourceAdapter['collectCandidate'] = async (candidate) => {
     if (currentRun.skillId === null) {
       const legacyAdapter = await getLegacyAdapterAfterClaim();
@@ -2478,6 +2555,7 @@ export async function executeScreeningRunActions(params: {
       runId: params.runId,
       jobDescriptionId: currentRun.jobDescriptionId,
       executeContactAndCollect,
+      executeContact,
       executeCollect,
       request: params.request,
       stats,
@@ -2548,11 +2626,32 @@ export async function executeSingleCandidateAction(params: {
   if (!claimedActionLog) {
     throw new Error('candidate planned chat action is already running or finished');
   }
-  const collectActionLog = getActionLog(detail, 'collect', params.runId);
+  const collectActionLog = getPlannedActionLog(detail, 'collect', params.runId);
 
   const stats = createEmptyStats();
   let adapter: CandidateSourceAdapter | null = null;
   try {
+    if (run.skillId !== null && !collectActionLog) {
+      const errorMessage = 'paired collect action log is required for browser workflow chat';
+      await markExecutionFailed({
+        dependencies,
+        userId: params.userId,
+        runId: params.runId,
+        result: detail,
+        actionPlan,
+        actionLog: claimedActionLog,
+        errorMessage,
+        stats,
+      });
+      return {
+        status: 'failed',
+        candidateId: params.candidateId,
+        candidateName: detail.candidate.displayName,
+        detail: errorMessage,
+        errorMessage,
+      };
+    }
+
     const nextAdapter = dependencies.createAdapter(run.platform, {
       userId: params.userId,
     });
@@ -2561,7 +2660,25 @@ export async function executeSingleCandidateAction(params: {
     let executionResult: ActionExecutionResult;
     if (run.skillId === null) {
       await nextAdapter.loginIfNeeded();
-      executionResult = await nextAdapter.chatCandidate(storedCandidate, actionPlan);
+      const contact = await nextAdapter.chatCandidate(storedCandidate, actionPlan);
+      if (!collectActionLog) {
+        executionResult = contact;
+      } else if (!contact.success) {
+        executionResult = {
+          ...contact,
+          browserTrace: { contact: 'failed', collect: 'not_attempted' },
+        };
+      } else {
+        const collect = await nextAdapter.collectCandidate(storedCandidate);
+        executionResult = {
+          success: collect.success,
+          error: collect.error,
+          browserTrace: {
+            contact: 'success',
+            collect: collect.success ? 'success' : 'failed',
+          },
+        };
+      }
     } else {
       const workflowSession = dependencies.createWorkflowSession({
         adapter: nextAdapter,

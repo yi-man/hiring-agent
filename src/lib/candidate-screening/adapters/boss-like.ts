@@ -478,6 +478,13 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
         target: sendButtonTarget,
         targetKey: 'sendButton',
       });
+      if (!this.executor.waitForText) {
+        throw new Error('browser executor does not support chat success confirmation');
+      }
+      await requireSuccessfulStep(
+        this.executor.waitForText('消息已发送'),
+        'wait for chat success confirmation',
+      );
       return { success: true, browserTrace: { ...browserTrace, messageLength: message.length } };
     } catch (error) {
       return actionFailure({ error, browserTrace });

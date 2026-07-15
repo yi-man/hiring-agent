@@ -13,6 +13,7 @@ import {
   listCandidateInterviewRecords,
   listCandidateResumeLibrary,
   listCandidateScreeningRunEvents,
+  listCandidateScreeningRuns,
   listCandidateScreeningResults,
   replaceCandidateResumeChunks,
   searchCandidateResumeChunks,
@@ -50,6 +51,7 @@ type PrismaMock = {
     findMany: jest.Mock;
   };
   publishSkill: {
+    findMany: jest.Mock;
     findUnique: jest.Mock;
   };
   candidateScreeningResult: {
@@ -99,6 +101,7 @@ jest.mock('@/lib/prisma', () => ({
       findMany: jest.fn(),
     },
     publishSkill: {
+      findMany: jest.fn(),
       findUnique: jest.fn(),
     },
     candidateScreeningResult: {
@@ -246,6 +249,7 @@ describe('candidate screening repository', () => {
     prismaMock.candidateScreeningRunEvent.create.mockReset();
     prismaMock.candidateScreeningRunEvent.findMany.mockReset();
     prismaMock.publishSkill.findUnique.mockReset();
+    prismaMock.publishSkill.findMany.mockReset();
     prismaMock.candidateScreeningResult.create.mockReset();
     prismaMock.candidateScreeningResult.findFirst.mockReset();
     prismaMock.candidateScreeningResult.findMany.mockReset();
@@ -410,6 +414,51 @@ describe('candidate screening repository', () => {
       where: { id: 'screen-candidates-v2' },
       select: { name: true, version: true },
     });
+  });
+
+  it('hydrates workflow metadata for a run list with one batched query', async () => {
+    const baseRun = {
+      id: 'run-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      status: 'success',
+      currentStage: 'finalizing',
+      currentWorkflowStep: null,
+      searchPlan: null,
+      evaluationSchema: null,
+      stats: null,
+      errorMessage: null,
+      startedAt: null,
+      finishedAt: updatedAt,
+      createdAt,
+      updatedAt,
+    };
+    prismaMock.candidateScreeningRun.findMany.mockResolvedValueOnce([
+      { ...baseRun, skillId: 'screen-v2' },
+      { ...baseRun, id: 'run-2', skillId: 'screen-v3' },
+    ]);
+    prismaMock.publishSkill.findMany.mockResolvedValueOnce([
+      { id: 'screen-v2', name: 'screen_candidates', version: 2 },
+      { id: 'screen-v3', name: 'screen_candidates', version: 3 },
+    ]);
+
+    const runs = await listCandidateScreeningRuns({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      limit: 20,
+    });
+
+    expect(prismaMock.publishSkill.findMany).toHaveBeenCalledTimes(1);
+    expect(prismaMock.publishSkill.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['screen-v2', 'screen-v3'] } },
+      select: { id: true, name: true, version: true },
+    });
+    expect(runs.map((run) => run.workflow)).toEqual([
+      { name: 'screen_candidates', version: 2 },
+      { name: 'screen_candidates', version: 3 },
+    ]);
   });
 
   it('keeps a missing linked workflow nullable for compatibility', async () => {

@@ -117,4 +117,35 @@ describe('boss-like screening workflow skill', () => {
     expect(isCompatibleBossLikeScreeningSkill(current)).toBe(true);
     expect(isCompatibleBossLikeScreeningSkill(stale)).toBe(false);
   });
+
+  it.each(['detail_observe', 'collect_click', 'action_complete'])(
+    'rejects a browser-v2 workflow missing the required %s step',
+    (missingStepId) => {
+      const current = buildBossLikeScreeningSkill();
+      const stale = {
+        ...current,
+        id: 'screen-v5',
+        version: 5,
+        steps: current.steps.filter((step) => step.id !== missingStepId),
+      };
+
+      expect(isCompatibleBossLikeScreeningSkill(stale)).toBe(false);
+    },
+  );
+
+  it('rejects a structurally complete workflow with an unsafe detail navigation input', () => {
+    const current = buildBossLikeScreeningSkill();
+    const stale = {
+      ...current,
+      id: 'screen-v5',
+      version: 5,
+      steps: current.steps.map((step) =>
+        step.id === 'detail_open' && step.type === 'action'
+          ? { ...step, params: { url: 'https://stale.example.com/candidate' } }
+          : step,
+      ),
+    };
+
+    expect(isCompatibleBossLikeScreeningSkill(stale)).toBe(false);
+  });
 });

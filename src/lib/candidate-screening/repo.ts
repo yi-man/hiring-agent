@@ -670,6 +670,29 @@ async function hydrateRunWorkflow(
   };
 }
 
+async function hydrateRunWorkflows(
+  runs: CandidateScreeningRunDto[],
+): Promise<CandidateScreeningRunDto[]> {
+  const skillIds = Array.from(
+    new Set(
+      runs.map((run) => run.skillId).filter((skillId): skillId is string => Boolean(skillId)),
+    ),
+  );
+  if (skillIds.length === 0) return runs;
+
+  const workflows = await prisma.publishSkill.findMany({
+    where: { id: { in: skillIds } },
+    select: { id: true, name: true, version: true },
+  });
+  const workflowById = new Map(
+    workflows.map((workflow) => [workflow.id, { name: workflow.name, version: workflow.version }]),
+  );
+  return runs.map((run) => ({
+    ...run,
+    workflow: run.skillId ? (workflowById.get(run.skillId) ?? null) : null,
+  }));
+}
+
 function mapRunEvent(row: CandidateScreeningRunEventRecord): CandidateScreeningRunEventDto {
   return {
     id: row.id,
@@ -963,7 +986,7 @@ export async function listCandidateScreeningRuns(params: {
     orderBy: { createdAt: 'desc' },
     take: params.limit,
   });
-  return Promise.all(rows.map((row) => hydrateRunWorkflow(mapRun(row))));
+  return hydrateRunWorkflows(rows.map((row) => mapRun(row)));
 }
 
 export async function getCandidateScreeningRun(params: {

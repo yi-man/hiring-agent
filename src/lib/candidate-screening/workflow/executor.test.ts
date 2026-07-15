@@ -527,15 +527,11 @@ describe('CandidateScreeningWorkflowSession', () => {
     );
   });
 
-  it('repairs message and send from a composer snapshot while preserving the grouped greeting step', async () => {
+  it('reopens the real detail page before relearning a grouped composer repair', async () => {
     const skill = makeSkill();
     const failedMessage = skill.steps.find(
       (step): step is Extract<(typeof skill.steps)[number], { type: 'action' }> =>
         step.id === 'contact_fill_message' && step.type === 'action',
-    )?.params.target as TargetDescriptor;
-    const existingGreeting = skill.steps.find(
-      (step): step is Extract<(typeof skill.steps)[number], { type: 'action' }> =>
-        step.id === 'contact_open_greeting' && step.type === 'action',
     )?.params.target as TargetDescriptor;
     const dependencies = makeDependencies({ getActiveSkill: jest.fn().mockResolvedValue(skill) });
     dependencies.runBrowserWorkflow
@@ -558,7 +554,10 @@ describe('CandidateScreeningWorkflowSession', () => {
         },
       })
       .mockResolvedValueOnce(successfulRun());
-    dependencies.executor.snapshotStructured.mockResolvedValue(repairedComposerSnapshot);
+    dependencies.executor.snapshotStructured
+      .mockResolvedValueOnce(repairedComposerSnapshot)
+      .mockResolvedValueOnce(repairedDetailSnapshot)
+      .mockResolvedValueOnce(repairedComposerSnapshot);
     dependencies.executor.resolveTarget.mockImplementation(async (target) =>
       uniqueTargetReport(target as TargetDescriptor),
     );
@@ -581,7 +580,9 @@ describe('CandidateScreeningWorkflowSession', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'contact_open_greeting',
-          params: expect.objectContaining({ target: existingGreeting }),
+          params: expect.objectContaining({
+            target: expect.objectContaining({ name: '开始沟通' }),
+          }),
         }),
         expect.objectContaining({
           id: 'contact_fill_message',
@@ -592,6 +593,12 @@ describe('CandidateScreeningWorkflowSession', () => {
           params: expect.objectContaining({ target: expect.objectContaining({ name: '发送' }) }),
         }),
       ]),
+    );
+    expect(dependencies.executor.navigate).toHaveBeenCalledWith(
+      'http://localhost:6183/employer/resumes/301',
+    );
+    expect(dependencies.executor.click).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '开始沟通' }),
     );
     expect(dependencies.runBrowserWorkflow).toHaveBeenCalledTimes(2);
   });
@@ -679,6 +686,78 @@ describe('CandidateScreeningWorkflowSession', () => {
       error: 'collect target missing',
       browserTrace: { contact: 'success', collect: 'failed' },
     });
+  });
+
+  it('preserves confirmed contact evidence when a repaired collect retry succeeds', async () => {
+    const skill = makeSkill();
+    const collectTarget = skill.steps.find(
+      (step): step is Extract<(typeof skill.steps)[number], { type: 'action' }> =>
+        step.id === SCREENING_STEP_IDS.collectClick && step.type === 'action',
+    )?.params.target as TargetDescriptor;
+    const collectFailure = {
+      success: false,
+      error: 'not_found_target: 收藏',
+    };
+    const dependencies = makeDependencies({ getActiveSkill: jest.fn().mockResolvedValue(skill) });
+    dependencies.runBrowserWorkflow
+      .mockResolvedValueOnce({
+        status: 'fallback',
+        currentStepId: SCREENING_STEP_IDS.collectClick,
+        traceSteps: [
+          {
+            stepId: SCREENING_STEP_IDS.contactWaitSuccess,
+            action: 'wait_for_text',
+            params: { text: '消息已发送' },
+            result: { success: true },
+          },
+          {
+            stepId: SCREENING_STEP_IDS.collectClick,
+            action: 'click',
+            params: { target: collectTarget },
+            result: collectFailure,
+          },
+        ],
+        observations: {},
+        failedStep: {
+          stepId: SCREENING_STEP_IDS.collectClick,
+          action: 'click',
+          params: { target: collectTarget },
+          result: collectFailure,
+        },
+        onFail: { type: 'fallback_agent', reason: 'collect button changed' },
+      })
+      .mockResolvedValueOnce(
+        successfulRun({}, [
+          {
+            stepId: SCREENING_STEP_IDS.collectClick,
+            action: 'click',
+            params: { target: collectTarget },
+            result: { success: true },
+          },
+        ]),
+      );
+    dependencies.executor.snapshotStructured.mockResolvedValue(repairedDetailSnapshot);
+    dependencies.executor.resolveTarget.mockImplementation(async (target) =>
+      uniqueTargetReport(target as TargetDescriptor),
+    );
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadOrExplore({ searchPlan, stage: 'executing_actions' });
+    const result = await session.contactAndCollectCandidate(
+      {
+        candidateId: 'candidate-301',
+        displayName: 'Ada Lovelace',
+        profileUrl: 'http://localhost:6183/employer/resumes/301',
+      },
+      { action: 'chat', priority: 'high', message: 'Hello Ada', reason: 'Java match' },
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        browserTrace: expect.objectContaining({ contact: 'success', collect: 'success' }),
+      }),
+    );
   });
 
   it('uses no adapter browser action while collecting through collect_open', async () => {

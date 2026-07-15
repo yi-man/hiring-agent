@@ -230,6 +230,13 @@ class CollectTargetFailureExecutor extends FakeBrowserExecutor {
   }
 }
 
+class MissingChatSuccessExecutor extends FakeBrowserExecutor {
+  async waitForText(text: string): Promise<BrowserStepResult> {
+    this.calls.push(`waitForText:${text}`);
+    return { success: false, error: `wait_for_text timed out: ${text}` };
+  }
+}
+
 class EmptyThenResultExecutor extends FakeBrowserExecutor {
   private cardChecks = 0;
 
@@ -666,7 +673,30 @@ describe('BossLikeCandidateSourceAdapter', () => {
       'click:打招呼',
       `fill:消息:${chatPlan.message}`,
       'click:发送',
+      'waitForText:消息已发送',
     ]);
+  });
+
+  it('does not report a legacy chat as successful without visible page confirmation', async () => {
+    const executor = new MissingChatSuccessExecutor();
+    const adapter = new BossLikeCandidateSourceAdapter({ executor });
+
+    const result = await adapter.chatCandidate(
+      {
+        candidateId: 'candidate-1',
+        displayName: '王小明',
+        profileUrl: '/employer/resumes/1',
+      },
+      chatPlan,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: false,
+        error: 'wait_for_text timed out: 消息已发送',
+      }),
+    );
+    expect(executor.calls).toContain('waitForText:消息已发送');
   });
 
   it('keeps failed collect browser target metadata in the action result', async () => {

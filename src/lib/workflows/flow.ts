@@ -69,12 +69,21 @@ function collectReachableStepIds(steps: PublishStep[], edges: WorkflowFlowEdge[]
 
   const knownStepIds = new Set(steps.map((step) => step.id));
   const edgesBySource = new Map<string, WorkflowFlowEdge[]>();
+  const incomingStepIds = new Set<string>();
   for (const edge of edges) {
     edgesBySource.set(edge.from, [...(edgesBySource.get(edge.from) ?? []), edge]);
+    if (knownStepIds.has(edge.to)) incomingStepIds.add(edge.to);
   }
 
   const reachable = new Set<string>();
-  const queue = [firstStep.id];
+  const queue = [
+    firstStep.id,
+    ...steps
+      .filter(
+        (step) => step.id !== firstStep.id && step.type !== 'end' && !incomingStepIds.has(step.id),
+      )
+      .map((step) => step.id),
+  ];
 
   while (queue.length > 0) {
     const current = queue.shift();
