@@ -70,6 +70,7 @@ export const QUALIFIED_CANDIDATE_SCORE = 70;
 export const DEFAULT_MAX_CHAT_ACTIONS = 10;
 export const DEFAULT_MAX_COLLECT_ACTIONS = 30;
 export const CANDIDATE_EVALUATION_PROMPT_VERSION = 'candidate-evaluation-zh-rubric-v2';
+export const CANDIDATE_WORKFLOW_REPAIR_PROMPT_VERSION = 'candidate-workflow-repair-v1';
 export const CANDIDATE_SCREENING_SCORING_VERSION = 'candidate-screening-rubric-v2';
 export const CANDIDATE_SCREENING_CALIBRATION_VERSION = 'candidate-calibration-v1';
 export const CANDIDATE_SCREENING_QUALITY_POLICY_VERSION = 'candidate-quality-policy-v1';

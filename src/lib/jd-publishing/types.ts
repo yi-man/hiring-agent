@@ -60,6 +60,11 @@ export type PublishSkillMeta = Record<string, unknown> & {
   repaired_from_version?: number;
   failed_step_id?: string;
   repair_reason?: string;
+  repair_strategy?: 'deterministic' | 'llm';
+  repair_agent_prompt_id?: string;
+  repair_agent_prompt_version?: string;
+  repair_agent_provider?: string;
+  repair_agent_model?: string;
 };
 
 export type PublishStepOnFail = {

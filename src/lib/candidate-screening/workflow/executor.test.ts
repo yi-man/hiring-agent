@@ -150,6 +150,36 @@ const repairedSearchSnapshot: StructuredDomSnapshot = {
   textBlocks: [],
 };
 
+const ambiguousSearchSnapshot: StructuredDomSnapshot = {
+  ...repairedSearchSnapshot,
+  forms: [
+    {
+      name: '人才搜索',
+      fields: repairedSearchSnapshot.forms[0]!.fields,
+      buttons: [
+        {
+          tag: 'button',
+          role: 'button',
+          accessibleName: '执行检索',
+          id: 'search-preview',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+        {
+          tag: 'button',
+          role: 'button',
+          accessibleName: '执行检索',
+          id: 'search-now',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+    },
+  ],
+};
+
 function makeSkill(overrides: Partial<ScreeningWorkflowSkill> = {}): ScreeningWorkflowSkill {
   return {
     ...buildBossLikeScreeningSkill(),
@@ -205,6 +235,18 @@ function uniqueTargetReport(target: TargetDescriptor): LocatorMatchReport {
     candidateCount: 1,
     confidence: 1,
     candidates: [],
+  };
+}
+
+function ambiguousTargetReport(target: TargetDescriptor): LocatorMatchReport {
+  return {
+    target,
+    status: 'ambiguous',
+    strategy: 'role',
+    candidateCount: 2,
+    confidence: 0.5,
+    candidates: [],
+    reason: 'multiple matching buttons',
   };
 }
 
@@ -462,6 +504,105 @@ describe('CandidateScreeningWorkflowSession', () => {
       2,
       expect.objectContaining({ currentStepId: SCREENING_STEP_IDS.searchFill }),
     );
+  });
+
+  it('asks the LLM fallback agent to repair an ambiguous target, versions it, and retries', async () => {
+    const skill = makeSkill({ id: 'screen-v5', version: 5 });
+    const failedTarget = skill.steps.find(
+      (step): step is Extract<(typeof skill.steps)[number], { type: 'action' }> =>
+        step.id === SCREENING_STEP_IDS.searchSubmit && step.type === 'action',
+    )?.params.target as TargetDescriptor;
+    const agentTarget: TargetDescriptor = {
+      kind: 'button',
+      role: 'button',
+      name: '执行检索',
+      exact: true,
+      stableAttrs: { id: 'search-now' },
+      scope: { kind: 'form', name: '人才搜索' },
+    };
+    const repairWorkflowWithAgent = jest.fn().mockResolvedValue({
+      target: agentTarget,
+      reason: 'LLM selected the uniquely identifiable search button',
+      promptId: 'candidate-screening.workflow-repair',
+      promptVersion: 'candidate-workflow-repair-v1',
+      provider: 'test',
+      model: 'test-model',
+    });
+    const failedResult = {
+      success: false,
+      error: `ambiguous_target: ${failedTarget.name}`,
+    };
+    const dependencies = makeDependencies({
+      getActiveSkill: jest.fn().mockResolvedValue(skill),
+      repairWorkflowWithAgent,
+    });
+    dependencies.runBrowserWorkflow
+      .mockResolvedValueOnce({
+        status: 'fallback',
+        currentStepId: SCREENING_STEP_IDS.searchSubmit,
+        traceSteps: [
+          {
+            stepId: SCREENING_STEP_IDS.searchSubmit,
+            action: 'click',
+            params: { target: failedTarget },
+            result: failedResult,
+          },
+        ],
+        observations: {},
+        failedStep: {
+          stepId: SCREENING_STEP_IDS.searchSubmit,
+          action: 'click',
+          params: { target: failedTarget },
+          result: failedResult,
+        },
+        onFail: { type: 'fallback_agent', reason: 'search submit changed' },
+      })
+      .mockResolvedValueOnce(successfulRun({ listHtml }));
+    dependencies.executor.snapshotStructured.mockResolvedValue(ambiguousSearchSnapshot);
+    dependencies.executor.resolveTarget.mockImplementation(async (target) =>
+      (target as TargetDescriptor).stableAttrs?.id === 'search-now'
+        ? uniqueTargetReport(target as TargetDescriptor)
+        : ambiguousTargetReport(target as TargetDescriptor),
+    );
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadOrExplore({ searchPlan, stage: 'searching_live' });
+    await expect(session.runSearchKeyword({ keyword: 'Java', maxCandidates: 5 })).resolves.toEqual(
+      expect.objectContaining({ candidates: expect.any(Array) }),
+    );
+
+    expect(repairWorkflowWithAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillId: 'screen-v5',
+        workflowVersion: 5,
+        failedStepId: SCREENING_STEP_IDS.searchSubmit,
+        targetKey: 'searchSubmit',
+        structuredSnapshot: ambiguousSearchSnapshot,
+      }),
+    );
+    expect(dependencies.createNextSkillVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          created_from: 'agent',
+          repair_strategy: 'llm',
+          repaired_from_version: 5,
+          repair_agent_prompt_version: 'candidate-workflow-repair-v1',
+        }),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            id: SCREENING_STEP_IDS.searchSubmit,
+            params: expect.objectContaining({ target: agentTarget }),
+          }),
+        ]),
+      }),
+    );
+    expect(dependencies.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        message: `Workflow Fallback Agent 介入：${SCREENING_STEP_IDS.searchSubmit}`,
+      }),
+    );
+    expect(dependencies.runBrowserWorkflow).toHaveBeenCalledTimes(2);
   });
 
   it('patches greeting, message, and send then retries one failed contact segment', async () => {

@@ -48,6 +48,12 @@ import {
   repairBossLikeScreeningSteps,
   repairBossLikeScreeningTargetFromSnapshot,
 } from './explore';
+import {
+  assertCandidateScreeningRepairTargetGrounded,
+  runCandidateScreeningWorkflowRepairAgent,
+  type CandidateScreeningWorkflowRepairAgentInput,
+  type CandidateScreeningWorkflowRepairAgentResult,
+} from './llm-repair';
 import { isCompatibleBossLikeScreeningSkill } from './skill-registry';
 import { SCREENING_STEP_IDS } from './types';
 import type {
@@ -81,6 +87,10 @@ type CreateNextScreeningSkillVersion = (params: {
   meta?: PublishSkillMeta;
 }) => Promise<PublishSkill>;
 
+type RepairScreeningWorkflowWithAgent = (
+  params: CandidateScreeningWorkflowRepairAgentInput,
+) => Promise<CandidateScreeningWorkflowRepairAgentResult>;
+
 export type CandidateScreeningWorkflowSessionDependencies = {
   adapter: CandidateSourceAdapter;
   userId: string;
@@ -96,6 +106,7 @@ export type CandidateScreeningWorkflowSessionDependencies = {
   exploreSkill?: ExploreScreeningWorkflow;
   createExploredSkill?: (skill: PublishSkill) => Promise<PublishSkill>;
   createNextSkillVersion?: CreateNextScreeningSkillVersion;
+  repairWorkflowWithAgent?: RepairScreeningWorkflowWithAgent;
   runBrowserWorkflow?: typeof runSharedBrowserWorkflow;
   updateRun?: WorkflowRunRepository['updateRun'];
   createRunEvent?: WorkflowRunRepository['createRunEvent'];
@@ -109,6 +120,7 @@ type ResolvedDependencies = Omit<
   | 'exploreSkill'
   | 'createExploredSkill'
   | 'createNextSkillVersion'
+  | 'repairWorkflowWithAgent'
   | 'runBrowserWorkflow'
   | 'updateRun'
   | 'createRunEvent'
@@ -120,6 +132,7 @@ type ResolvedDependencies = Omit<
     CandidateScreeningWorkflowSessionDependencies['createExploredSkill']
   >;
   createNextSkillVersion: CreateNextScreeningSkillVersion;
+  repairWorkflowWithAgent: RepairScreeningWorkflowWithAgent;
   runBrowserWorkflow: typeof runSharedBrowserWorkflow;
   updateRun: WorkflowRunRepository['updateRun'];
   createRunEvent: WorkflowRunRepository['createRunEvent'];
@@ -135,6 +148,9 @@ type WorkflowEventDetail = {
   retry?: true;
   retryState?: 'start' | 'success' | 'failure';
   repair?: true;
+  repairStrategy?: 'deterministic' | 'llm';
+  agent?: true;
+  agentReason?: string;
   browserTrace?: Record<string, unknown>;
   candidateName?: string;
   candidateId?: string;
@@ -186,6 +202,22 @@ const SEARCH_REPAIR_STEP_IDS = new Set<string>([
   SCREENING_STEP_IDS.searchFill,
   SCREENING_STEP_IDS.searchSubmit,
 ]);
+
+const TARGET_KIND_BY_KEY: Record<
+  keyof BossLikeScreeningTargets,
+  Extract<BrowserTargetInput, { kind: string }>['kind']
+> = {
+  username: 'field',
+  password: 'field',
+  loginButton: 'button',
+  searchInput: 'field',
+  searchSubmit: 'button',
+  detailContent: 'text',
+  greetButton: 'button',
+  messageInput: 'field',
+  sendButton: 'button',
+  collectButton: 'button',
+};
 
 export type CandidateScreeningWorkflowSession = {
   readonly skill: ScreeningWorkflowSkill | null;
@@ -264,6 +296,26 @@ function targetForStep(skill: ScreeningWorkflowSkill, stepId: string): BrowserTa
       candidate.id === stepId && candidate.type === 'action',
   );
   return isBrowserTargetInput(step?.params.target) ? step.params.target : null;
+}
+
+function patchStepTarget(
+  currentSkill: ScreeningWorkflowSkill,
+  stepId: string,
+  target: BrowserTargetInput,
+): PublishStep[] | null {
+  let patched = false;
+  const steps = currentSkill.steps.map((step) => {
+    if (step.id !== stepId || step.type !== 'action' || !isBrowserTargetInput(step.params.target)) {
+      return step;
+    }
+    patched = true;
+    return { ...step, params: { ...step.params, target } };
+  });
+  return patched ? steps : null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown workflow repair error';
 }
 
 function resolveOptionsForTarget(targetKey: keyof BossLikeScreeningTargets): BrowserResolveOptions {
@@ -363,6 +415,8 @@ function resolveDependencies(
     createExploredSkill: dependencies.createExploredSkill ?? createExploredPublishSkill,
     createNextSkillVersion:
       dependencies.createNextSkillVersion ?? createNextActivePublishSkillVersion,
+    repairWorkflowWithAgent:
+      dependencies.repairWorkflowWithAgent ?? runCandidateScreeningWorkflowRepairAgent,
     runBrowserWorkflow: dependencies.runBrowserWorkflow ?? runSharedBrowserWorkflow,
     updateRun,
     createRunEvent,
@@ -659,6 +713,7 @@ export function createCandidateScreeningWorkflowSession(
             repaired_from_version: currentSkill.version,
             failed_step_id: params.failure.stepId,
             repair_reason: params.failure.error,
+            repair_strategy: 'deterministic',
           },
         }),
       );
@@ -672,11 +727,134 @@ export function createCandidateScreeningWorkflowSession(
           skillId: nextSkill.id,
           previousSkillId: currentSkill.id,
           repair: true,
+          repairStrategy: 'deterministic',
         }),
       });
       skill = nextSkill;
       return true;
     } catch {
+      return false;
+    }
+  }
+
+  async function repairTargetWithAgent(params: {
+    failure: TargetFailure;
+    context: BrowserFailureContext;
+    traceSteps: BrowserWorkflowRunResult['traceSteps'];
+    candidateId?: string;
+  }): Promise<boolean> {
+    const currentSkill = requireSkill();
+    await recordEvent({
+      level: 'info',
+      message: `Workflow Fallback Agent 介入：${params.failure.stepId}`,
+      candidateId: params.candidateId,
+      detail: eventDetail({
+        workflowStep: params.failure.stepId,
+        target: params.failure.target,
+        targetKey: params.failure.targetKey,
+        error: params.failure.error,
+        repair: true,
+        repairStrategy: 'llm',
+        agent: true,
+        structuredSnapshot: params.context.structuredSnapshot,
+      }),
+    });
+
+    const snapshot = params.context.structuredSnapshot;
+    const executor = dependencies.adapter.getBrowserExecutor();
+    if (!snapshot || !executor.resolveTarget) {
+      await recordEvent({
+        level: 'error',
+        message: `Workflow Fallback Agent 修复失败：${params.failure.stepId}`,
+        candidateId: params.candidateId,
+        detail: eventDetail({
+          workflowStep: params.failure.stepId,
+          error: 'structured snapshot or target resolver is unavailable',
+          repair: true,
+          repairStrategy: 'llm',
+          agent: true,
+        }),
+      });
+      return false;
+    }
+
+    try {
+      const repaired = await dependencies.repairWorkflowWithAgent({
+        skillId: currentSkill.id,
+        workflowVersion: currentSkill.version,
+        failedStepId: params.failure.stepId,
+        targetKey: params.failure.targetKey,
+        failedTarget: params.failure.target,
+        error: params.failure.error,
+        structuredSnapshot: snapshot,
+        traceSteps: params.traceSteps,
+      });
+      if (repaired.target.kind !== TARGET_KIND_BY_KEY[params.failure.targetKey]) {
+        throw new Error(
+          `LLM repair changed target kind for ${params.failure.targetKey}: ${repaired.target.kind}`,
+        );
+      }
+      assertCandidateScreeningRepairTargetGrounded({ target: repaired.target, snapshot });
+      await requireUniqueTarget(executor, repaired.target, params.failure.targetKey);
+      const repairedSteps = patchStepTarget(currentSkill, params.failure.stepId, repaired.target);
+      if (!repairedSteps) return false;
+
+      const candidateSkill = { ...currentSkill, steps: repairedSteps };
+      if (!isCompatibleBossLikeScreeningSkill(candidateSkill)) {
+        throw new Error('LLM repair produced an incompatible screen_candidates workflow');
+      }
+
+      const nextSkill = screeningSkill(
+        await dependencies.createNextSkillVersion({
+          previousSkill: currentSkill,
+          steps: repairedSteps,
+          meta: {
+            ...currentSkill.meta,
+            created_from: 'agent',
+            repaired_from_skill_id: currentSkill.id,
+            repaired_from_version: currentSkill.version,
+            failed_step_id: params.failure.stepId,
+            repair_reason: repaired.reason,
+            repair_strategy: 'llm',
+            repair_agent_prompt_id: repaired.promptId,
+            repair_agent_prompt_version: repaired.promptVersion,
+            repair_agent_provider: repaired.provider,
+            repair_agent_model: repaired.model,
+          },
+        }),
+      );
+      await updateRun({ skillId: nextSkill.id, currentWorkflowStep: params.failure.stepId });
+      await recordEvent({
+        level: 'success',
+        message: `Workflow Fallback Agent 修复并升级到 v${nextSkill.version}`,
+        candidateId: params.candidateId,
+        detail: eventDetail({
+          workflowStep: params.failure.stepId,
+          skillId: nextSkill.id,
+          previousSkillId: currentSkill.id,
+          repair: true,
+          repairStrategy: 'llm',
+          agent: true,
+          agentReason: repaired.reason,
+          target: repaired.target,
+          targetKey: params.failure.targetKey,
+        }),
+      });
+      skill = nextSkill;
+      return true;
+    } catch (error) {
+      await recordEvent({
+        level: 'error',
+        message: `Workflow Fallback Agent 修复失败：${params.failure.stepId}`,
+        candidateId: params.candidateId,
+        detail: eventDetail({
+          workflowStep: params.failure.stepId,
+          error: errorMessage(error),
+          repair: true,
+          repairStrategy: 'llm',
+          agent: true,
+        }),
+      });
       return false;
     }
   }
@@ -711,15 +889,22 @@ export function createCandidateScreeningWorkflowSession(
         await clearCurrentWorkflowStep();
         return combinedRun;
       }
-      if (
-        !(await repairTarget({
+      let repaired = await repairTarget({
+        failure: targetFailure,
+        context,
+        candidateId: params.candidate?.candidateId,
+        profileUrl:
+          typeof params.input.profileUrl === 'string' ? params.input.profileUrl : undefined,
+      });
+      if (!repaired) {
+        repaired = await repairTargetWithAgent({
           failure: targetFailure,
           context,
+          traceSteps: combinedRun.traceSteps,
           candidateId: params.candidate?.candidateId,
-          profileUrl:
-            typeof params.input.profileUrl === 'string' ? params.input.profileUrl : undefined,
-        }))
-      ) {
+        });
+      }
+      if (!repaired) {
         await clearCurrentWorkflowStep();
         return combinedRun;
       }

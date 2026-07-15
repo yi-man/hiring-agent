@@ -48,6 +48,7 @@ type BossLikeServer = {
   sentMessageIds: string[];
   collectedCandidateIds: string[];
   setSearchButtonLabel: (label: string) => void;
+  setAmbiguousSearchButtons: (enabled: boolean) => void;
   setGreetButtonLabel: (label: string) => void;
   setCandidateResultsVisible: (visible: boolean) => void;
   close: () => Promise<void>;
@@ -135,7 +136,15 @@ function renderLoginPage(): string {
 </html>`;
 }
 
-function renderResumeListPage(searchButtonLabel: string, candidatesVisible: boolean): string {
+function renderResumeListPage(
+  searchButtonLabel: string,
+  candidatesVisible: boolean,
+  ambiguousSearchButtons: boolean,
+): string {
+  const searchButtons = ambiguousSearchButtons
+    ? `<button type="button" id="search-preview">${escapeHtml(searchButtonLabel)}</button>
+        <button type="submit" id="search-now">${escapeHtml(searchButtonLabel)}</button>`
+    : `<button type="submit">${escapeHtml(searchButtonLabel)}</button>`;
   return `<!doctype html>
 <html lang="zh-CN">
   <head><meta charset="utf-8" /><title>候选人库</title></head>
@@ -144,7 +153,7 @@ function renderResumeListPage(searchButtonLabel: string, candidatesVisible: bool
       <h1>候选人库</h1>
       <form method="get" action="/employer/resumes">
         <label>搜索候选人 <input name="keyword" type="search" /></label>
-        <button type="submit">${escapeHtml(searchButtonLabel)}</button>
+        ${searchButtons}
       </form>
       <p>${candidatesVisible ? '简历' : '暂无简历数据'}</p>
       <section>${candidatesVisible ? candidateFixtures().join('\n') : ''}</section>
@@ -205,6 +214,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
   const sentMessageIds: string[] = [];
   const collectedCandidateIds: string[] = [];
   let searchButtonLabel = '搜索';
+  let ambiguousSearchButtons = false;
   let greetButtonLabel = '打招呼';
   let candidateResultsVisible = true;
   const server = createServer((request, response) => {
@@ -223,7 +233,9 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
         response.end();
         return;
       }
-      response.end(renderResumeListPage(searchButtonLabel, candidateResultsVisible));
+      response.end(
+        renderResumeListPage(searchButtonLabel, candidateResultsVisible, ambiguousSearchButtons),
+      );
       return;
     }
     const messageMatch = url.pathname.match(/^\/employer\/resumes\/([^/]+)\/messages$/);
@@ -266,6 +278,9 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
     collectedCandidateIds,
     setSearchButtonLabel: (label) => {
       searchButtonLabel = label;
+    },
+    setAmbiguousSearchButtons: (enabled) => {
+      ambiguousSearchButtons = enabled;
     },
     setGreetButtonLabel: (label) => {
       greetButtonLabel = label;
@@ -1304,6 +1319,122 @@ describe('candidate screening integration flow with real postgres and boss-like 
       await cleanupScreeningWorkflows();
     }
   }, 30000);
+
+  it('uses the fallback agent to version and retry an ambiguous target in a real browser', async () => {
+    const bossLike = await startBossLikeServer();
+    const userId = await createIntegrationUser();
+    let session: ReturnType<typeof createCandidateScreeningWorkflowSession> | null = null;
+
+    try {
+      await cleanupScreeningWorkflows();
+      bossLike.setSearchButtonLabel('执行检索');
+      bossLike.setAmbiguousSearchButtons(true);
+      const jobDescription = await createPublishedJobDescription(userId);
+      const staleSkill = await createExploredPublishSkill(
+        buildBossLikeScreeningSkill(
+          { id: 'screen-candidates-agent-stale-v1', version: 1 },
+          {
+            searchSubmit: {
+              kind: 'button',
+              role: 'button',
+              name: '旧搜索按钮',
+              exact: true,
+            },
+          },
+        ),
+      );
+      const run = await createCandidateScreeningRun({
+        userId,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        mode: 'execution',
+        status: 'pending',
+      });
+      const repairWorkflowWithAgent = jest.fn(async () => ({
+        target: {
+          kind: 'button' as const,
+          role: 'button' as const,
+          name: '执行检索',
+          exact: true,
+          stableAttrs: { id: 'search-now' },
+        },
+        reason: '同名按钮存在歧义，使用 snapshot 中的 search-now',
+        promptId: 'candidate-screening.workflow-repair',
+        promptVersion: 'candidate-workflow-repair-v1',
+        provider: 'integration-test',
+        model: 'integration-test-model',
+      }));
+      const adapter = new BossLikeCandidateSourceAdapter({
+        baseUrl: bossLike.baseUrl,
+        executor: new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 8_000 }),
+        username: 'admin',
+        password: 'boss123',
+      });
+      session = createCandidateScreeningWorkflowSession({
+        adapter,
+        userId,
+        runId: run.id,
+        jobDescriptionId: jobDescription.id,
+        platform: 'boss-like',
+        repairWorkflowWithAgent,
+      });
+
+      await session.loadExact({ skillId: staleSkill.id, stage: 'searching_live' });
+      const result = await session.runSearchKeyword({ keyword: 'Java', maxCandidates: 1 });
+
+      const persisted = await getCandidateScreeningRun({ userId, runId: run.id });
+      const repairedWorkflow = await prisma.publishSkill.findUniqueOrThrow({
+        where: { id: persisted?.skillId ?? '' },
+      });
+      const events = await listCandidateScreeningRunEvents({ userId, runId: run.id });
+      const repairedSearchStep = repairedWorkflow.steps.find(
+        (step) => step.id === 'search_submit' && step.type === 'action',
+      );
+
+      expect(result.candidates).toHaveLength(1);
+      expect(repairWorkflowWithAgent).toHaveBeenCalledTimes(1);
+      expect(repairWorkflowWithAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skillId: staleSkill.id,
+          workflowVersion: 1,
+          failedStepId: 'search_submit',
+          targetKey: 'searchSubmit',
+        }),
+      );
+      expect(repairedWorkflow).toEqual(
+        expect.objectContaining({
+          version: 2,
+          isActive: true,
+          meta: expect.objectContaining({
+            created_from: 'agent',
+            repair_strategy: 'llm',
+            repaired_from_skill_id: staleSkill.id,
+            repair_agent_prompt_version: 'candidate-workflow-repair-v1',
+          }),
+        }),
+      );
+      expect(repairedSearchStep).toEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            target: expect.objectContaining({ stableAttrs: { id: 'search-now' } }),
+          }),
+        }),
+      );
+      expect(events.map((event) => event.message)).toEqual(
+        expect.arrayContaining([
+          'Workflow Fallback Agent 介入：search_submit',
+          'Workflow Fallback Agent 修复并升级到 v2',
+          'Workflow 重试成功：search_fill',
+        ]),
+      );
+      expect(bossLike.requests).toContain('GET /employer/resumes?keyword=Java');
+    } finally {
+      await session?.close();
+      await cleanupIntegrationUser(userId);
+      await cleanupScreeningWorkflows();
+      await bossLike.close();
+    }
+  }, 120000);
 
   it('repairs a drifted search target once and records v2', async () => {
     const bossLike = await startBossLikeServer();
