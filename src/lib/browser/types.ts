@@ -4,6 +4,7 @@ export type BrowserAction =
   | 'click'
   | 'wait_for_url'
   | 'wait_for_text'
+  | 'wait_for_snapshot_change'
   | 'add_keywords';
 
 export type TargetDescriptor = {

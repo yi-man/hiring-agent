@@ -598,18 +598,37 @@ function firstSearchKeyword(plan: SearchPlan): string | null {
   return keyword?.trim() || plan.retrievalQuery.trim() || null;
 }
 
-function createBossLikeSearchUrl(baseUrl: string, keyword: string): string {
-  const url = new URL('/employer/resumes', `${baseUrl}/`);
-  url.searchParams.set('keyword', keyword);
-  return url.toString();
+function isExplicitEmptySearchResultSnapshot(snapshot: string): boolean {
+  const text = snapshot.replace(/<[^>]*>/g, '').replace(/\s+/g, '');
+  return text.includes('暂无符合条件的候选人') || text.includes('暂无简历数据');
 }
 
 async function waitForCandidateSearchResults(
   executor: BrowserExecutor,
-  searchUrl: string,
+  previousSnapshot: string,
+  previousUrl: string,
 ): Promise<string> {
-  ensureSuccess('wait for candidate search URL', await executor.waitForUrl(searchUrl));
-  return requireRawSnapshot(executor);
+  if (!executor.waitForSnapshotChange) {
+    throw new Error('screening_explore_snapshot_change_required');
+  }
+  let snapshot = previousSnapshot;
+  let url = previousUrl;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    ensureSuccess(
+      'wait for candidate search results',
+      await executor.waitForSnapshotChange(snapshot, url),
+    );
+    url = '';
+    const updatedSnapshot = await requireRawSnapshot(executor);
+    if (
+      extractBossLikeCandidatesFromHtml(updatedSnapshot).length > 0 ||
+      isExplicitEmptySearchResultSnapshot(updatedSnapshot)
+    ) {
+      return updatedSnapshot;
+    }
+    snapshot = updatedSnapshot;
+  }
+  throw new Error('screening_explore_candidate_results_not_ready');
 }
 
 export async function exploreBossLikeScreeningWorkflow(
@@ -679,10 +698,12 @@ export async function exploreBossLikeScreeningWorkflow(
     throw new Error('screening_explore_search_keyword_required');
   }
   ensureSuccess('fill search keyword', await executor.fill(searchTargets.searchInput, keyword));
+  const previousListSnapshot = await requireRawSnapshot(executor);
   ensureSuccess('submit candidate search', await executor.click(searchTargets.searchSubmit));
   const candidateSearchSnapshot = await waitForCandidateSearchResults(
     executor,
-    createBossLikeSearchUrl(baseUrl, keyword),
+    previousListSnapshot,
+    listSnapshot.url,
   );
 
   const candidates = extractBossLikeCandidatesFromHtml(candidateSearchSnapshot);

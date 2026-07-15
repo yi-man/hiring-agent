@@ -11,6 +11,7 @@ import type {
   PublishSkill,
   PublishSkillAction,
   PublishStep,
+  PublishStepCheck,
   PublishStepOnFail,
   PublishTaskResult,
   PublishTraceStep,
@@ -73,9 +74,15 @@ function asBrowserTargetInput(preferred: unknown, legacyLocator: unknown): Brows
 }
 
 function isBrowserAction(action: PublishSkillAction): action is BrowserAction {
-  return ['navigate', 'fill', 'click', 'wait_for_url', 'wait_for_text', 'add_keywords'].includes(
-    action as BrowserAction,
-  );
+  return [
+    'navigate',
+    'fill',
+    'click',
+    'wait_for_url',
+    'wait_for_text',
+    'wait_for_snapshot_change',
+    'add_keywords',
+  ].includes(action as BrowserAction);
 }
 
 function observationParams(
@@ -88,6 +95,19 @@ function observationParams(
   return { format: 'html', saveAs };
 }
 
+function readyChecks(params: Record<string, unknown>): PublishStepCheck[] {
+  const value = params.readyChecks;
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (candidate): candidate is PublishStepCheck =>
+      Boolean(candidate) &&
+      typeof candidate === 'object' &&
+      ['dom_exists', 'text_contains', 'url_contains'].includes(
+        (candidate as Record<string, unknown>).type as string,
+      ),
+  );
+}
+
 type ActionStepExecutionResult = {
   result: BrowserStepResult;
   observation?: BrowserWorkflowObservation;
@@ -97,6 +117,7 @@ async function executeActionStep(
   step: PublishActionStep,
   params: Record<string, unknown>,
   executor: BrowserExecutor,
+  observations: Record<string, string>,
 ): Promise<ActionStepExecutionResult> {
   if (step.action === 'observe') {
     const observation = observationParams(params);
@@ -149,6 +170,43 @@ async function executeActionStep(
       return { result: { success: false, error: 'executor does not support wait_for_text' } };
     }
     return { result: await executor.waitForText(asString(params.text)) };
+  }
+  if (step.action === 'wait_for_snapshot_change') {
+    if (!executor.waitForSnapshotChange) {
+      return {
+        result: { success: false, error: 'executor does not support wait_for_snapshot_change' },
+      };
+    }
+    const observationKey = asString(params.previousObservationKey);
+    let previousSnapshot = observations[observationKey];
+    let previousUrl = asString(params.previousUrl) || undefined;
+    if (!observationKey || !previousSnapshot) {
+      return { result: { success: false, error: 'missing snapshot observation' } };
+    }
+    const checks = readyChecks(params);
+    const maxAttempts = checks.length > 0 ? 3 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const result = await executor.waitForSnapshotChange(previousSnapshot, previousUrl);
+      previousUrl = undefined;
+      if (!result.success || checks.length === 0) return { result };
+      if ((await Promise.all(checks.map((check) => executor.check(check)))).some(Boolean)) {
+        return { result };
+      }
+      if (!executor.snapshot) {
+        return { result: { success: false, error: 'executor does not support snapshot' } };
+      }
+      try {
+        previousSnapshot = await executor.snapshot();
+      } catch (error) {
+        return {
+          result: {
+            success: false,
+            error: error instanceof Error ? error.message : 'snapshot failed',
+          },
+        };
+      }
+    }
+    return { result: { success: false, error: 'snapshot readiness checks timed out' } };
   }
   if (step.action === 'add_keywords') {
     if (!executor.addKeywords) {
@@ -222,6 +280,7 @@ export async function executePublishingStep(params: {
   skill: PublishSkill;
   executor: BrowserExecutor;
   context: PublishExecutionContext;
+  observations?: Record<string, string>;
 }): Promise<PublishingStepExecutionResult> {
   const { stepId, skill, executor, context } = params;
   const step = skill.steps.find((candidate) => candidate.id === stepId);
@@ -252,7 +311,12 @@ export async function executePublishingStep(params: {
   }
 
   const resolvedParams = interpolate(step.params, context) as Record<string, unknown>;
-  const { observation, result } = await executeActionStep(step, resolvedParams, executor);
+  const { observation, result } = await executeActionStep(
+    step,
+    resolvedParams,
+    executor,
+    params.observations ?? {},
+  );
   const traceStep: PublishTraceStep = {
     stepId: step.id,
     action: step.action,
@@ -298,6 +362,7 @@ export async function runBrowserWorkflow(params: {
       skill,
       executor,
       context,
+      observations,
     });
     if (result.traceStep) {
       traceSteps.push(result.traceStep);

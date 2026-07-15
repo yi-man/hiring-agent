@@ -7,6 +7,7 @@ export const SCREENING_STEP_IDS = {
   loginFillPassword: 'login_fill_password',
   loginSubmit: 'login_submit',
   loginWait: 'login_wait',
+  searchSnapshotBeforeSubmit: 'search_snapshot_before_submit',
   searchFill: 'search_fill',
   searchSubmit: 'search_submit',
   searchWait: 'search_wait',

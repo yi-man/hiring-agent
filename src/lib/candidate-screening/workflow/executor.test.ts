@@ -12,7 +12,11 @@ import type { CandidateSourceAdapter } from '../adapters/types';
 import type { CandidateActionPlan, SearchPlan } from '../types';
 import { createCandidateScreeningWorkflowSession } from './executor';
 import { buildBossLikeScreeningSkill } from './skill-registry';
-import type { BossLikeScreeningExploration, ScreeningWorkflowSkill } from './types';
+import {
+  SCREENING_STEP_IDS,
+  type BossLikeScreeningExploration,
+  type ScreeningWorkflowSkill,
+} from './types';
 
 const searchPlan: SearchPlan = {
   keywords: ['Java'],
@@ -101,6 +105,40 @@ const repairedComposerSnapshot: StructuredDomSnapshot = {
           tag: 'button',
           role: 'button',
           accessibleName: '发送',
+          visible: true,
+          enabled: true,
+          editable: false,
+        },
+      ],
+    },
+  ],
+  links: [],
+  textBlocks: [],
+};
+
+const repairedSearchSnapshot: StructuredDomSnapshot = {
+  url: 'http://localhost:6183/employer/resumes',
+  title: 'Candidate search',
+  pageState: 'list',
+  headings: [],
+  forms: [
+    {
+      name: 'candidate search',
+      fields: [
+        {
+          tag: 'input',
+          role: 'textbox',
+          label: '搜索候选人',
+          visible: true,
+          enabled: true,
+          editable: true,
+        },
+      ],
+      buttons: [
+        {
+          tag: 'button',
+          role: 'button',
+          accessibleName: '开始检索',
           visible: true,
           enabled: true,
           editable: false,
@@ -294,6 +332,59 @@ describe('CandidateScreeningWorkflowSession', () => {
     expect(dependencies.runBrowserWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it('replaces an active browser-v2 workflow with stale search and send semantics', async () => {
+    const staleSkill = makeSkill({
+      id: 'screen-v5',
+      version: 5,
+      steps: makeSkill().steps.map((step) => {
+        if (step.id === SCREENING_STEP_IDS.searchWait && step.type === 'action') {
+          return {
+            ...step,
+            action: 'wait_for_url' as const,
+            params: { url: '{{input.searchUrl}}' },
+          };
+        }
+        if (step.id === SCREENING_STEP_IDS.contactWaitSuccess && step.type === 'action') {
+          return {
+            ...step,
+            action: 'wait_for_url' as const,
+            params: { url: '{{input.profileUrl}}/messages' },
+          };
+        }
+        return step;
+      }),
+    });
+    const exploredSkill = makeSkill({ id: 'screen-v6', version: 6 });
+    const exploration: BossLikeScreeningExploration & ScreeningWorkflowSkill = {
+      ...exploredSkill,
+      skill: exploredSkill,
+      firstKeyword: 'Java',
+      firstListHtml: listHtml,
+    };
+    const dependencies = makeDependencies({
+      getActiveSkill: jest.fn().mockResolvedValue(staleSkill),
+      exploreSkill: jest.fn().mockResolvedValue(exploration),
+      createExploredSkill: jest.fn().mockResolvedValue(exploredSkill),
+    });
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await expect(session.loadOrExplore({ searchPlan, stage: 'searching_live' })).resolves.toEqual(
+      expect.objectContaining({ id: 'screen-v6', version: 6 }),
+    );
+
+    expect(dependencies.exploreSkill).toHaveBeenCalledTimes(1);
+    expect(dependencies.createExploredSkill).toHaveBeenCalledTimes(1);
+    expect(dependencies.createRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('重新探索'),
+        detail: expect.objectContaining({
+          previousSkillId: 'screen-v5',
+          workflowVersion: 5,
+        }),
+      }),
+    );
+  });
+
   it('records every shared-runner primitive step and clears the terminal step', async () => {
     const dependencies = makeDependencies();
     dependencies.runBrowserWorkflow.mockImplementation(async ({ onStep }) => {
@@ -320,6 +411,56 @@ describe('CandidateScreeningWorkflowSession', () => {
         level: 'info',
         detail: expect.objectContaining({ workflowStep: 'search_observe', skillId: 'screen-v1' }),
       }),
+    );
+  });
+
+  it('restarts a repaired search at fill so the retry captures a fresh pre-submit snapshot', async () => {
+    const skill = makeSkill();
+    const failedTarget = skill.steps.find(
+      (step): step is Extract<(typeof skill.steps)[number], { type: 'action' }> =>
+        step.id === SCREENING_STEP_IDS.searchSubmit && step.type === 'action',
+    )?.params.target as TargetDescriptor;
+    const failedResult = {
+      success: false,
+      error: `not_found_target: ${failedTarget.name}`,
+    };
+    const dependencies = makeDependencies();
+    dependencies.runBrowserWorkflow
+      .mockResolvedValueOnce({
+        status: 'fallback',
+        currentStepId: SCREENING_STEP_IDS.searchSubmit,
+        traceSteps: [
+          {
+            stepId: SCREENING_STEP_IDS.searchSubmit,
+            action: 'click',
+            params: { target: failedTarget },
+            result: failedResult,
+          },
+        ],
+        observations: {},
+        failedStep: {
+          stepId: SCREENING_STEP_IDS.searchSubmit,
+          action: 'click',
+          params: { target: failedTarget },
+          result: failedResult,
+        },
+        onFail: { type: 'fallback_agent', reason: 'search submit changed' },
+      })
+      .mockResolvedValueOnce(successfulRun({ listHtml }));
+    dependencies.executor.snapshotStructured.mockResolvedValue(repairedSearchSnapshot);
+    dependencies.executor.resolveTarget.mockImplementation(async (target) =>
+      uniqueTargetReport(target as TargetDescriptor),
+    );
+    const session = createCandidateScreeningWorkflowSession(dependencies);
+
+    await session.loadOrExplore({ searchPlan, stage: 'searching_live' });
+    await expect(session.runSearchKeyword({ keyword: 'Java', maxCandidates: 5 })).resolves.toEqual(
+      expect.objectContaining({ candidates: expect.any(Array) }),
+    );
+
+    expect(dependencies.runBrowserWorkflow).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ currentStepId: SCREENING_STEP_IDS.searchFill }),
     );
   });
 

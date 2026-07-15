@@ -29,6 +29,16 @@ class RecordingExecutor implements BrowserExecutor {
     return { success: true };
   }
 
+  async waitForSnapshotChange(
+    previousSnapshot: string,
+    previousUrl?: string,
+  ): Promise<BrowserStepResult> {
+    this.calls.push(
+      `waitForSnapshotChange:${previousSnapshot}${previousUrl ? `:${previousUrl}` : ''}`,
+    );
+    return { success: true };
+  }
+
   async addKeywords(
     locator: string,
     values: string[],
@@ -142,6 +152,120 @@ describe('runPublishingSkill', () => {
 
     expect(result.observations).toEqual({ listHtml: '<main>candidate list</main>' });
     expect(result.traceSteps[0]?.result).toEqual({ success: true });
+  });
+
+  it('waits for a saved observation to change without putting HTML in the trace', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockResolvedValue('<main>before search</main>');
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_before_search',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'previousListHtml' },
+          next: 'wait_for_results',
+        },
+        {
+          id: 'wait_for_results',
+          type: 'action',
+          action: 'wait_for_snapshot_change' as never,
+          params: { previousObservationKey: 'previousListHtml' },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result.status).toBe('success');
+    expect(executor.calls).toContain('waitForSnapshotChange:<main>before search</main>');
+    expect(result.traceSteps[1]).toEqual(
+      expect.objectContaining({
+        action: 'wait_for_snapshot_change',
+        params: { previousObservationKey: 'previousListHtml' },
+      }),
+    );
+  });
+
+  it('keeps waiting through an intermediate snapshot until a readiness check succeeds', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest
+      .fn()
+      .mockResolvedValueOnce('<main>before search</main>')
+      .mockResolvedValueOnce('<main>loading</main>');
+    executor.check = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_before_search',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'previousListHtml' },
+          next: 'wait_for_results',
+        },
+        {
+          id: 'wait_for_results',
+          type: 'action',
+          action: 'wait_for_snapshot_change',
+          params: {
+            previousObservationKey: 'previousListHtml',
+            readyChecks: [{ type: 'dom_exists', selector: 'article[data-candidate-id]' }],
+          },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor,
+      context: emptyContext,
+    });
+
+    expect(result.status).toBe('success');
+    expect(executor.calls.filter((call) => call.startsWith('waitForSnapshotChange:'))).toHaveLength(
+      2,
+    );
+    expect(executor.calls).toContain('waitForSnapshotChange:<main>loading</main>');
+  });
+
+  it('treats a URL change as an alternative search completion signal', async () => {
+    const executor = new RecordingExecutor();
+    executor.snapshot = jest.fn().mockResolvedValue('<main>same candidates</main>');
+
+    const result = await runBrowserWorkflow({
+      skill: skillWith([
+        {
+          id: 'observe_before_search',
+          type: 'action',
+          action: 'observe',
+          params: { format: 'html', saveAs: 'previousListHtml' },
+          next: 'wait_for_results',
+        },
+        {
+          id: 'wait_for_results',
+          type: 'action',
+          action: 'wait_for_snapshot_change',
+          params: {
+            previousObservationKey: 'previousListHtml',
+            previousUrl: '{{input.previousUrl}}',
+          },
+          next: 'done',
+        },
+        { id: 'done', type: 'end' },
+      ]),
+      executor,
+      context: {
+        ...emptyContext,
+        input: { previousUrl: 'https://boss.example.com/employer/resumes' },
+      },
+    });
+
+    expect(result.status).toBe('success');
+    expect(executor.calls).toContain(
+      'waitForSnapshotChange:<main>same candidates</main>:https://boss.example.com/employer/resumes',
+    );
   });
 
   it('starts at the supplied currentStepId', async () => {

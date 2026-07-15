@@ -231,7 +231,7 @@ async function startBossLikeServer(): Promise<BossLikeServer> {
       request.resume();
       request.on('end', () => {
         sentMessageIds.push(messageMatch[1] ?? '');
-        response.end('<!doctype html><html><body>Message sent</body></html>');
+        response.end('<!doctype html><html><body>消息已发送</body></html>');
       });
       return;
     }
@@ -466,7 +466,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
       expect(await executor.waitForUrl(`/employer/resumes/${adaResumeId}/messages`)).toMatchObject({
         success: true,
       });
-      expect(await executor.waitForText('Message sent')).toMatchObject({ success: true });
+      expect(await executor.waitForText('消息已发送')).toMatchObject({ success: true });
       expect(bossLike.requests).toContain(`POST /employer/resumes/${adaResumeId}/messages`);
     } finally {
       await executor.close();
@@ -1338,10 +1338,10 @@ describe('candidate screening integration flow with real postgres and boss-like 
         where: { id: persisted?.skillId ?? '' },
       });
       const retryEvents = events.filter(
-        (event) => event.message === 'Workflow 重试步骤：search_submit',
+        (event) => event.message === 'Workflow 重试步骤：search_fill',
       );
       const retrySuccessEvents = events.filter(
-        (event) => event.message === 'Workflow 重试成功：search_submit',
+        (event) => event.message === 'Workflow 重试成功：search_fill',
       );
 
       expect(persisted?.skillId).not.toBe(firstWorkflowId);
@@ -1349,7 +1349,7 @@ describe('candidate screening integration flow with real postgres and boss-like 
         expect.objectContaining({ name: 'screen_candidates', version: 2, isActive: true }),
       );
       expect(events.map((event) => event.message)).toEqual(
-        expect.arrayContaining(['Workflow 修复并升级到 v2', 'Workflow 重试成功：search_submit']),
+        expect.arrayContaining(['Workflow 修复并升级到 v2', 'Workflow 重试成功：search_fill']),
       );
       expect(retryEvents).toHaveLength(1);
       expect(retrySuccessEvents).toHaveLength(1);

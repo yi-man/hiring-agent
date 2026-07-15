@@ -48,6 +48,7 @@ import {
   repairBossLikeScreeningSteps,
   repairBossLikeScreeningTargetFromSnapshot,
 } from './explore';
+import { isCompatibleBossLikeScreeningSkill } from './skill-registry';
 import { SCREENING_STEP_IDS } from './types';
 import type {
   BossLikeScreeningExploration,
@@ -179,6 +180,11 @@ const CONTACT_REPAIR_STEP_IDS = new Set<string>([
   SCREENING_STEP_IDS.contactOpenGreeting,
   SCREENING_STEP_IDS.contactFillMessage,
   SCREENING_STEP_IDS.contactSend,
+]);
+
+const SEARCH_REPAIR_STEP_IDS = new Set<string>([
+  SCREENING_STEP_IDS.searchFill,
+  SCREENING_STEP_IDS.searchSubmit,
 ]);
 
 export type CandidateScreeningWorkflowSession = {
@@ -689,7 +695,9 @@ export function createCandidateScreeningWorkflowSession(
       retry = true;
       startStepId = CONTACT_REPAIR_STEP_IDS.has(targetFailure.stepId)
         ? SCREENING_STEP_IDS.contactOpen
-        : targetFailure.stepId;
+        : SEARCH_REPAIR_STEP_IDS.has(targetFailure.stepId)
+          ? SCREENING_STEP_IDS.searchFill
+          : targetFailure.stepId;
     }
   }
 
@@ -704,8 +712,9 @@ export function createCandidateScreeningWorkflowSession(
       name: 'screen_candidates',
       platform: dependencies.platform,
     });
-    if (active) {
-      skill = screeningSkill(active);
+    const activeSkill = active ? screeningSkill(active) : null;
+    if (activeSkill && isCompatibleBossLikeScreeningSkill(activeSkill)) {
+      skill = activeSkill;
       await recordEvent({
         level: 'info',
         message: `复用 Workflow：${skill.name} v${skill.version} (${skill.id})`,
@@ -718,6 +727,19 @@ export function createCandidateScreeningWorkflowSession(
         }),
       });
     } else {
+      if (activeSkill) {
+        await recordEvent({
+          level: 'info',
+          message: `Workflow 版本不兼容，重新探索：${activeSkill.name} v${activeSkill.version} (${activeSkill.id})`,
+          detail: {
+            workflowStep: 'replace_incompatible_workflow',
+            skillId: activeSkill.id,
+            workflowName: activeSkill.name,
+            workflowVersion: activeSkill.version,
+            previousSkillId: activeSkill.id,
+          },
+        });
+      }
       const explored = await dependencies.exploreSkill({
         adapter: dependencies.adapter,
         searchPlan: params.searchPlan,

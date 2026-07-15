@@ -1,4 +1,9 @@
-import { BROWSER_WORKFLOW_DSL_VERSION, type TargetDescriptor } from '@/lib/jd-publishing/types';
+import {
+  BROWSER_WORKFLOW_DSL_VERSION,
+  type PublishSkill,
+  type PublishStep,
+  type TargetDescriptor,
+} from '@/lib/jd-publishing/types';
 import {
   SCREENING_STEP_IDS,
   type BossLikeScreeningTargets,
@@ -21,6 +26,76 @@ function buttonTarget(name: string): TargetDescriptor {
     name,
     exact: true,
   };
+}
+
+function actionStep(
+  skill: PublishSkill,
+  stepId: string,
+): Extract<PublishStep, { type: 'action' }> | null {
+  return (
+    skill.steps.find(
+      (step): step is Extract<PublishStep, { type: 'action' }> =>
+        step.id === stepId && step.type === 'action',
+    ) ?? null
+  );
+}
+
+function hasReadyCheck(
+  step: Extract<PublishStep, { type: 'action' }>,
+  expected: Record<string, string>,
+): boolean {
+  const checks = step.params.readyChecks;
+  return (
+    Array.isArray(checks) &&
+    checks.some(
+      (check) =>
+        check !== null &&
+        typeof check === 'object' &&
+        Object.entries(expected).every(
+          ([key, value]) => (check as Record<string, unknown>)[key] === value,
+        ),
+    )
+  );
+}
+
+export function isCompatibleBossLikeScreeningSkill(skill: PublishSkill): boolean {
+  if (
+    skill.name !== 'screen_candidates' ||
+    skill.platform !== 'boss-like' ||
+    skill.meta?.dsl_version !== BROWSER_WORKFLOW_DSL_VERSION
+  ) {
+    return false;
+  }
+
+  const searchFill = actionStep(skill, SCREENING_STEP_IDS.searchFill);
+  const searchSnapshot = actionStep(skill, SCREENING_STEP_IDS.searchSnapshotBeforeSubmit);
+  const searchSubmit = actionStep(skill, SCREENING_STEP_IDS.searchSubmit);
+  const searchWait = actionStep(skill, SCREENING_STEP_IDS.searchWait);
+  const contactSend = actionStep(skill, SCREENING_STEP_IDS.contactSend);
+  const contactWait = actionStep(skill, SCREENING_STEP_IDS.contactWaitSuccess);
+
+  return Boolean(
+    searchFill?.action === 'fill' &&
+    searchFill.next === SCREENING_STEP_IDS.searchSnapshotBeforeSubmit &&
+    searchSnapshot?.action === 'observe' &&
+    searchSnapshot.params.saveAs === 'previousListHtml' &&
+    searchSnapshot.next === SCREENING_STEP_IDS.searchSubmit &&
+    searchSubmit?.action === 'click' &&
+    searchSubmit.next === SCREENING_STEP_IDS.searchWait &&
+    searchWait?.action === 'wait_for_snapshot_change' &&
+    searchWait.params.previousObservationKey === 'previousListHtml' &&
+    searchWait.params.previousUrl === '{{input.baseUrl}}/employer/resumes' &&
+    hasReadyCheck(searchWait, {
+      type: 'dom_exists',
+      selector: 'article[data-candidate-id]',
+    }) &&
+    hasReadyCheck(searchWait, { type: 'text_contains', text: '暂无简历数据' }) &&
+    contactSend?.action === 'click' &&
+    contactSend.next === SCREENING_STEP_IDS.contactWaitSuccess &&
+    contactWait?.action === 'wait_for_text' &&
+    contactWait.params.text === '消息已发送' &&
+    contactWait.next === SCREENING_STEP_IDS.collectOpen,
+  );
 }
 
 export function defaultBossLikeScreeningTargets(): BossLikeScreeningTargets {
@@ -111,8 +186,15 @@ export function buildBossLikeScreeningSkill(
         type: 'action',
         action: 'fill',
         params: { target: targets.searchInput, value: '{{input.keyword}}' },
-        next: SCREENING_STEP_IDS.searchSubmit,
+        next: SCREENING_STEP_IDS.searchSnapshotBeforeSubmit,
         onFail: { type: 'fallback_agent', reason: 'search input changed' },
+      },
+      {
+        id: SCREENING_STEP_IDS.searchSnapshotBeforeSubmit,
+        type: 'action',
+        action: 'observe',
+        params: { format: 'html', saveAs: 'previousListHtml' },
+        next: SCREENING_STEP_IDS.searchSubmit,
       },
       {
         id: SCREENING_STEP_IDS.searchSubmit,
@@ -125,8 +207,15 @@ export function buildBossLikeScreeningSkill(
       {
         id: SCREENING_STEP_IDS.searchWait,
         type: 'action',
-        action: 'wait_for_url',
-        params: { url: '{{input.searchUrl}}' },
+        action: 'wait_for_snapshot_change',
+        params: {
+          previousObservationKey: 'previousListHtml',
+          previousUrl: '{{input.baseUrl}}/employer/resumes',
+          readyChecks: [
+            { type: 'dom_exists', selector: 'article[data-candidate-id]', timeout: 10_000 },
+            { type: 'text_contains', text: '暂无简历数据', timeout: 10_000 },
+          ],
+        },
         next: SCREENING_STEP_IDS.searchObserve,
       },
       {
@@ -193,8 +282,8 @@ export function buildBossLikeScreeningSkill(
       {
         id: SCREENING_STEP_IDS.contactWaitSuccess,
         type: 'action',
-        action: 'wait_for_url',
-        params: { url: '{{input.profileUrl}}/messages' },
+        action: 'wait_for_text',
+        params: { text: '消息已发送' },
         next: SCREENING_STEP_IDS.collectOpen,
       },
       {
