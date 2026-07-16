@@ -1,13 +1,19 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { parseUpdateCandidateProgressPayload } from '@/lib/candidate-screening/api';
+import { validateCandidateInterviewStageTransition } from '@/lib/candidate-screening/interview-stage';
 import {
   getCandidateScreeningDetail,
+  listCandidateInterviewFeedbacks,
   updateCandidateInterviewProgress,
 } from '@/lib/candidate-screening/repo';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+function conflict(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
 }
 
 function serverErrorResponse(error: unknown) {
@@ -83,6 +89,31 @@ export async function PATCH(
     const parsed = parseUpdateCandidateProgressPayload(body.value);
     if (!parsed.ok) {
       return badRequest(parsed.error);
+    }
+
+    if (parsed.value.interviewStage !== undefined) {
+      const current = await getCandidateScreeningDetail({
+        userId: auth.user.id,
+        jobDescriptionId: id,
+        candidateId,
+      });
+      if (!current) {
+        return NextResponse.json(
+          { error: 'candidate screening result not found' },
+          { status: 404 },
+        );
+      }
+      const feedbacks = await listCandidateInterviewFeedbacks({
+        userId: auth.user.id,
+        jobDescriptionId: id,
+        candidateId,
+      });
+      const transition = validateCandidateInterviewStageTransition(
+        current.interviewStage,
+        parsed.value.interviewStage,
+        feedbacks,
+      );
+      if (!transition.ok) return conflict(transition.error);
     }
 
     const candidate = await updateCandidateInterviewProgress({

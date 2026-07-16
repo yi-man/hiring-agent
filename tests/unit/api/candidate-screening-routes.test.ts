@@ -319,6 +319,9 @@ const sampleFeedback: CandidateInterviewFeedbackDto = {
   stage: 'first_interview',
   interviewer: 'Grace Hopper',
   rating: 4,
+  dimensionRatings: [
+    { dimension: 'core_competency', score: 4, evidence: '能够独立完成核心开发任务' },
+  ],
   pros: ['TypeScript 扎实', '产品判断好'],
   cons: ['系统设计需要追问'],
   decision: 'pass',
@@ -328,6 +331,8 @@ const sampleFeedback: CandidateInterviewFeedbackDto = {
 };
 
 const sampleDecisionResult: CandidateDecisionResultDto = {
+  decisionScope: 'preliminary',
+  missingFeedbackStages: ['phone_screen', 'second_interview', 'final_interview'],
   hireDecision: 'yes',
   confidence: 0.82,
   offerAcceptProbability: 0.68,
@@ -343,6 +348,40 @@ const sampleDecisionResult: CandidateDecisionResultDto = {
       lowStability: false,
     },
     responsiveness: 0.85,
+  },
+  dimensionAssessments: [
+    {
+      key: 'core_competency',
+      label: '核心任务胜任力',
+      score: 0.86,
+      weight: 0.35,
+      contribution: 0.3,
+      confidence: 0.8,
+      status: 'strong',
+      summary: '综合简历与面试证据评估',
+      evidence: ['TypeScript 扎实'],
+    },
+  ],
+  decisionTrace: {
+    weightedScore: 0.82,
+    hardRejected: false,
+    formula: [
+      {
+        key: 'core_competency',
+        label: '核心任务胜任力',
+        score: 0.86,
+        weight: 0.35,
+        contribution: 0.3,
+      },
+    ],
+    thresholds: {
+      strongYes: 0.82,
+      strongYesDimensionFloor: 0.6,
+      yes: 0.65,
+      preliminaryYes: 0.6,
+      hardRejectCoreCompetency: 0.4,
+    },
+    feedbackCoverage: { completed: 1, total: 4 },
   },
   riskAnalysis: {
     level: 'medium',
@@ -866,7 +905,13 @@ describe('candidate screening API routes', () => {
   });
 
   it('upserts structured interview feedback with trimmed arrays', async () => {
-    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    getCandidateScreeningDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      interviewStage: 'interviewing',
+    });
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([
+      { ...sampleFeedback, id: 'feedback-phone', stage: 'phone_screen' },
+    ]);
     upsertCandidateInterviewFeedbackMock.mockResolvedValueOnce(sampleFeedback);
     const request = jsonRequest(
       'http://localhost/api/jd/jd-1/candidates/cand-1/interview-feedbacks',
@@ -874,6 +919,13 @@ describe('candidate screening API routes', () => {
         stage: 'first_interview',
         interviewer: '  Grace Hopper  ',
         rating: 4,
+        dimensionRatings: [
+          {
+            dimension: 'core_competency',
+            score: 4,
+            evidence: ' 能够独立完成核心开发任务 ',
+          },
+        ],
         pros: [' TypeScript 扎实 ', '', '产品判断好'],
         cons: [' 系统设计需要追问 '],
         decision: 'pass',
@@ -893,6 +945,11 @@ describe('candidate screening API routes', () => {
       jobDescriptionId: 'jd-1',
       candidateId: 'cand-1',
     });
+    expect(listCandidateInterviewFeedbacksMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+    });
     expect(upsertCandidateInterviewFeedbackMock).toHaveBeenCalledWith({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
@@ -900,11 +957,50 @@ describe('candidate screening API routes', () => {
       stage: 'first_interview',
       interviewer: 'Grace Hopper',
       rating: 4,
+      dimensionRatings: [
+        {
+          dimension: 'core_competency',
+          score: 4,
+          evidence: '能够独立完成核心开发任务',
+        },
+      ],
       pros: ['TypeScript 扎实', '产品判断好'],
       cons: ['系统设计需要追问'],
       decision: 'pass',
       notes: '建议推进二面',
     });
+  });
+
+  it('rejects feedback that skips the candidate interview stage', async () => {
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+    const request = jsonRequest(
+      'http://localhost/api/jd/jd-1/candidates/cand-1/interview-feedbacks',
+      {
+        stage: 'final_interview',
+        interviewer: 'Grace Hopper',
+        rating: 4,
+        dimensionRatings: [
+          {
+            dimension: 'core_competency',
+            score: 4,
+            evidence: '能够独立完成核心开发任务',
+          },
+        ],
+        pros: [],
+        cons: [],
+        decision: 'pass',
+      },
+    );
+
+    const response = await upsertCandidateInterviewFeedbackRoute(request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toContain('不能新增终面评价');
+    expect(upsertCandidateInterviewFeedbackMock).not.toHaveBeenCalled();
   });
 
   it('returns 404 when interview feedback candidate is missing', async () => {
@@ -943,6 +1039,30 @@ describe('candidate screening API routes', () => {
     expect(upsertCandidateInterviewFeedbackMock).not.toHaveBeenCalled();
   });
 
+  it('rejects a dimension score without concrete evidence', async () => {
+    const request = jsonRequest(
+      'http://localhost/api/jd/jd-1/candidates/cand-1/interview-feedbacks',
+      {
+        stage: 'first_interview',
+        interviewer: 'Grace Hopper',
+        rating: 4,
+        dimensionRatings: [{ dimension: 'core_competency', score: 4, evidence: '   ' }],
+        pros: [],
+        cons: [],
+        decision: 'pass',
+      },
+    );
+
+    const response = await upsertCandidateInterviewFeedbackRoute(request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('dimension rating evidence is required');
+    expect(upsertCandidateInterviewFeedbackMock).not.toHaveBeenCalled();
+  });
+
   it('evaluates the hiring decision from JD, candidate, and interview feedback', async () => {
     getJobDescriptionByIdMock.mockResolvedValueOnce(sampleJobDescription);
     getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
@@ -974,6 +1094,24 @@ describe('candidate screening API routes', () => {
       candidate: sampleCandidateDetail,
       interviewFeedbacks: [sampleFeedback],
     });
+  });
+
+  it('rejects a hiring decision without interview evidence', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce(sampleJobDescription);
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+
+    const response = await evaluateCandidateDecisionRoute(
+      jsonRequest('http://localhost/api/decision/evaluate', {
+        job_description_id: 'jd-1',
+        candidate_id: 'cand-1',
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('至少完成一轮结构化评价后才能生成建议');
+    expect(evaluateCandidateHiringDecisionMock).not.toHaveBeenCalled();
   });
 
   it('redirects to the original recruiting site profile for a scoped candidate', async () => {
@@ -1017,16 +1155,18 @@ describe('candidate screening API routes', () => {
   it('updates interview progress and notes', async () => {
     const updatedResult: CandidateScreeningResultDto = {
       ...sampleResult,
-      interviewStage: 'phone_screen',
-      notes: 'Schedule phone screen',
+      interviewStage: 'contacted',
+      notes: 'Invitation sent',
     };
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
     updateCandidateInterviewProgressMock.mockResolvedValueOnce(updatedResult);
     const request = new Request('http://localhost/api/jd/jd-1/candidates/cand-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        interviewStage: 'phone_screen',
-        notes: '  Schedule phone screen  ',
+        interviewStage: 'contacted',
+        notes: '  Invitation sent  ',
       }),
     });
 
@@ -1041,9 +1181,26 @@ describe('candidate screening API routes', () => {
       userId: 'u1',
       jobDescriptionId: 'jd-1',
       candidateId: 'cand-1',
-      interviewStage: 'phone_screen',
-      notes: 'Schedule phone screen',
+      interviewStage: 'contacted',
+      notes: 'Invitation sent',
     });
+  });
+
+  it('rejects an invalid interview stage jump', async () => {
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+
+    const response = await updateJdCandidate(
+      jsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', {
+        interviewStage: 'phone_screen',
+      }),
+      { params: params({ id: 'jd-1', candidateId: 'cand-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('不能从“待联系”直接推进到“电话沟通”');
+    expect(updateCandidateInterviewProgressMock).not.toHaveBeenCalled();
   });
 
   it('returns 400 when update candidate progress receives malformed JSON', async () => {

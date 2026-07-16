@@ -9,7 +9,10 @@ import {
   DEFAULT_SCREENING_MAX_CANDIDATES,
   MAX_SCREENING_MAX_CANDIDATES,
 } from './constants';
+import { CANDIDATE_EVALUATION_DIMENSIONS } from './evaluation-dimensions';
 import type {
+  CandidateEvaluationDimensionKey,
+  CandidateInterviewDimensionRating,
   CandidateInterviewStage,
   CandidateInterviewFeedbackDecision,
   CandidateInterviewFeedbackStage,
@@ -87,6 +90,52 @@ function cleanStringArray(value: unknown, fieldName: string): ValidationResult<s
     if (trimmed) {
       result.push(trimmed);
     }
+  }
+  return { ok: true, value: result };
+}
+
+const candidateEvaluationDimensionKeys = new Set<CandidateEvaluationDimensionKey>(
+  CANDIDATE_EVALUATION_DIMENSIONS.map((dimension) => dimension.key),
+);
+
+function cleanDimensionRatings(
+  value: unknown,
+): ValidationResult<CandidateInterviewDimensionRating[]> {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { ok: false, error: 'dimensionRatings must contain at least one rating' };
+  }
+
+  const result: CandidateInterviewDimensionRating[] = [];
+  const seen = new Set<CandidateEvaluationDimensionKey>();
+  for (const item of value) {
+    if (!isRecord(item)) {
+      return { ok: false, error: 'dimensionRatings contains an invalid rating' };
+    }
+    const dimension = item.dimension;
+    if (
+      typeof dimension !== 'string' ||
+      !candidateEvaluationDimensionKeys.has(dimension as CandidateEvaluationDimensionKey)
+    ) {
+      return { ok: false, error: 'dimensionRatings contains an invalid dimension' };
+    }
+    const key = dimension as CandidateEvaluationDimensionKey;
+    if (seen.has(key)) {
+      return { ok: false, error: 'dimensionRatings contains duplicate dimensions' };
+    }
+    if (
+      typeof item.score !== 'number' ||
+      !Number.isInteger(item.score) ||
+      item.score < 1 ||
+      item.score > 5
+    ) {
+      return { ok: false, error: 'dimension rating score must be an integer between 1 and 5' };
+    }
+    const evidence = cleanText(item.evidence);
+    if (!evidence) {
+      return { ok: false, error: 'dimension rating evidence is required' };
+    }
+    seen.add(key);
+    result.push({ dimension: key, score: item.score, evidence });
   }
   return { ok: true, value: result };
 }
@@ -225,6 +274,9 @@ export function parseUpsertCandidateInterviewFeedbackPayload(
   const cons = cleanStringArray(body.cons ?? [], 'cons');
   if (!cons.ok) return cons;
 
+  const dimensionRatings = cleanDimensionRatings(body.dimensionRatings);
+  if (!dimensionRatings.ok) return dimensionRatings;
+
   if (!isCandidateInterviewFeedbackDecision(body.decision)) {
     return { ok: false, error: 'decision is invalid' };
   }
@@ -235,6 +287,7 @@ export function parseUpsertCandidateInterviewFeedbackPayload(
       stage: body.stage,
       interviewer,
       rating: body.rating,
+      dimensionRatings: dimensionRatings.value,
       pros: pros.value,
       cons: cons.value,
       decision: body.decision,

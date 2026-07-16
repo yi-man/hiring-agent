@@ -513,6 +513,12 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
       rationale: decision.rationale,
       llmMeta: { resumeEvaluationSource: state.resumeEvaluationSource },
     });
+    await dependencies.repo.syncCandidateInterviewStage({
+      userId: state.userId,
+      jobDescriptionId: state.payload.jobDescriptionId,
+      candidateId: state.payload.candidateId,
+      interviewStage: decision.nextStage === 'rejected' ? 'withdrawn' : 'replied',
+    });
     return {};
   }
 

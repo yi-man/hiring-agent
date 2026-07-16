@@ -85,6 +85,7 @@ function createRepo(overrides: Partial<CandidateConversationRepository> = {}) {
     }),
     createMemory: jest.fn(),
     markCandidateReplied: jest.fn().mockResolvedValue(undefined),
+    syncCandidateInterviewStage: jest.fn().mockResolvedValue(undefined),
     resolveCandidateForPlatformMessage: jest.fn().mockResolvedValue({ candidateId: 'candidate-1' }),
     ...overrides,
   } as CandidateConversationRepository;

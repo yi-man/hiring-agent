@@ -680,6 +680,7 @@ model CandidateInterviewFeedback {
   stage            String
   interviewer      String
   rating           Float
+  dimensionRatings Json           @default("[]") @map("dimension_ratings")
   pros             Json
   cons             Json
   decision         String

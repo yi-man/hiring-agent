@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { parseUpsertCandidateInterviewFeedbackPayload } from '@/lib/candidate-screening/api';
+import { validateCandidateInterviewFeedbackStage } from '@/lib/candidate-screening/interview-stage';
 import {
   getCandidateScreeningDetail,
   listCandidateInterviewFeedbacks,
@@ -9,6 +10,10 @@ import {
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+function conflict(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
 }
 
 function serverErrorResponse(error: unknown) {
@@ -99,6 +104,18 @@ export async function POST(
     if (!candidate) {
       return NextResponse.json({ error: 'candidate screening result not found' }, { status: 404 });
     }
+
+    const feedbacks = await listCandidateInterviewFeedbacks({
+      userId: auth.user.id,
+      jobDescriptionId: id,
+      candidateId,
+    });
+    const feedbackStageValidation = validateCandidateInterviewFeedbackStage(
+      candidate.interviewStage,
+      parsed.value.stage,
+      feedbacks,
+    );
+    if (!feedbackStageValidation.ok) return conflict(feedbackStageValidation.error);
 
     const feedback = await upsertCandidateInterviewFeedback({
       userId: auth.user.id,

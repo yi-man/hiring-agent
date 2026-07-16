@@ -5,6 +5,8 @@ import { InterviewRecordList } from '@/components/candidate-screening/interview-
 import { ResumeLibrary } from '@/components/candidate-screening/resume-library';
 import { CandidateCommunicationRunLog } from '@/components/candidate-communication/communication-run-log';
 import { CandidateDetail } from '@/components/candidate-screening/candidate-detail';
+import { CandidateInterviewDetail } from '@/components/candidate-screening/candidate-interview-detail';
+import { CandidateDecisionRun } from '@/components/candidate-screening/candidate-decision-run';
 import { CandidateScreeningRunLog } from '@/components/candidate-screening/screening-run-log';
 import { CandidateTrackingDashboard } from '@/components/candidate-screening/tracking-dashboard';
 import type {
@@ -504,6 +506,10 @@ const sampleFeedback: CandidateInterviewFeedbackDto = {
   stage: 'first_interview',
   interviewer: 'Grace Hopper',
   rating: 4,
+  dimensionRatings: [
+    { dimension: 'core_competency', score: 4, evidence: '能独立完成 Java 核心服务开发' },
+    { dimension: 'problem_solving', score: 4, evidence: '能解释系统设计取舍' },
+  ],
   pros: ['Java 基础扎实'],
   cons: ['系统设计还需追问'],
   decision: 'pass',
@@ -512,7 +518,17 @@ const sampleFeedback: CandidateInterviewFeedbackDto = {
   updatedAt: now,
 };
 
+const samplePhoneScreenFeedback: CandidateInterviewFeedbackDto = {
+  ...sampleFeedback,
+  id: 'feedback-phone-screen',
+  stage: 'phone_screen',
+  interviewer: 'Katherine Johnson',
+  notes: '沟通意愿与基本条件匹配',
+};
+
 const sampleDecisionResult: CandidateDecisionResultDto = {
+  decisionScope: 'preliminary',
+  missingFeedbackStages: ['phone_screen', 'second_interview', 'final_interview'],
   hireDecision: 'yes',
   confidence: 0.82,
   offerAcceptProbability: 0.68,
@@ -528,6 +544,123 @@ const sampleDecisionResult: CandidateDecisionResultDto = {
       lowStability: false,
     },
     responsiveness: 0.85,
+  },
+  dimensionAssessments: [
+    {
+      key: 'core_competency',
+      label: '核心任务胜任力',
+      score: 0.86,
+      weight: 0.35,
+      contribution: 0.3,
+      confidence: 0.85,
+      status: 'strong',
+      summary: '综合简历与面试证据评估',
+      evidence: ['Java 基础扎实'],
+    },
+    {
+      key: 'problem_solving',
+      label: '复杂问题解决与专业判断',
+      score: 0.8,
+      weight: 0.2,
+      contribution: 0.16,
+      confidence: 0.8,
+      status: 'strong',
+      summary: '综合简历与面试证据评估',
+      evidence: ['能解释系统设计取舍'],
+    },
+    {
+      key: 'impact',
+      label: '成果与业务影响力',
+      score: 0.8,
+      weight: 0.2,
+      contribution: 0.16,
+      confidence: 0.7,
+      status: 'strong',
+      summary: '综合项目规模和结果评估',
+      evidence: ['候选人经验 8 年'],
+    },
+    {
+      key: 'collaboration',
+      label: '协作、推动与责任感',
+      score: 0.75,
+      weight: 0.15,
+      contribution: 0.11,
+      confidence: 0.7,
+      status: 'acceptable',
+      summary: '综合协作案例评估',
+      evidence: ['沟通清晰'],
+    },
+    {
+      key: 'motivation',
+      label: '动机与角色契合',
+      score: 0.9,
+      weight: 0.1,
+      contribution: 0.09,
+      confidence: 0.75,
+      status: 'strong',
+      summary: '岗位动机明确',
+      evidence: ['沟通意愿与基本条件匹配'],
+    },
+    {
+      key: 'risk',
+      label: '风险健康度',
+      score: 0.8,
+      weight: 0,
+      contribution: 0,
+      confidence: 0.8,
+      status: 'acceptable',
+      summary: '发现 1 项风险信号',
+      evidence: ['薪资敏感'],
+    },
+  ],
+  decisionTrace: {
+    weightedScore: 0.86,
+    hardRejected: false,
+    formula: [
+      {
+        key: 'core_competency',
+        label: '核心任务胜任力',
+        score: 0.86,
+        weight: 0.35,
+        contribution: 0.3,
+      },
+      {
+        key: 'problem_solving',
+        label: '复杂问题解决与专业判断',
+        score: 0.8,
+        weight: 0.2,
+        contribution: 0.16,
+      },
+      {
+        key: 'impact',
+        label: '成果与业务影响力',
+        score: 0.8,
+        weight: 0.2,
+        contribution: 0.16,
+      },
+      {
+        key: 'collaboration',
+        label: '协作、推动与责任感',
+        score: 0.75,
+        weight: 0.15,
+        contribution: 0.11,
+      },
+      {
+        key: 'motivation',
+        label: '动机与角色契合',
+        score: 0.9,
+        weight: 0.1,
+        contribution: 0.09,
+      },
+    ],
+    thresholds: {
+      strongYes: 0.82,
+      strongYesDimensionFloor: 0.6,
+      yes: 0.65,
+      preliminaryYes: 0.6,
+      hardRejectCoreCompetency: 0.4,
+    },
+    feedbackCoverage: { completed: 1, total: 4 },
   },
   riskAnalysis: {
     level: 'medium',
@@ -1488,64 +1621,257 @@ describe('candidate screening UI', () => {
     expect(originalProfileLink).toHaveAttribute('rel', 'noreferrer');
   });
 
-  it('candidate detail updates interview stage', async () => {
+  it('candidate detail summarizes interview status and links to the interview detail', async () => {
     render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
 
+    expect(await screen.findByText('面试状态')).toBeInTheDocument();
+    expect(screen.getByText('待联系')).toBeInTheDocument();
+    expect(screen.getByText('已完成 1 / 4 轮评价')).toBeInTheDocument();
+    expect(screen.getByText('电话沟通待评价')).toBeInTheDocument();
+    expect(screen.getByText('一面已评价')).toBeInTheDocument();
+    expect(screen.queryByLabelText('面试阶段')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('一面面试官')).not.toBeInTheDocument();
+
+    const interviewLink = screen.getByRole('button', { name: '查看面试详情' });
+    const interviewHref = interviewLink.getAttribute('href') ?? '';
+    expect(parsedHref(interviewHref).pathname).toBe(
+      '/jd-generator/jd-1/candidates/cand-1/interview',
+    );
+    expectReturnContext(interviewHref, '/jd-generator/jd-1/candidates/cand-1', '返回候选人详情');
+  });
+
+  it('interview detail updates interview stage', async () => {
+    updateJdCandidateProgressMock.mockResolvedValueOnce({
+      ...sampleCandidateListItem,
+      interviewStage: 'contacted',
+      notes: '已发送邀约',
+    });
+    render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
     const stageSelect = await screen.findByLabelText('面试阶段');
-    fireEvent.change(stageSelect, { target: { value: 'phone_screen' } });
-    fireEvent.change(screen.getByLabelText('候选人备注'), { target: { value: '已约电话' } });
+    fireEvent.change(stageSelect, { target: { value: 'contacted' } });
+    fireEvent.change(screen.getByLabelText('候选人备注'), { target: { value: '已发送邀约' } });
     fireEvent.click(screen.getByRole('button', { name: '保存进度' }));
 
     await waitFor(() =>
       expect(updateJdCandidateProgressMock).toHaveBeenCalledWith('jd-1', 'cand-1', {
-        interviewStage: 'phone_screen',
-        notes: '已约电话',
+        interviewStage: 'contacted',
+        notes: '已发送邀约',
       }),
     );
 
     const progressRegion = screen.getByLabelText('当前候选人进度');
-    expect(within(progressRegion).getByText('phone_screen')).toBeInTheDocument();
+    expect(within(progressRegion).getByText('contacted')).toBeInTheDocument();
   });
 
-  it('candidate detail saves interview feedback rounds and evaluates hiring decision', async () => {
-    render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+  it('interview detail repairs a replied candidate with a stale contacted stage', async () => {
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      interviewStage: 'contacted',
+      candidate: {
+        ...sampleCandidateDetail.candidate,
+        replied: true,
+      },
+    });
+    updateJdCandidateProgressMock.mockResolvedValueOnce({
+      ...sampleCandidateListItem,
+      interviewStage: 'replied',
+    });
+
+    render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    expect(await screen.findByText('检测到候选人已经回复')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '同步为已回复' }));
+
+    await waitFor(() =>
+      expect(updateJdCandidateProgressMock).toHaveBeenCalledWith('jd-1', 'cand-1', {
+        interviewStage: 'replied',
+        notes: sampleCandidateDetail.notes ?? '',
+      }),
+    );
+    expect(screen.queryByText('检测到候选人已经回复')).not.toBeInTheDocument();
+  });
+
+  it('interview detail collects a structured phone screen evaluation', async () => {
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      interviewStage: 'phone_screen',
+    });
+    fetchCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+    saveCandidateInterviewFeedbackMock.mockResolvedValueOnce(samplePhoneScreenFeedback);
+
+    render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    expect(await screen.findByText('继续评价 · 电话沟通')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('电话沟通面试官'), {
+      target: { value: 'Katherine Johnson' },
+    });
+    fireEvent.change(screen.getByLabelText('电话沟通动机与角色契合评分'), {
+      target: { value: '4' },
+    });
+    fireEvent.change(screen.getByLabelText('电话沟通动机与角色契合证据'), {
+      target: { value: '候选人能清楚说明求职动机和岗位关注点' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存电话沟通' }));
+
+    await waitFor(() =>
+      expect(saveCandidateInterviewFeedbackMock).toHaveBeenCalledWith(
+        'jd-1',
+        'cand-1',
+        expect.objectContaining({
+          stage: 'phone_screen',
+          interviewer: 'Katherine Johnson',
+          rating: 4,
+          dimensionRatings: [
+            {
+              dimension: 'motivation',
+              score: 4,
+              evidence: '候选人能清楚说明求职动机和岗位关注点',
+            },
+          ],
+        }),
+      ),
+    );
+  });
+
+  it('interview detail closes pending evaluation after leaving the interviewing stage', async () => {
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      interviewStage: 'interviewing',
+    });
+    updateJdCandidateProgressMock.mockResolvedValueOnce({
+      ...sampleCandidateListItem,
+      interviewStage: 'rejected',
+      notes: '面试未通过',
+    });
+    fetchCandidateInterviewFeedbacksMock.mockResolvedValueOnce([
+      samplePhoneScreenFeedback,
+      sampleFeedback,
+    ]);
+
+    render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    expect(await screen.findByLabelText('二面面试官')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('面试阶段'), { target: { value: 'rejected' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存进度' }));
+
+    await waitFor(() => expect(screen.queryByLabelText('二面面试官')).not.toBeInTheDocument());
+    expect(screen.getByText('当前阶段评价已完成')).toBeInTheDocument();
+  });
+
+  it('interview detail shows completed feedback and continues the next evaluation', async () => {
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      interviewStage: 'interviewing',
+    });
+    saveCandidateInterviewFeedbackMock.mockResolvedValueOnce({
+      ...sampleFeedback,
+      id: 'feedback-2',
+      stage: 'second_interview',
+      interviewer: 'Alan Turing',
+      rating: 5,
+      pros: ['系统设计扎实', '沟通清晰'],
+      cons: ['需要补充管理经验'],
+      decision: 'pass',
+      notes: '建议推进终面',
+    });
+    fetchCandidateInterviewFeedbacksMock.mockResolvedValueOnce([
+      samplePhoneScreenFeedback,
+      sampleFeedback,
+    ]);
+
+    render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
 
     expect(await screen.findByText('一面')).toBeInTheDocument();
-    expect(screen.getByText('二面')).toBeInTheDocument();
-    expect(screen.getByText('终面')).toBeInTheDocument();
+    expect(screen.getByText(/Grace Hopper/)).toBeInTheDocument();
+    expect(screen.getByText('继续评价 · 二面')).toBeInTheDocument();
+    expect(screen.queryByLabelText('一面面试官')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('一面面试官'), {
-      target: { value: 'Grace Hopper' },
+    fireEvent.change(screen.getByLabelText('二面面试官'), {
+      target: { value: 'Alan Turing' },
     });
-    fireEvent.change(screen.getByLabelText('一面评分'), { target: { value: '4' } });
-    fireEvent.change(screen.getByLabelText('一面优势'), {
-      target: { value: 'Java 基础扎实\n业务理解好' },
+    fireEvent.change(screen.getByLabelText('二面核心任务胜任力评分'), {
+      target: { value: '5' },
     });
-    fireEvent.change(screen.getByLabelText('一面不足'), {
-      target: { value: '系统设计还需追问' },
+    fireEvent.change(screen.getByLabelText('二面核心任务胜任力证据'), {
+      target: { value: '独立完成核心系统方案并解释关键实现' },
     });
-    fireEvent.change(screen.getByLabelText('一面结论'), { target: { value: 'pass' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存一面' }));
+    fireEvent.change(screen.getByLabelText('二面优势'), {
+      target: { value: '系统设计扎实\n沟通清晰' },
+    });
+    fireEvent.change(screen.getByLabelText('二面不足'), {
+      target: { value: '需要补充管理经验' },
+    });
+    fireEvent.change(screen.getByLabelText('二面结论'), { target: { value: 'pass' } });
+    fireEvent.change(screen.getByLabelText('二面备注'), {
+      target: { value: '建议推进终面' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存二面' }));
 
     await waitFor(() =>
       expect(saveCandidateInterviewFeedbackMock).toHaveBeenCalledWith('jd-1', 'cand-1', {
-        stage: 'first_interview',
-        interviewer: 'Grace Hopper',
-        rating: 4,
-        pros: ['Java 基础扎实', '业务理解好'],
-        cons: ['系统设计还需追问'],
+        stage: 'second_interview',
+        interviewer: 'Alan Turing',
+        rating: 5,
+        dimensionRatings: [
+          {
+            dimension: 'core_competency',
+            score: 5,
+            evidence: '独立完成核心系统方案并解释关键实现',
+          },
+        ],
+        pros: ['系统设计扎实', '沟通清晰'],
+        cons: ['需要补充管理经验'],
         decision: 'pass',
-        notes: '建议推进二面',
+        notes: '建议推进终面',
       }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '生成录用建议' }));
-
-    await waitFor(() =>
-      expect(evaluateJdCandidateDecisionMock).toHaveBeenCalledWith('jd-1', 'cand-1'),
+    const decisionLink = screen.getByRole('button', { name: '生成阶段性建议' });
+    expect(parsedHref(decisionLink.getAttribute('href') ?? '').pathname).toBe(
+      '/jd-generator/jd-1/candidates/cand-1/interview/decision',
     );
-    expect(await screen.findByText('建议录用')).toBeInTheDocument();
-    expect(screen.getByText('接受 offer 概率 68%')).toBeInTheDocument();
+    expect(evaluateJdCandidateDecisionMock).not.toHaveBeenCalled();
+  });
+
+  it('decision run shows execution logs, the final recommendation, and a back link', async () => {
+    const completeFeedbacks: CandidateInterviewFeedbackDto[] = [
+      samplePhoneScreenFeedback,
+      sampleFeedback,
+      { ...sampleFeedback, id: 'feedback-2', stage: 'second_interview' },
+      { ...sampleFeedback, id: 'feedback-final', stage: 'final_interview' },
+    ];
+    fetchCandidateInterviewFeedbacksMock.mockResolvedValueOnce(completeFeedbacks);
+    evaluateJdCandidateDecisionMock.mockResolvedValueOnce({
+      ...sampleDecisionResult,
+      decisionScope: 'final',
+      missingFeedbackStages: [],
+    });
+
+    render(<CandidateDecisionRun jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    expect(await screen.findByText('录用建议执行日志')).toBeInTheDocument();
+    expect(await screen.findByText('录用建议生成完成')).toBeInTheDocument();
+    expect(screen.getByText('岗位上下文')).toBeInTheDocument();
+    expect(screen.getByText('高级后端工程师')).toBeInTheDocument();
+    expect(screen.getByText('评价证据上下文')).toBeInTheDocument();
+    expect(screen.getByText(/一面 · 4\/5 · 通过/)).toBeInTheDocument();
+    expect(screen.getByText('维度评分与公式')).toBeInTheDocument();
+    expect(screen.getAllByText('核心任务胜任力').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('复杂问题解决与专业判断').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('动机与角色契合').length).toBeGreaterThan(0);
+    expect(screen.getByText('最终录用建议')).toBeInTheDocument();
+    expect(screen.getByText('建议录用')).toBeInTheDocument();
+    expect(screen.getByText('接受 Offer 概率')).toBeInTheDocument();
+    expect(screen.getByText('68%')).toBeInTheDocument();
     expect(screen.getByText('先确认薪资预期再发 offer')).toBeInTheDocument();
+
+    const backLinks = screen.getAllByRole('button', { name: '返回面试详情' });
+    expect(backLinks).toHaveLength(2);
+    for (const backLink of backLinks) {
+      expect(parsedHref(backLink.getAttribute('href') ?? '').pathname).toBe(
+        '/jd-generator/jd-1/candidates/cand-1/interview',
+      );
+    }
   });
 });

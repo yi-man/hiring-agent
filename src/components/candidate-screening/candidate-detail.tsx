@@ -6,113 +6,33 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   BadgeCheck,
-  BrainCircuit,
-  ClipboardCheck,
+  CalendarCheck2,
+  Check,
+  ChevronRight,
   ExternalLink,
   FileText,
   MessageCircle,
-  Save,
 } from 'lucide-react';
 import { Button, Card, CardBody, Chip } from '@/components/ui';
 import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
 import {
-  evaluateJdCandidateDecision,
   fetchCandidateInterviewFeedbacks,
   fetchJdCandidateDetail,
-  saveCandidateInterviewFeedback,
-  updateJdCandidateProgress,
 } from '@/lib/candidate-screening/client';
-import {
-  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
-  CANDIDATE_SCREENING_INTERVIEW_STAGES,
-} from '@/lib/candidate-screening/constants';
+import { CANDIDATE_INTERVIEW_FEEDBACK_STAGES } from '@/lib/candidate-screening/constants';
 import type {
-  CandidateDecisionResultDto,
   CandidateInterviewFeedbackDto,
   CandidateScreeningDetailDto,
 } from '@/lib/candidate-screening/repo';
-import type {
-  CandidateInterviewFeedbackDecision,
-  CandidateInterviewFeedbackStage,
-  CandidateInterviewStage,
-} from '@/lib/candidate-screening/types';
 import {
   currentPathWithSearch,
   getReturnTarget,
   withReturnTarget,
 } from '@/lib/navigation/return-url';
-
-type InterviewFeedbackForm = {
-  stage: CandidateInterviewFeedbackStage;
-  interviewer: string;
-  rating: string;
-  prosText: string;
-  consText: string;
-  decision: CandidateInterviewFeedbackDecision;
-  notes: string;
-};
-
-const feedbackStageLabels: Record<CandidateInterviewFeedbackStage, string> = {
-  first_interview: '一面',
-  second_interview: '二面',
-  final_interview: '终面',
-};
-
-const decisionLabels: Record<CandidateInterviewFeedbackDecision, string> = {
-  pass: '通过',
-  hold: '待定',
-  reject: '淘汰',
-};
-
-const hireDecisionLabels: Record<CandidateDecisionResultDto['hireDecision'], string> = {
-  strong_yes: '强烈建议录用',
-  yes: '建议录用',
-  no: '暂不录用',
-};
-
-function emptyFeedbackForm(stage: CandidateInterviewFeedbackStage): InterviewFeedbackForm {
-  return {
-    stage,
-    interviewer: '',
-    rating: '3',
-    prosText: '',
-    consText: '',
-    decision: 'hold',
-    notes: '',
-  };
-}
-
-function feedbackToForm(feedback: CandidateInterviewFeedbackDto): InterviewFeedbackForm {
-  return {
-    stage: feedback.stage,
-    interviewer: feedback.interviewer,
-    rating: String(feedback.rating),
-    prosText: feedback.pros.join('\n'),
-    consText: feedback.cons.join('\n'),
-    decision: feedback.decision,
-    notes: feedback.notes ?? '',
-  };
-}
-
-function createFeedbackForms(
-  feedbacks: CandidateInterviewFeedbackDto[],
-): Record<CandidateInterviewFeedbackStage, InterviewFeedbackForm> {
-  const forms = Object.fromEntries(
-    CANDIDATE_INTERVIEW_FEEDBACK_STAGES.map((stage) => [stage, emptyFeedbackForm(stage)]),
-  ) as Record<CandidateInterviewFeedbackStage, InterviewFeedbackForm>;
-
-  for (const feedback of feedbacks) {
-    forms[feedback.stage] = feedbackToForm(feedback);
-  }
-  return forms;
-}
-
-function splitFeedbackText(value: string): string[] {
-  return value
-    .split(/\n|；|;|、/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
+import {
+  feedbackStageLabels,
+  interviewStageLabels,
+} from '@/components/candidate-screening/interview-display';
 
 export function CandidateDetail({
   jobDescriptionId,
@@ -136,17 +56,7 @@ export function CandidateDetail({
   };
   const [candidate, setCandidate] = useState<CandidateScreeningDetailDto | null>(null);
   const [feedbacks, setFeedbacks] = useState<CandidateInterviewFeedbackDto[]>([]);
-  const [feedbackForms, setFeedbackForms] = useState<
-    Record<CandidateInterviewFeedbackStage, InterviewFeedbackForm>
-  >(() => createFeedbackForms([]));
-  const [decisionResult, setDecisionResult] = useState<CandidateDecisionResultDto | null>(null);
-  const [interviewStage, setInterviewStage] = useState<CandidateInterviewStage>('sourced');
-  const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [savingFeedbackStage, setSavingFeedbackStage] =
-    useState<CandidateInterviewFeedbackStage | null>(null);
-  const [isEvaluatingDecision, setIsEvaluatingDecision] = useState(false);
   const [isStartingCommunication, setIsStartingCommunication] = useState(false);
   const [error, setError] = useState('');
 
@@ -161,20 +71,16 @@ export function CandidateDetail({
       setIsLoading(true);
       setError('');
       try {
-        const [next, nextFeedbacks] = await Promise.all([
+        const [nextCandidate, nextFeedbacks] = await Promise.all([
           fetchJdCandidateDetail(jobDescriptionId, candidateId),
           fetchCandidateInterviewFeedbacks(jobDescriptionId, candidateId),
         ]);
         if (cancelled) return;
-        setCandidate(next);
+        setCandidate(nextCandidate);
         setFeedbacks(nextFeedbacks);
-        setFeedbackForms(createFeedbackForms(nextFeedbacks));
-        setDecisionResult(null);
-        setInterviewStage(next.interviewStage);
-        setNotes(next.notes ?? '');
-      } catch (e) {
+      } catch (loadError) {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : '加载候选人详情失败');
+        setError(loadError instanceof Error ? loadError.message : '加载候选人详情失败');
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -184,77 +90,6 @@ export function CandidateDetail({
       cancelled = true;
     };
   }, [candidateId, jobDescriptionId]);
-
-  async function handleSaveProgress() {
-    if (!candidate) return;
-    setIsSaving(true);
-    setError('');
-    try {
-      const updated = await updateJdCandidateProgress(jobDescriptionId, candidateId, {
-        interviewStage,
-        notes,
-      });
-      setCandidate({ ...candidate, ...updated });
-      setInterviewStage(updated.interviewStage);
-      setNotes(updated.notes ?? '');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存候选人进度失败');
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function updateFeedbackForm(
-    stage: CandidateInterviewFeedbackStage,
-    update: Partial<InterviewFeedbackForm>,
-  ) {
-    setFeedbackForms((current) => ({
-      ...current,
-      [stage]: {
-        ...current[stage],
-        ...update,
-      },
-    }));
-  }
-
-  async function handleSaveFeedback(stage: CandidateInterviewFeedbackStage) {
-    const form = feedbackForms[stage];
-    setSavingFeedbackStage(stage);
-    setError('');
-    try {
-      const feedback = await saveCandidateInterviewFeedback(jobDescriptionId, candidateId, {
-        stage,
-        interviewer: form.interviewer,
-        rating: Number(form.rating),
-        pros: splitFeedbackText(form.prosText),
-        cons: splitFeedbackText(form.consText),
-        decision: form.decision,
-        notes: form.notes,
-      });
-      setFeedbacks((current) => [
-        ...current.filter((item) => item.stage !== feedback.stage),
-        feedback,
-      ]);
-      setFeedbackForms((current) => ({ ...current, [stage]: feedbackToForm(feedback) }));
-      setDecisionResult(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存面试反馈失败');
-    } finally {
-      setSavingFeedbackStage(null);
-    }
-  }
-
-  async function handleEvaluateDecision() {
-    setIsEvaluatingDecision(true);
-    setError('');
-    try {
-      setDecisionResult(await evaluateJdCandidateDecision(jobDescriptionId, candidateId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '生成录用建议失败');
-    } finally {
-      setIsEvaluatingDecision(false);
-    }
-  }
 
   async function handleStartSingleCommunication() {
     setIsStartingCommunication(true);
@@ -270,8 +105,8 @@ export function CandidateDetail({
       router.push(
         withReturnTarget(`/jd-generator/communication-runs/${run.id}`, detailReturnTarget),
       );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '启动单点沟通失败');
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : '启动单点沟通失败');
     } finally {
       setIsStartingCommunication(false);
     }
@@ -294,6 +129,12 @@ export function CandidateDetail({
       </div>
     );
   }
+
+  const completedFeedbackStages = new Set(feedbacks.map((feedback) => feedback.stage));
+  const interviewHref = withReturnTarget(
+    `/jd-generator/${jobDescriptionId}/candidates/${candidateId}/interview`,
+    detailReturnTarget,
+  );
 
   return (
     <div className="space-y-4">
@@ -322,7 +163,7 @@ export function CandidateDetail({
               .join(' · ') || '候选人信息待补充'}
           </p>
         </div>
-        <div className="flex flex-col items-start gap-2 lg:items-end">
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           <Button
             className="gap-2"
             isDisabled={isStartingCommunication}
@@ -347,7 +188,7 @@ export function CandidateDetail({
               查看原站
             </Button>
           ) : null}
-          <div className="text-left lg:text-right">
+          <div className="ml-2 text-left lg:text-right">
             <div className="font-mono text-3xl font-semibold">
               {Math.round(candidate.finalScore)}
             </div>
@@ -399,275 +240,61 @@ export function CandidateDetail({
               </dl>
             </CardBody>
           </Card>
-
-          <Card className="border-border rounded-lg border shadow-none">
-            <CardBody className="space-y-4 p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <BrainCircuit className="text-muted-foreground h-4 w-4" aria-hidden />
-                  录用建议
-                </div>
-                <Button
-                  className="gap-2 self-start sm:self-auto"
-                  color="primary"
-                  isDisabled={isEvaluatingDecision}
-                  type="button"
-                  onClick={() => void handleEvaluateDecision()}
-                >
-                  <BrainCircuit className="h-4 w-4" aria-hidden />
-                  {isEvaluatingDecision ? '生成中' : '生成录用建议'}
-                </Button>
-              </div>
-
-              {decisionResult ? (
-                <div className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div className="border-border rounded-md border px-3 py-2">
-                      <div className="text-muted-foreground text-xs">建议</div>
-                      <div className="text-foreground mt-1 text-base font-semibold">
-                        {hireDecisionLabels[decisionResult.hireDecision]}
-                      </div>
-                    </div>
-                    <div className="border-border rounded-md border px-3 py-2">
-                      <div className="text-muted-foreground text-xs">置信度</div>
-                      <div className="text-foreground mt-1 font-mono text-base">
-                        {Math.round(decisionResult.confidence * 100)}%
-                      </div>
-                    </div>
-                    <div className="border-border rounded-md border px-3 py-2">
-                      <div className="text-muted-foreground text-xs">接受概率</div>
-                      <div className="text-foreground mt-1 font-mono text-base">
-                        接受 offer 概率 {Math.round(decisionResult.offerAcceptProbability * 100)}%
-                      </div>
-                    </div>
-                  </div>
-
-                  {decisionResult.riskAnalysis.reasons.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="text-muted-foreground text-xs">风险点</div>
-                      <div className="flex flex-wrap gap-2">
-                        {decisionResult.riskAnalysis.reasons.map((reason) => (
-                          <Chip key={reason} size="sm" variant="flat">
-                            {reason}
-                          </Chip>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <div className="text-muted-foreground text-xs">优势</div>
-                      <ul className="text-foreground list-inside list-disc space-y-1 text-sm">
-                        {decisionResult.strengths.map((strength) => (
-                          <li key={strength}>{strength}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="text-muted-foreground text-xs">不足</div>
-                      <ul className="text-foreground list-inside list-disc space-y-1 text-sm">
-                        {decisionResult.weaknesses.map((weakness) => (
-                          <li key={weakness}>{weakness}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-muted-foreground text-xs">下一步</div>
-                    <ul className="text-foreground list-inside list-disc space-y-1 text-sm">
-                      {decisionResult.suggestions.map((suggestion) => (
-                        <li key={suggestion.content}>{suggestion.content}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-muted-foreground text-sm">
-                  录入一面、二面、终面的反馈后，可结合 JD 匹配、沟通响应和风险信号生成建议。
-                </p>
-              )}
-            </CardBody>
-          </Card>
         </section>
 
         <aside className="space-y-4">
-          <Card className="border-border rounded-lg border shadow-none">
-            <CardBody className="space-y-3 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-medium">面试进度</div>
-                <div aria-label="当前候选人进度">
-                  <Chip size="sm" variant="flat">
-                    {candidate.interviewStage}
-                  </Chip>
-                </div>
-              </div>
-              <label className="block space-y-2">
-                <span className="text-muted-foreground text-xs">面试阶段</span>
-                <select
-                  aria-label="面试阶段"
-                  className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
-                  value={interviewStage}
-                  onChange={(event) =>
-                    setInterviewStage(event.target.value as CandidateInterviewStage)
-                  }
-                >
-                  {CANDIDATE_SCREENING_INTERVIEW_STAGES.map((stage) => (
-                    <option key={stage} value={stage}>
-                      {stage}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block space-y-2">
-                <span className="text-muted-foreground text-xs">备注</span>
-                <textarea
-                  aria-label="候选人备注"
-                  className="border-input bg-background text-foreground min-h-28 w-full rounded-md border px-3 py-2 text-sm"
-                  value={notes}
-                  onChange={(event) => setNotes(event.target.value)}
-                />
-              </label>
-              <Button
-                className="w-full gap-2"
-                color="primary"
-                isDisabled={isSaving}
-                type="button"
-                onClick={() => void handleSaveProgress()}
-              >
-                <Save className="h-4 w-4" aria-hidden />
-                {isSaving ? '保存中' : '保存进度'}
-              </Button>
-            </CardBody>
-          </Card>
-
-          <Card className="border-border rounded-lg border shadow-none">
+          <Card className="border-border overflow-hidden rounded-lg border shadow-none">
             <CardBody className="space-y-4 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-sm font-medium">
-                  <ClipboardCheck className="text-muted-foreground h-4 w-4" aria-hidden />
-                  面试反馈
+                  <CalendarCheck2 className="text-muted-foreground h-4 w-4" aria-hidden />
+                  面试状态
                 </div>
-                <Chip size="sm" variant="flat">
-                  {feedbacks.length}/3
+                <Chip
+                  color={candidate.interviewStage === 'interviewing' ? 'primary' : 'default'}
+                  size="sm"
+                  variant="flat"
+                >
+                  {interviewStageLabels[candidate.interviewStage]}
                 </Chip>
               </div>
-
-              <div className="space-y-4">
+              <div>
+                <p className="text-foreground text-sm font-medium">
+                  已完成 {feedbacks.length} / {CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length} 轮评价
+                </p>
+                <p className="text-muted-foreground mt-1 text-xs leading-5">
+                  {candidate.notes || '暂无面试备注'}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {CANDIDATE_INTERVIEW_FEEDBACK_STAGES.map((stage) => {
-                  const label = feedbackStageLabels[stage];
-                  const form = feedbackForms[stage];
+                  const isCompleted = completedFeedbackStages.has(stage);
                   return (
-                    <section key={stage} className="border-border rounded-md border p-3">
-                      <div className="mb-3 flex items-center justify-between gap-2">
-                        <div className="text-foreground text-sm font-medium">{label}</div>
-                        <Chip size="sm" variant="flat">
-                          {decisionLabels[form.decision]}
-                        </Chip>
-                      </div>
-
-                      <div className="grid gap-3">
-                        <label className="block space-y-2">
-                          <span className="text-muted-foreground text-xs">{label}面试官</span>
-                          <input
-                            aria-label={`${label}面试官`}
-                            className="border-input bg-background text-foreground h-9 w-full rounded-md border px-3 text-sm"
-                            value={form.interviewer}
-                            onChange={(event) =>
-                              updateFeedbackForm(stage, { interviewer: event.target.value })
-                            }
-                          />
-                        </label>
-
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <label className="block space-y-2">
-                            <span className="text-muted-foreground text-xs">{label}评分</span>
-                            <input
-                              aria-label={`${label}评分`}
-                              className="border-input bg-background text-foreground h-9 w-full rounded-md border px-3 text-sm"
-                              max={5}
-                              min={1}
-                              type="number"
-                              value={form.rating}
-                              onChange={(event) =>
-                                updateFeedbackForm(stage, { rating: event.target.value })
-                              }
-                            />
-                          </label>
-                          <label className="block space-y-2">
-                            <span className="text-muted-foreground text-xs">{label}结论</span>
-                            <select
-                              aria-label={`${label}结论`}
-                              className="border-input bg-background text-foreground h-9 w-full rounded-md border px-3 text-sm"
-                              value={form.decision}
-                              onChange={(event) =>
-                                updateFeedbackForm(stage, {
-                                  decision: event.target
-                                    .value as CandidateInterviewFeedbackDecision,
-                                })
-                              }
-                            >
-                              {Object.entries(decisionLabels).map(([value, text]) => (
-                                <option key={value} value={value}>
-                                  {text}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-
-                        <label className="block space-y-2">
-                          <span className="text-muted-foreground text-xs">{label}优势</span>
-                          <textarea
-                            aria-label={`${label}优势`}
-                            className="border-input bg-background text-foreground min-h-20 w-full rounded-md border px-3 py-2 text-sm"
-                            value={form.prosText}
-                            onChange={(event) =>
-                              updateFeedbackForm(stage, { prosText: event.target.value })
-                            }
-                          />
-                        </label>
-
-                        <label className="block space-y-2">
-                          <span className="text-muted-foreground text-xs">{label}不足</span>
-                          <textarea
-                            aria-label={`${label}不足`}
-                            className="border-input bg-background text-foreground min-h-20 w-full rounded-md border px-3 py-2 text-sm"
-                            value={form.consText}
-                            onChange={(event) =>
-                              updateFeedbackForm(stage, { consText: event.target.value })
-                            }
-                          />
-                        </label>
-
-                        <label className="block space-y-2">
-                          <span className="text-muted-foreground text-xs">{label}备注</span>
-                          <textarea
-                            aria-label={`${label}备注`}
-                            className="border-input bg-background text-foreground min-h-16 w-full rounded-md border px-3 py-2 text-sm"
-                            value={form.notes}
-                            onChange={(event) =>
-                              updateFeedbackForm(stage, { notes: event.target.value })
-                            }
-                          />
-                        </label>
-
-                        <Button
-                          className="w-full gap-2"
-                          isDisabled={savingFeedbackStage === stage}
-                          type="button"
-                          variant="bordered"
-                          onClick={() => void handleSaveFeedback(stage)}
-                        >
-                          <Save className="h-4 w-4" aria-hidden />
-                          {savingFeedbackStage === stage ? '保存中' : `保存${label}`}
-                        </Button>
-                      </div>
-                    </section>
+                    <div
+                      key={stage}
+                      className="border-border bg-muted/20 flex min-h-16 flex-col justify-between rounded-md border p-2.5"
+                    >
+                      <span className="text-muted-foreground text-xs">
+                        {feedbackStageLabels[stage]}
+                      </span>
+                      <span className="text-foreground mt-2 flex items-center gap-1 text-xs font-medium">
+                        {isCompleted ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
+                        {feedbackStageLabels[stage]}
+                        {isCompleted ? '已评价' : '待评价'}
+                      </span>
+                    </div>
                   );
                 })}
               </div>
+              <Button
+                as={Link}
+                className="w-full justify-between"
+                color="primary"
+                href={interviewHref}
+              >
+                查看面试详情
+                <ChevronRight className="h-4 w-4" aria-hidden />
+              </Button>
             </CardBody>
           </Card>
 

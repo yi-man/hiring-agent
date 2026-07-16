@@ -37,12 +37,14 @@ export const CANDIDATE_SCREENING_INTERVIEW_STAGES = [
   'replied',
   'phone_screen',
   'interviewing',
+  'interview_completed',
   'offer',
   'rejected',
   'withdrawn',
 ] as const satisfies readonly CandidateInterviewStage[];
 
 export const CANDIDATE_INTERVIEW_FEEDBACK_STAGES = [
+  'phone_screen',
   'first_interview',
   'second_interview',
   'final_interview',

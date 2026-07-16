@@ -1120,6 +1120,13 @@ describe('candidate screening repository', () => {
         stage: 'first_interview',
         interviewer: 'Grace Hopper',
         rating: 4,
+        dimensionRatings: [
+          {
+            dimension: 'core_competency',
+            score: 4,
+            evidence: '能够独立完成核心前端任务',
+          },
+        ],
         pros: ['TypeScript 扎实'],
         cons: ['系统设计需要追问'],
         decision: 'pass',
@@ -1179,6 +1186,13 @@ describe('candidate screening repository', () => {
       jobDescription: { id: 'jd-1', position: '高级前端工程师' },
       stage: 'first_interview',
       decision: 'pass',
+      dimensionRatings: [
+        {
+          dimension: 'core_competency',
+          score: 4,
+          evidence: '能够独立完成核心前端任务',
+        },
+      ],
     });
   });
 

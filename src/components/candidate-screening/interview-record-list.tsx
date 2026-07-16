@@ -10,6 +10,7 @@ import {
   CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
 } from '@/lib/candidate-screening/constants';
 import type { CandidateInterviewRecordDto } from '@/lib/candidate-screening/repo';
+import { getCandidateEvaluationDimension } from '@/lib/candidate-screening/evaluation-dimensions';
 import type {
   CandidateInterviewFeedbackDecision,
   CandidateInterviewFeedbackStage,
@@ -256,6 +257,15 @@ export function InterviewRecordList() {
                     <div className="text-foreground break-words">{record.notes || '暂无'}</div>
                   </div>
                 </div>
+                {record.dimensionRatings.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {record.dimensionRatings.map((rating) => (
+                      <Chip key={rating.dimension} size="sm" variant="flat">
+                        {getCandidateEvaluationDimension(rating.dimension).label} {rating.score}/5
+                      </Chip>
+                    ))}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
