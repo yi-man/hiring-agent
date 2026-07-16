@@ -31,14 +31,27 @@ export type CandidateInterviewStage =
   | 'replied'
   | 'phone_screen'
   | 'interviewing'
+  | 'interview_completed'
   | 'offer'
   | 'rejected'
   | 'withdrawn';
 export type CandidateInterviewFeedbackStage =
+  | 'phone_screen'
   | 'first_interview'
   | 'second_interview'
   | 'final_interview';
 export type CandidateInterviewFeedbackDecision = 'pass' | 'reject' | 'hold';
+export type CandidateEvaluationDimensionKey =
+  | 'core_competency'
+  | 'problem_solving'
+  | 'impact'
+  | 'collaboration'
+  | 'motivation';
+export type CandidateInterviewDimensionRating = {
+  dimension: CandidateEvaluationDimensionKey;
+  score: number;
+  evidence: string;
+};
 export type CandidateHireDecision = 'strong_yes' | 'yes' | 'no';
 export type CandidateDecisionIntentLevel = 'high' | 'medium' | 'low';
 export type CandidateDecisionRiskLevel = 'low' | 'medium' | 'high';
@@ -166,6 +179,7 @@ export type UpsertCandidateInterviewFeedbackRequest = {
   stage: CandidateInterviewFeedbackStage;
   interviewer: string;
   rating: number;
+  dimensionRatings: CandidateInterviewDimensionRating[];
   pros: string[];
   cons: string[];
   decision: CandidateInterviewFeedbackDecision;

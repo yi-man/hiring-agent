@@ -88,6 +88,7 @@ function createRepo(overrides: Partial<CandidateConversationRepository> = {}) {
       outcomeResult: 'contact_exchanged',
     }),
     markCandidateReplied: jest.fn().mockResolvedValue(undefined),
+    syncCandidateInterviewStage: jest.fn().mockResolvedValue(undefined),
     resolveCandidateForPlatformMessage: jest.fn().mockResolvedValue({ candidateId: 'candidate-1' }),
     ...overrides,
   } as CandidateConversationRepository;
@@ -146,6 +147,12 @@ describe('candidate communication service', () => {
       candidateId: 'candidate-1',
       lastActiveAt: new Date(createdAt),
     });
+    expect(repo.syncCandidateInterviewStage).toHaveBeenCalledWith({
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      interviewStage: 'replied',
+    });
     expect(chatCandidate).toHaveBeenCalledWith(
       {
         candidateId: 'candidate-1',
@@ -165,5 +172,55 @@ describe('candidate communication service', () => {
     );
     expect(result.conversation.stage).toBe('contact_exchanged');
     expect(result.outgoingMessage?.deliveryStatus).toBe('sent');
+  });
+
+  it('withdraws the candidate from the interview flow after an explicit rejection', async () => {
+    const repo = createRepo();
+    const adapter = {
+      platform: 'boss-like' as const,
+      getBrowserExecutor: jest.fn(),
+      loginIfNeeded: jest.fn().mockResolvedValue(undefined),
+      searchCandidates: jest.fn(),
+      enrichCandidate: jest.fn(async (candidate: RawCandidate) => candidate),
+      collectCandidate: jest.fn(),
+      chatCandidate: jest.fn(),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await handleCandidateMessage({
+      userId: 'user-1',
+      payload: {
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        message: {
+          content: '谢谢，暂时不考虑这个机会',
+          externalMessageId: 'msg-rejected',
+          receivedAt: new Date(createdAt),
+        },
+        executeReply: false,
+      },
+      dependencies: {
+        repo,
+        createAdapter: () => adapter,
+        runLLM: async () => ({
+          intent: 'not_interested',
+          intentLevel: 'low',
+          nextStage: 'rejected',
+          shouldReply: true,
+          reply: '好的，感谢回复。',
+          actions: ['reply', 'mark_rejected', 'close'],
+          rationale: 'candidate explicitly declined the opportunity',
+        }),
+        strictLlm: false,
+      },
+    });
+
+    expect(repo.syncCandidateInterviewStage).toHaveBeenCalledWith({
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      interviewStage: 'withdrawn',
+    });
   });
 });

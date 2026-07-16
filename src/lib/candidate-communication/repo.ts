@@ -278,6 +278,12 @@ export type CandidateConversationRepository = {
     candidateId: string;
     lastActiveAt: Date;
   }): Promise<void>;
+  syncCandidateInterviewStage(params: {
+    userId: string;
+    jobDescriptionId: string;
+    candidateId: string;
+    interviewStage: 'replied' | 'withdrawn';
+  }): Promise<void>;
   resolveCandidateForPlatformMessage(params: {
     userId: string;
     platform: string;
@@ -764,6 +770,33 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
     await prisma.candidate.updateMany({
       where: { id: params.candidateId, userId: params.userId },
       data: { replied: true, lastActiveAt: params.lastActiveAt },
+    });
+  },
+
+  async syncCandidateInterviewStage(params) {
+    const eligibleStages =
+      params.interviewStage === 'replied'
+        ? ['sourced', 'screened', 'to_contact', 'collected', 'contacted']
+        : [
+            'sourced',
+            'screened',
+            'to_contact',
+            'collected',
+            'contacted',
+            'replied',
+            'phone_screen',
+            'interviewing',
+            'interview_completed',
+            'offer',
+          ];
+    await prisma.candidateScreeningResult.updateMany({
+      where: {
+        userId: params.userId,
+        jobDescriptionId: params.jobDescriptionId,
+        candidateId: params.candidateId,
+        interviewStage: { in: eligibleStages },
+      },
+      data: { interviewStage: params.interviewStage },
     });
   },
 

@@ -44,6 +44,7 @@ function createRepo(): CandidateConversationRepository {
     updateConversation: jest.fn(),
     createMemory: jest.fn(),
     markCandidateReplied: jest.fn(),
+    syncCandidateInterviewStage: jest.fn(),
     resolveCandidateForPlatformMessage: jest
       .fn()
       .mockImplementation(async ({ platformCandidateId }) => ({

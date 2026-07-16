@@ -1,0 +1,461 @@
+{
+  "version": "hiring-decision-golden-dataset-v1",
+  "description": "录用建议 deterministic golden samples，覆盖强录用、谨慎推进和淘汰场景。",
+  "samples": [
+    {
+      "id": "strong-hire-complete-evidence",
+      "anchor": "strong_hire",
+      "label": "高匹配且四轮评价完整",
+      "input": {
+        "job": {
+          "title": "高级后端工程师",
+          "description": "负责 Java 微服务和分布式系统，要求 5 年经验",
+          "requirements": ["Java", "Spring Boot", "分布式系统"],
+          "requiredYears": 5
+        },
+        "candidate": {
+          "skillScore": 92,
+          "years": 8,
+          "contacted": true,
+          "replied": true,
+          "notes": "候选人积极回复，希望尽快推进",
+          "skills": ["Java", "Spring Boot", "分布式系统"],
+          "domainKnowledge": ["招聘 SaaS"],
+          "generalAbility": ["系统设计", "跨团队协作"],
+          "risks": []
+        },
+        "feedbacks": [
+          {
+            "stage": "phone_screen",
+            "rating": 4,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "collaboration",
+                "score": 4,
+                "evidence": "沟通清晰，能够准确复述岗位目标"
+              },
+              {
+                "dimension": "motivation",
+                "score": 4,
+                "evidence": "岗位意愿明确并希望尽快推进"
+              }
+            ],
+            "pros": ["岗位意愿明确", "沟通清晰"],
+            "cons": []
+          },
+          {
+            "stage": "first_interview",
+            "rating": 4,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "core_competency",
+                "score": 4,
+                "evidence": "能独立完成 Java 微服务核心功能开发"
+              },
+              {
+                "dimension": "problem_solving",
+                "score": 4,
+                "evidence": "能够解释关键方案的判断依据和取舍"
+              }
+            ],
+            "pros": ["技术基础扎实"],
+            "cons": []
+          },
+          {
+            "stage": "second_interview",
+            "rating": 5,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "core_competency",
+                "score": 5,
+                "evidence": "完成分布式系统核心链路设计"
+              },
+              {
+                "dimension": "problem_solving",
+                "score": 5,
+                "evidence": "能识别复杂场景的瓶颈并给出分阶段方案"
+              },
+              {
+                "dimension": "impact",
+                "score": 5,
+                "evidence": "明确说明个人贡献及性能指标提升"
+              }
+            ],
+            "pros": ["系统设计完整"],
+            "cons": []
+          },
+          {
+            "stage": "final_interview",
+            "rating": 4,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "impact",
+                "score": 4,
+                "evidence": "主导项目结果和影响范围清晰"
+              },
+              {
+                "dimension": "collaboration",
+                "score": 4,
+                "evidence": "跨团队协作和冲突处理案例完整"
+              },
+              {
+                "dimension": "motivation",
+                "score": 4,
+                "evidence": "岗位动机与发展方向一致"
+              }
+            ],
+            "pros": ["协作成熟", "岗位动机充分"],
+            "cons": []
+          }
+        ]
+      },
+      "expected": {
+        "hireDecision": "strong_yes",
+        "decisionScope": "final",
+        "riskLevel": "low",
+        "intentLevel": "high",
+        "weightedScoreRange": [0.82, 0.95],
+        "confidenceRange": [0.8, 0.85],
+        "dimensionScoreRanges": {
+          "core_competency": [0.9, 0.92],
+          "problem_solving": [0.9, 0.92],
+          "impact": [0.81, 0.83],
+          "collaboration": [0.76, 0.78],
+          "motivation": [0.76, 0.78]
+        }
+      },
+      "rationale": "高技能匹配、经验满足、四轮面试通过且意向明确，应稳定输出强烈建议录用。"
+    },
+    {
+      "id": "interview-corroborates-low-resume-score",
+      "anchor": "strong_hire",
+      "label": "面试证据推翻低简历初筛分",
+      "input": {
+        "job": {
+          "title": "前端工程师",
+          "description": "负责 React 核心产品与性能治理，要求 3 年经验",
+          "requirements": ["React", "TypeScript", "性能优化"],
+          "requiredYears": 3
+        },
+        "candidate": {
+          "skillScore": 35,
+          "years": 5,
+          "contacted": true,
+          "replied": true,
+          "notes": "岗位意愿明确，希望继续推进",
+          "skills": ["React", "TypeScript"],
+          "domainKnowledge": ["内容产品"],
+          "generalAbility": ["跨团队协作"],
+          "risks": []
+        },
+        "feedbacks": [
+          {
+            "stage": "phone_screen",
+            "rating": 5,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "collaboration",
+                "score": 5,
+                "evidence": "沟通清晰并能协调关键协作方"
+              },
+              { "dimension": "motivation", "score": 5, "evidence": "岗位理解和发展动机明确" }
+            ],
+            "pros": ["沟通和动机明确"],
+            "cons": []
+          },
+          {
+            "stage": "first_interview",
+            "rating": 5,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "core_competency",
+                "score": 5,
+                "evidence": "现场完成核心 React 任务并解释工程取舍"
+              },
+              {
+                "dimension": "problem_solving",
+                "score": 5,
+                "evidence": "能拆解复杂性能问题并验证方案"
+              }
+            ],
+            "pros": ["核心任务表现强"],
+            "cons": []
+          },
+          {
+            "stage": "second_interview",
+            "rating": 5,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "core_competency",
+                "score": 5,
+                "evidence": "系统设计覆盖性能、稳定性和可维护性"
+              },
+              {
+                "dimension": "problem_solving",
+                "score": 5,
+                "evidence": "关键判断、约束和复盘过程完整"
+              },
+              { "dimension": "impact", "score": 5, "evidence": "明确说明个人贡献及可验证业务指标" }
+            ],
+            "pros": ["专业判断和成果证据完整"],
+            "cons": []
+          },
+          {
+            "stage": "final_interview",
+            "rating": 5,
+            "decision": "pass",
+            "dimensionRatings": [
+              { "dimension": "impact", "score": 5, "evidence": "项目结果、规模和影响范围可验证" },
+              {
+                "dimension": "collaboration",
+                "score": 5,
+                "evidence": "跨团队推动和责任承担案例完整"
+              },
+              { "dimension": "motivation", "score": 5, "evidence": "岗位目标与长期发展方向一致" }
+            ],
+            "pros": ["协作成熟且角色契合"],
+            "cons": []
+          }
+        ]
+      },
+      "expected": {
+        "hireDecision": "strong_yes",
+        "decisionScope": "final",
+        "riskLevel": "low",
+        "intentLevel": "high",
+        "weightedScoreRange": [0.85, 0.95],
+        "confidenceRange": [0.78, 0.9],
+        "dimensionScoreRanges": {
+          "core_competency": [0.87, 0.89],
+          "problem_solving": [0.85, 0.95],
+          "impact": [0.89, 0.91],
+          "collaboration": [0.9, 0.95],
+          "motivation": [0.9, 0.95]
+        }
+      },
+      "rationale": "简历初筛分低不能单独淘汰；四轮结构化面试对五个维度提供强证据后，应允许输出强录用。"
+    },
+    {
+      "id": "cautious-hire-incomplete-evidence",
+      "anchor": "cautious_hire",
+      "label": "部分评价且存在薪资风险",
+      "input": {
+        "job": {
+          "title": "前端工程师",
+          "description": "负责 React 产品开发，要求 5 年经验",
+          "requirements": ["React", "TypeScript"],
+          "requiredYears": 5
+        },
+        "candidate": {
+          "skillScore": 75,
+          "years": 3,
+          "contacted": true,
+          "replied": false,
+          "notes": "薪资敏感，需要进一步确认预期",
+          "skills": ["React", "TypeScript"],
+          "domainKnowledge": ["内容产品"],
+          "generalAbility": ["沟通"],
+          "risks": ["薪资敏感"]
+        },
+        "feedbacks": [
+          {
+            "stage": "phone_screen",
+            "rating": 4,
+            "decision": "pass",
+            "dimensionRatings": [
+              {
+                "dimension": "collaboration",
+                "score": 4,
+                "evidence": "沟通顺畅，能清楚说明当前情况"
+              },
+              {
+                "dimension": "motivation",
+                "score": 3,
+                "evidence": "对岗位有兴趣，但薪资预期仍需确认"
+              }
+            ],
+            "pros": ["沟通顺畅"],
+            "cons": ["薪资敏感"]
+          },
+          {
+            "stage": "first_interview",
+            "rating": 3,
+            "decision": "hold",
+            "dimensionRatings": [
+              {
+                "dimension": "core_competency",
+                "score": 3,
+                "evidence": "能够完成常规 React 功能开发"
+              },
+              {
+                "dimension": "problem_solving",
+                "score": 3,
+                "evidence": "基础问题分析合格，复杂场景深度有限"
+              },
+              {
+                "dimension": "impact",
+                "score": 2,
+                "evidence": "无法给出大型项目的明确个人贡献"
+              }
+            ],
+            "pros": ["基础合格"],
+            "cons": ["复杂项目经验不足"]
+          }
+        ]
+      },
+      "expected": {
+        "hireDecision": "yes",
+        "decisionScope": "preliminary",
+        "riskLevel": "medium",
+        "intentLevel": "medium",
+        "weightedScoreRange": [0.6, 0.62],
+        "confidenceRange": [0.55, 0.6],
+        "dimensionScoreRanges": {
+          "core_competency": [0.64, 0.66],
+          "problem_solving": [0.64, 0.66],
+          "impact": [0.43, 0.45],
+          "collaboration": [0.74, 0.76],
+          "motivation": [0.55, 0.57],
+          "risk": [0.8, 0.8]
+        }
+      },
+      "rationale": "两轮证据显示核心能力基本合格，但成果证据偏弱且有薪资风险，只能输出阶段性谨慎推进。"
+    },
+    {
+      "id": "reject-low-fit-final-reject",
+      "anchor": "reject",
+      "label": "低匹配且终面淘汰",
+      "input": {
+        "job": {
+          "title": "资深数据工程师",
+          "description": "负责实时数据平台，要求 5 年经验",
+          "requirements": ["Flink", "Kafka", "数据仓库"],
+          "requiredYears": 5
+        },
+        "candidate": {
+          "skillScore": 35,
+          "years": 1,
+          "contacted": false,
+          "replied": false,
+          "notes": "稳定性风险",
+          "skills": ["Excel"],
+          "domainKnowledge": [],
+          "generalAbility": [],
+          "risks": ["稳定性风险"]
+        },
+        "feedbacks": [
+          {
+            "stage": "phone_screen",
+            "rating": 2,
+            "decision": "hold",
+            "dimensionRatings": [
+              {
+                "dimension": "collaboration",
+                "score": 2,
+                "evidence": "沟通中无法清楚说明协作方式"
+              },
+              {
+                "dimension": "motivation",
+                "score": 2,
+                "evidence": "对岗位目标理解不足"
+              }
+            ],
+            "pros": [],
+            "cons": ["岗位理解不足"]
+          },
+          {
+            "stage": "first_interview",
+            "rating": 2,
+            "decision": "hold",
+            "dimensionRatings": [
+              {
+                "dimension": "core_competency",
+                "score": 2,
+                "evidence": "缺少实时数据开发所需的核心能力"
+              },
+              {
+                "dimension": "problem_solving",
+                "score": 2,
+                "evidence": "分析过程缺少关键约束和验证方法"
+              }
+            ],
+            "pros": [],
+            "cons": ["技术差距明显"]
+          },
+          {
+            "stage": "second_interview",
+            "rating": 1,
+            "decision": "reject",
+            "dimensionRatings": [
+              {
+                "dimension": "core_competency",
+                "score": 1,
+                "evidence": "无法完成实时数据平台核心设计"
+              },
+              {
+                "dimension": "problem_solving",
+                "score": 1,
+                "evidence": "无法识别数据一致性和容错问题"
+              },
+              {
+                "dimension": "impact",
+                "score": 1,
+                "evidence": "没有可验证的相关项目成果"
+              }
+            ],
+            "pros": [],
+            "cons": ["无法完成核心设计"]
+          },
+          {
+            "stage": "final_interview",
+            "rating": 1,
+            "decision": "reject",
+            "dimensionRatings": [
+              {
+                "dimension": "impact",
+                "score": 1,
+                "evidence": "个人贡献和业务影响无法验证"
+              },
+              {
+                "dimension": "collaboration",
+                "score": 1,
+                "evidence": "团队协作案例显示明显风险"
+              },
+              {
+                "dimension": "motivation",
+                "score": 1,
+                "evidence": "岗位动机与角色目标不匹配"
+              }
+            ],
+            "pros": [],
+            "cons": ["团队协作风险偏高"]
+          }
+        ]
+      },
+      "expected": {
+        "hireDecision": "no",
+        "decisionScope": "final",
+        "riskLevel": "high",
+        "intentLevel": "medium",
+        "weightedScoreRange": [0.3, 0.34],
+        "confidenceRange": [0.78, 0.8],
+        "dimensionScoreRanges": {
+          "core_competency": [0.31, 0.33],
+          "problem_solving": [0.31, 0.33],
+          "impact": [0.25, 0.27],
+          "collaboration": [0.33, 0.35],
+          "motivation": [0.33, 0.35],
+          "risk": [0.2, 0.2]
+        }
+      },
+      "rationale": "核心任务胜任力不足且多轮面试明确 reject，最终结论必须为不录用。"
+    }
+  ]
+}

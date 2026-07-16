@@ -235,6 +235,7 @@ export function isInterviewingDashboardCandidate(signal: DashboardCandidateSigna
   return (
     signal.interviewStage === 'phone_screen' ||
     signal.interviewStage === 'interviewing' ||
+    signal.interviewStage === 'interview_completed' ||
     signal.interviewStage === 'offer'
   );
 }

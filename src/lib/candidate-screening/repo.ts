@@ -8,6 +8,8 @@ import type {
   CandidateActionStatus,
   CandidateDecisionAction,
   CandidateDecisionPriority,
+  CandidateEvaluationDimensionKey,
+  CandidateInterviewDimensionRating,
   CandidateInterviewFeedbackDecision,
   CandidateInterviewFeedbackStage,
   CandidateInterviewStage,
@@ -146,6 +148,7 @@ type CandidateInterviewFeedbackRecord = {
   stage: string;
   interviewer: string;
   rating: number;
+  dimensionRatings?: unknown;
   pros: unknown;
   cons: unknown;
   decision: string;
@@ -310,6 +313,7 @@ export type CandidateInterviewFeedbackDto = {
   stage: CandidateInterviewFeedbackStage;
   interviewer: string;
   rating: number;
+  dimensionRatings: CandidateInterviewDimensionRating[];
   pros: string[];
   cons: string[];
   decision: CandidateInterviewFeedbackDecision;
@@ -542,6 +546,7 @@ export type UpsertCandidateInterviewFeedbackParams = {
   stage: CandidateInterviewFeedbackStage;
   interviewer: string;
   rating: number;
+  dimensionRatings: CandidateInterviewDimensionRating[];
   pros: string[];
   cons: string[];
   decision: CandidateInterviewFeedbackDecision;
@@ -599,6 +604,37 @@ function toStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : [];
+}
+
+const candidateEvaluationDimensionKeys = new Set<CandidateEvaluationDimensionKey>([
+  'core_competency',
+  'problem_solving',
+  'impact',
+  'collaboration',
+  'motivation',
+]);
+
+function toInterviewDimensionRatings(value: unknown): CandidateInterviewDimensionRating[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const record = toRecordOrNull(item);
+    if (!record) return [];
+    const dimension = record.dimension;
+    const score = record.score;
+    const evidence = readNonEmptyString(record.evidence);
+    if (
+      typeof dimension !== 'string' ||
+      !candidateEvaluationDimensionKeys.has(dimension as CandidateEvaluationDimensionKey) ||
+      typeof score !== 'number' ||
+      !Number.isFinite(score) ||
+      score < 1 ||
+      score > 5 ||
+      !evidence
+    ) {
+      return [];
+    }
+    return [{ dimension: dimension as CandidateEvaluationDimensionKey, score, evidence }];
+  });
 }
 
 function readNonEmptyString(value: unknown): string | null {
@@ -853,6 +889,7 @@ function mapInterviewFeedback(
     stage: row.stage as CandidateInterviewFeedbackStage,
     interviewer: row.interviewer,
     rating: row.rating,
+    dimensionRatings: toInterviewDimensionRatings(row.dimensionRatings),
     pros: toStringArray(row.pros),
     cons: toStringArray(row.cons),
     decision: row.decision as CandidateInterviewFeedbackDecision,
@@ -940,6 +977,7 @@ function isInterviewingCandidate(row: CandidateScreeningResultDto): boolean {
   return (
     row.interviewStage === 'phone_screen' ||
     row.interviewStage === 'interviewing' ||
+    row.interviewStage === 'interview_completed' ||
     row.interviewStage === 'offer'
   );
 }
@@ -1594,6 +1632,7 @@ export async function updateCandidateInterviewProgress(
 }
 
 const interviewFeedbackStageOrder: CandidateInterviewFeedbackStage[] = [
+  'phone_screen',
   'first_interview',
   'second_interview',
   'final_interview',
@@ -1658,6 +1697,7 @@ export async function upsertCandidateInterviewFeedback(
       stage: params.stage,
       interviewer: params.interviewer,
       rating: params.rating,
+      dimensionRatings: toJson(params.dimensionRatings),
       pros: toJson(params.pros),
       cons: toJson(params.cons),
       decision: params.decision,
@@ -1666,6 +1706,7 @@ export async function upsertCandidateInterviewFeedback(
     update: {
       interviewer: params.interviewer,
       rating: params.rating,
+      dimensionRatings: toJson(params.dimensionRatings),
       pros: toJson(params.pros),
       cons: toJson(params.cons),
       decision: params.decision,

@@ -66,6 +66,9 @@ export async function POST(request: Request) {
       jobDescriptionId: parsed.value.jobDescriptionId,
       candidateId: parsed.value.candidateId,
     });
+    if (interviewFeedbacks.length === 0) {
+      return NextResponse.json({ error: '至少完成一轮结构化评价后才能生成建议' }, { status: 409 });
+    }
     const decision = evaluateCandidateHiringDecision({
       jobDescription,
       candidate,
