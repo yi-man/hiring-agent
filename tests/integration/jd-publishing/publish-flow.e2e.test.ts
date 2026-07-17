@@ -34,6 +34,7 @@ const originalBossLikeEnv = {
   baseUrl: process.env.BOSS_LIKE_BASE_URL,
   username: process.env.BOSS_LIKE_EMPLOYER_USERNAME,
   password: process.env.BOSS_LIKE_EMPLOYER_PASSWORD,
+  encryptionKey: process.env.PLATFORM_CREDENTIALS_ENCRYPTION_KEY,
 };
 
 const sampleJd: JD = {
@@ -60,6 +61,11 @@ function restoreBossLikeEnv(): void {
     delete process.env.BOSS_LIKE_EMPLOYER_PASSWORD;
   } else {
     process.env.BOSS_LIKE_EMPLOYER_PASSWORD = originalBossLikeEnv.password;
+  }
+  if (originalBossLikeEnv.encryptionKey === undefined) {
+    delete process.env.PLATFORM_CREDENTIALS_ENCRYPTION_KEY;
+  } else {
+    process.env.PLATFORM_CREDENTIALS_ENCRYPTION_KEY = originalBossLikeEnv.encryptionKey;
   }
 }
 
@@ -322,6 +328,8 @@ function brokenSkillRequiringReExplore(): PublishSkill {
 
 describe('JD publishing integration flow with real postgres and browser UI', () => {
   beforeAll(async () => {
+    process.env.PLATFORM_CREDENTIALS_ENCRYPTION_KEY =
+      originalBossLikeEnv.encryptionKey || 'jd-publishing-integration-test-key';
     requireIntegrationEnv('POSTGRES_HOST');
     requireIntegrationEnv('POSTGRES_PORT');
     requireIntegrationEnv('POSTGRES_USER');
