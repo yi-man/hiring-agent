@@ -2934,7 +2934,7 @@ describe('candidate screening runner', () => {
 
   it('creates run-scoped planned action idempotency keys when rerunning the same JD and candidate', async () => {
     const dependencies = makeDependencies();
-    dependencies.createAdapter = jest.fn(() =>
+    dependencies.createAdapter = jest.fn(async () =>
       makeAdapter({
         searchCandidates: jest.fn(() =>
           batches({

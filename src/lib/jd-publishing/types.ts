@@ -1,4 +1,5 @@
 import type { BrowserAction, BrowserStepCheck, BrowserStepResult } from '@/lib/browser/types';
+import type { RecruitmentPlatform } from '@/lib/recruitment-platforms';
 
 export const BROWSER_WORKFLOW_DSL_VERSION = 'browser-v2' as const;
 
@@ -19,7 +20,7 @@ export type {
   TargetDescriptor,
 } from '@/lib/browser/types';
 
-export type PublishPlatform = 'boss-like';
+export type PublishPlatform = RecruitmentPlatform;
 
 export type PublishJobDescriptionSettings = {
   platform: PublishPlatform;
@@ -104,6 +105,7 @@ export type PublishSkill = {
   id: string;
   name: string;
   platform: PublishPlatform;
+  siteFingerprint?: string;
   description: string;
   version: number;
   isActive: boolean;

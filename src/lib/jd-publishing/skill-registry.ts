@@ -165,7 +165,7 @@ export function buildBossLikeStructuredPublishSkill(
         id: 'wait_after_login',
         type: 'action',
         action: 'wait_for_url',
-        params: { url: '/employer/resumes' },
+        params: { url: '{{target.loginSuccessUrl}}' },
         next: 'open_new_job_after_login',
         onFail: { type: 'fallback_agent', reason: 'login redirect did not complete' },
       },
@@ -256,7 +256,7 @@ export function buildBossLikeStructuredPublishSkill(
         id: 'wait_jobs_list',
         type: 'action',
         action: 'wait_for_url',
-        params: { url: '/employer/jobs' },
+        params: { url: '{{target.jobsListUrl}}' },
         next: 'verify_published',
         onFail: { type: 'fallback_agent', reason: 'jobs list redirect did not complete' },
       },
@@ -276,7 +276,67 @@ export function buildBossLikeStructuredPublishSkill(
 
 export const bossLikePublishSkill: PublishSkill = buildBossLikeStructuredPublishSkill();
 
+export const bossPublishSkill: PublishSkill = buildBossLikeStructuredPublishSkill(
+  {
+    id: 'boss-publish-jd',
+    platform: 'boss',
+    description: 'Publish a JD through the BOSS enterprise job workflow.',
+  },
+  {
+    username: fieldTarget({ name: '手机号' }),
+    title: fieldTarget({ name: '职位名称', valueHint: 'title' }),
+    company: fieldTarget({ name: '招聘企业', valueHint: 'company' }),
+    salary: fieldTarget({ name: '薪资范围', valueHint: 'salary' }),
+    location: fieldTarget({ name: '工作城市', valueHint: 'location' }),
+    description: fieldTarget({ name: '职位描述', valueHint: 'description' }),
+    keyword: fieldTarget({ name: '职位关键词', valueHint: 'keyword' }),
+    keywordSubmit: buttonTarget('确认'),
+    submit: buttonTarget('发布'),
+  },
+);
+
+export const liepinPublishSkill: PublishSkill = buildBossLikeStructuredPublishSkill(
+  {
+    id: 'liepin-publish-jd',
+    platform: 'liepin',
+    description: 'Publish a JD through the Liepin enterprise job workflow.',
+  },
+  {
+    username: fieldTarget({ name: '账号/手机号' }),
+    title: fieldTarget({ name: '职位名称', valueHint: 'title' }),
+    company: fieldTarget({ name: '所属公司', valueHint: 'company' }),
+    salary: fieldTarget({ name: '职位年薪', valueHint: 'salary' }),
+    location: fieldTarget({ name: '工作地点', valueHint: 'location' }),
+    description: fieldTarget({ name: '职位描述', valueHint: 'description' }),
+    keyword: fieldTarget({ name: '职位标签', valueHint: 'keyword' }),
+    keywordSubmit: buttonTarget('添加标签'),
+    submit: buttonTarget('发布职位'),
+  },
+);
+
+export const zhilianPublishSkill: PublishSkill = buildBossLikeStructuredPublishSkill(
+  {
+    id: 'zhilian-publish-jd',
+    platform: 'zhilian',
+    description: 'Publish a JD through the Zhilian enterprise job workflow.',
+  },
+  {
+    username: fieldTarget({ name: '用户名/手机号' }),
+    title: fieldTarget({ name: '职位名称', valueHint: 'title' }),
+    company: fieldTarget({ name: '公司', valueHint: 'company' }),
+    salary: fieldTarget({ name: '月薪', valueHint: 'salary' }),
+    location: fieldTarget({ name: '工作地址', valueHint: 'location' }),
+    description: fieldTarget({ name: '职位详情', valueHint: 'description' }),
+    keyword: fieldTarget({ name: '技能要求', valueHint: 'keyword' }),
+    keywordSubmit: buttonTarget('添加'),
+    submit: buttonTarget('立即发布'),
+  },
+);
+
 const activeSkills: Record<PublishPlatform, PublishSkill> = {
+  boss: bossPublishSkill,
+  liepin: liepinPublishSkill,
+  zhilian: zhilianPublishSkill,
   'boss-like': bossLikePublishSkill,
 };
 

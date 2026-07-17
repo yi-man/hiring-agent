@@ -7,6 +7,8 @@ import {
 } from '@/lib/candidate-screening/repo';
 import { createAndStartCandidateScreeningRun } from '@/lib/candidate-screening/service';
 import { getJobDescriptionById } from '@/lib/jd/job-description-repo';
+import { getCompanyProfileForUser } from '@/lib/company-profile/repo';
+import { resolveRecruitmentPlatforms } from '@/lib/recruitment-platforms';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -51,10 +53,27 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return badRequest(body.error);
     }
 
-    const parsed = parseCreateScreeningRunPayload(body.value);
-    if (!parsed.ok) {
-      return badRequest(parsed.error);
+    const requestBody = body.value;
+    const requestRecord =
+      requestBody && typeof requestBody === 'object'
+        ? (requestBody as { platform?: unknown; platforms?: unknown })
+        : {};
+    const hasPlatformOverride =
+      requestRecord.platform !== undefined || requestRecord.platforms !== undefined;
+    const profile = hasPlatformOverride ? null : await getCompanyProfileForUser(auth.user.id);
+    const platforms = resolveRecruitmentPlatforms(requestRecord, profile?.supportedPlatforms);
+    if (platforms.length === 0) {
+      return badRequest('at least one recruitment platform is required');
     }
+    const parsedRequests = platforms.map((platform) =>
+      parseCreateScreeningRunPayload({
+        ...(requestBody && typeof requestBody === 'object' ? requestBody : {}),
+        platform,
+      }),
+    );
+    const invalid = parsedRequests.find((parsed) => !parsed.ok);
+    if (invalid && !invalid.ok) return badRequest(invalid.error);
+    const requests = parsedRequests.flatMap((parsed) => (parsed.ok ? [parsed.value] : []));
 
     const jobDescription = await getJobDescriptionById(auth.user.id, id);
     if (!jobDescription) {
@@ -67,13 +86,17 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       );
     }
 
-    const run = await createAndStartCandidateScreeningRun({
-      userId: auth.user.id,
-      jobDescription,
-      request: parsed.value,
-    });
+    const runs = await Promise.all(
+      requests.map((screeningRequest) =>
+        createAndStartCandidateScreeningRun({
+          userId: auth.user.id,
+          jobDescription,
+          request: screeningRequest,
+        }),
+      ),
+    );
 
-    return NextResponse.json({ run }, { status: 202 });
+    return NextResponse.json({ run: runs[0], runs }, { status: 202 });
   } catch (error) {
     return serverErrorResponse(error);
   }

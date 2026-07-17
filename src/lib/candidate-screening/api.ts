@@ -24,6 +24,7 @@ import type {
   UpdateCandidateProgressRequest,
   UpsertCandidateInterviewFeedbackRequest,
 } from './types';
+import { isRecruitmentPlatform } from '@/lib/recruitment-platforms';
 
 type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -44,7 +45,7 @@ function isIntegerInRange(value: unknown, min: number, max: number): value is nu
 }
 
 function isCandidateScreeningPlatform(value: unknown): value is CandidateScreeningPlatform {
-  return value === 'boss-like';
+  return isRecruitmentPlatform(value);
 }
 
 function isCandidateScreeningMode(value: unknown): value is CandidateScreeningMode {

@@ -103,9 +103,10 @@ describe('publish repository', () => {
 
     expect(prismaMock.publishSkill.upsert).toHaveBeenCalledWith({
       where: {
-        name_platform_version: {
+        name_platform_siteFingerprint_version: {
           name: 'publish_jd',
           platform: 'boss-like',
+          siteFingerprint: 'default',
           version: 1,
         },
       },
@@ -113,14 +114,17 @@ describe('publish repository', () => {
         id: 'boss-like-publish-jd',
         name: 'publish_jd',
         platform: 'boss-like',
+        siteFingerprint: 'default',
         version: 1,
         isActive: true,
         steps: bossLikePublishSkill.steps,
+        meta: { success_rate: 0, usage_count: 0, created_from: 'agent' },
       }),
       update: expect.objectContaining({
         description: bossLikePublishSkill.description,
         isActive: true,
         steps: bossLikePublishSkill.steps,
+        meta: { success_rate: 0, usage_count: 0, created_from: 'agent' },
       }),
     });
     expect(result.id).toBe('boss-like-publish-jd');
@@ -132,7 +136,12 @@ describe('publish repository', () => {
     const result = await getActivePublishSkillFromDb('boss-like');
 
     expect(prismaMock.publishSkill.findFirst).toHaveBeenCalledWith({
-      where: { name: 'publish_jd', platform: 'boss-like', isActive: true },
+      where: {
+        name: 'publish_jd',
+        platform: 'boss-like',
+        siteFingerprint: 'default',
+        isActive: true,
+      },
       orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
     });
     expect(result?.steps[0]?.id).toBe('open_new_job');
@@ -152,7 +161,12 @@ describe('publish repository', () => {
     await getActivePublishSkillByName({ name: 'screen_candidates', platform: 'boss-like' });
 
     expect(prismaMock.publishSkill.findFirst).toHaveBeenCalledWith({
-      where: { name: 'screen_candidates', platform: 'boss-like', isActive: true },
+      where: {
+        name: 'screen_candidates',
+        platform: 'boss-like',
+        siteFingerprint: 'default',
+        isActive: true,
+      },
       orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
     });
   });
@@ -222,6 +236,7 @@ describe('publish repository', () => {
       where: {
         name: 'screen_candidates',
         platform: 'boss-like',
+        siteFingerprint: 'default',
         isActive: true,
         id: { not: 'screen-v5' },
       },
@@ -251,6 +266,7 @@ describe('publish repository', () => {
       where: {
         name: 'publish_jd',
         platform: 'boss-like',
+        siteFingerprint: 'default',
         isActive: true,
         id: { not: 'explored-skill-1' },
       },
@@ -314,7 +330,7 @@ describe('publish repository', () => {
     const result = await createExploredPublishSkill(exploredSkill);
 
     expect(prismaMock.publishSkill.findFirst).toHaveBeenCalledWith({
-      where: { name: 'publish_jd', platform: 'boss-like' },
+      where: { name: 'publish_jd', platform: 'boss-like', siteFingerprint: 'default' },
       orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
     });
     expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
@@ -343,7 +359,7 @@ describe('publish repository', () => {
     prismaMock.publishSkill.updateMany.mockResolvedValueOnce({ count: 1 });
     prismaMock.publishSkill.create.mockResolvedValueOnce({
       ...bossLikePublishSkill,
-      id: 'boss-like-publish-jd-v2',
+      id: 'publish_jd-boss-like-default-v2',
       version: 2,
       steps: repairedSteps,
       isActive: true,
@@ -363,8 +379,9 @@ describe('publish repository', () => {
       where: {
         name: 'publish_jd',
         platform: 'boss-like',
+        siteFingerprint: 'default',
         isActive: true,
-        id: { not: 'boss-like-publish-jd-v2' },
+        id: { not: 'publish_jd-boss-like-default-v2' },
       },
       data: { isActive: false },
     });
@@ -399,7 +416,7 @@ describe('publish repository', () => {
     };
     const persistedV3 = {
       ...activeV2,
-      id: 'screen_candidates-boss-like-v3',
+      id: 'screen_candidates-boss-like-default-v3',
       version: 3,
       isActive: true,
       steps: repairedSteps,
@@ -418,7 +435,7 @@ describe('publish repository', () => {
     );
     expect(prismaMock.publishSkill.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        id: 'screen_candidates-boss-like-v3',
+        id: 'screen_candidates-boss-like-default-v3',
         name: 'screen_candidates',
         version: 3,
         isActive: true,
@@ -428,8 +445,9 @@ describe('publish repository', () => {
       where: {
         name: 'screen_candidates',
         platform: 'boss-like',
+        siteFingerprint: 'default',
         isActive: true,
-        id: { not: 'screen_candidates-boss-like-v3' },
+        id: { not: 'screen_candidates-boss-like-default-v3' },
       },
       data: { isActive: false },
     });
@@ -451,7 +469,7 @@ describe('publish repository', () => {
     });
     const persistedV3 = {
       ...staleV1,
-      id: 'screen_candidates-boss-like-v3',
+      id: 'screen_candidates-boss-like-default-v3',
       version: 3,
       isActive: true,
       inputSchema: staleV1.inputSchema,

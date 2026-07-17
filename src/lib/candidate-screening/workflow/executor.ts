@@ -54,7 +54,8 @@ import {
   type CandidateScreeningWorkflowRepairAgentInput,
   type CandidateScreeningWorkflowRepairAgentResult,
 } from './llm-repair';
-import { isCompatibleBossLikeScreeningSkill } from './skill-registry';
+import { isCompatibleScreeningSkill } from './skill-registry';
+import { createSiteFingerprint } from '@/lib/recruitment-platform-config';
 import { SCREENING_STEP_IDS } from './types';
 import type {
   BossLikeScreeningExploration,
@@ -101,6 +102,7 @@ export type CandidateScreeningWorkflowSessionDependencies = {
   getActiveSkill?: (params: {
     name: string;
     platform: CandidateScreeningPlatform;
+    siteFingerprint?: string;
   }) => Promise<PublishSkill | null>;
   getSkillById?: (skillId: string) => Promise<PublishSkill | null>;
   exploreSkill?: ExploreScreeningWorkflow;
@@ -246,25 +248,31 @@ function readBossLikeSetting(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
 }
 
-function createBossLikeSearchUrl(baseUrl: string, keyword: string): string {
-  const url = new URL('/employer/resumes', `${baseUrl}/`);
+function createPlatformSearchUrl(baseUrl: string, resumeListPath: string, keyword: string): string {
+  const url = new URL(resumeListPath, `${baseUrl}/`);
   url.searchParams.set('keyword', keyword);
   return url.toString();
 }
 
 function resolveWorkflowExploreContext(adapter: CandidateSourceAdapter): {
   baseUrl: string;
+  resumeListPath: string;
+  siteFingerprint: string;
   credentials: { username: string; password: string };
 } {
-  return (
-    adapter.getWorkflowExploreContext?.() ?? {
-      baseUrl: readBossLikeSetting('BOSS_LIKE_BASE_URL', 'http://localhost:6183'),
-      credentials: {
-        username: readBossLikeSetting('BOSS_LIKE_EMPLOYER_USERNAME', 'admin'),
-        password: readBossLikeSetting('BOSS_LIKE_EMPLOYER_PASSWORD', 'boss123'),
-      },
-    }
-  );
+  const context = adapter.getWorkflowExploreContext?.();
+  const baseUrl =
+    context?.baseUrl ?? readBossLikeSetting('BOSS_LIKE_BASE_URL', 'http://localhost:6183');
+  const resumeListPath = context?.resumeListPath ?? '/employer/resumes';
+  return {
+    baseUrl,
+    resumeListPath,
+    siteFingerprint: context?.siteFingerprint ?? createSiteFingerprint(baseUrl, { resumeListPath }),
+    credentials: context?.credentials ?? {
+      username: readBossLikeSetting('BOSS_LIKE_EMPLOYER_USERNAME', 'admin'),
+      password: readBossLikeSetting('BOSS_LIKE_EMPLOYER_PASSWORD', 'boss123'),
+    },
+  };
 }
 
 function screeningSkill(skill: PublishSkill): ScreeningWorkflowSkill {
@@ -396,7 +404,8 @@ function resolveDependencies(
     createCandidateScreeningRunEvent;
   return {
     ...dependencies,
-    getActiveSkill: dependencies.getActiveSkill ?? getActiveBrowserV2SkillByName,
+    getActiveSkill:
+      dependencies.getActiveSkill ?? ((params) => getActiveBrowserV2SkillByName(params)),
     getSkillById:
       dependencies.getSkillById ??
       (async (skillId) => {
@@ -800,7 +809,7 @@ export function createCandidateScreeningWorkflowSession(
       if (!repairedSteps) return false;
 
       const candidateSkill = { ...currentSkill, steps: repairedSteps };
-      if (!isCompatibleBossLikeScreeningSkill(candidateSkill)) {
+      if (!isCompatibleScreeningSkill(candidateSkill)) {
         throw new Error('LLM repair produced an incompatible screen_candidates workflow');
       }
 
@@ -930,9 +939,10 @@ export function createCandidateScreeningWorkflowSession(
     const active = await dependencies.getActiveSkill({
       name: 'screen_candidates',
       platform: dependencies.platform,
+      siteFingerprint: exploreContext.siteFingerprint,
     });
     const activeSkill = active ? screeningSkill(active) : null;
-    if (activeSkill && isCompatibleBossLikeScreeningSkill(activeSkill)) {
+    if (activeSkill && isCompatibleScreeningSkill(activeSkill)) {
       skill = activeSkill;
       await recordEvent({
         level: 'info',
@@ -968,7 +978,13 @@ export function createCandidateScreeningWorkflowSession(
         return null;
       }
       const exploredSkill = isExploredScreeningWorkflow(explored) ? explored.skill : explored;
-      skill = screeningSkill(await dependencies.createExploredSkill(exploredSkill));
+      skill = screeningSkill(
+        await dependencies.createExploredSkill({
+          ...exploredSkill,
+          platform: dependencies.platform,
+          siteFingerprint: exploreContext.siteFingerprint,
+        }),
+      );
       if (isExploredScreeningWorkflow(explored)) {
         firstExploredList = { keyword: explored.firstKeyword, html: explored.firstListHtml };
       }
@@ -1033,7 +1049,11 @@ export function createCandidateScreeningWorkflowSession(
         startStepId: SCREENING_STEP_IDS.searchOpen,
         input: {
           keyword,
-          searchUrl: createBossLikeSearchUrl(exploreContext.baseUrl, keyword),
+          searchUrl: createPlatformSearchUrl(
+            exploreContext.baseUrl,
+            exploreContext.resumeListPath,
+            keyword,
+          ),
         },
       });
       if (run.status !== 'success') throw new Error(errorForWorkflowRun(run));

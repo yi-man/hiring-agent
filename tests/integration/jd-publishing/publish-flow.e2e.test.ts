@@ -10,6 +10,8 @@ import {
   requireIntegrationEnv,
 } from '../chat/test-env';
 import { createJobDescription } from '@/lib/jd/job-description-repo';
+import { upsertCompanyProfileForUser } from '@/lib/company-profile/repo';
+import { resolveRecruitmentPlatformRuntimeConfig } from '@/lib/recruitment-platform-config';
 import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-executor';
 import { createExploredPublishSkill } from '@/lib/jd-publishing/publish-repo';
 import { publishJobDescriptionToBossLike } from '@/lib/jd-publishing/service';
@@ -225,13 +227,29 @@ function publishSettings(): PublishJobDescriptionSettings {
   };
 }
 
+async function configureBossLikePlatform(userId: string, baseUrl: string): Promise<void> {
+  await upsertCompanyProfileForUser({
+    userId,
+    name: 'JD Publish Integration Company',
+    supportedPlatforms: ['boss-like'],
+    platformConfigs: [
+      {
+        platformId: 'boss-like',
+        baseUrl,
+        username: 'admin',
+        password: 'boss123',
+        variables: {},
+      },
+    ],
+    locations: [{ kind: 'remote', label: '远程', city: null, address: null }],
+  });
+}
+
 async function publishWithBrowser(
   jobDescription: JobDescriptionDto,
   baseUrl: string,
 ): ReturnType<typeof publishJobDescriptionToBossLike> {
-  process.env.BOSS_LIKE_BASE_URL = baseUrl;
-  process.env.BOSS_LIKE_EMPLOYER_USERNAME = 'admin';
-  process.env.BOSS_LIKE_EMPLOYER_PASSWORD = 'boss123';
+  await configureBossLikePlatform(jobDescription.userId, baseUrl);
 
   const executor = new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 5_000 });
   try {
@@ -428,7 +446,15 @@ describe('JD publishing integration flow with real postgres and browser UI', () 
     const userId = await createIntegrationUser();
     try {
       const jobDescription = await createReadyJobDescription(userId, '自动修复前端工程师');
-      const brokenSkill = await createExploredPublishSkill(brokenSkillWithRepair());
+      await configureBossLikePlatform(userId, bossLike.baseUrl);
+      const config = await resolveRecruitmentPlatformRuntimeConfig({
+        userId,
+        platform: 'boss-like',
+      });
+      const brokenSkill = await createExploredPublishSkill({
+        ...brokenSkillWithRepair(),
+        siteFingerprint: config.siteFingerprint,
+      });
 
       const failed = await publishWithBrowser(jobDescription, bossLike.baseUrl);
       const skillsAfterRepair = await prisma.publishSkill.findMany({
@@ -490,7 +516,15 @@ describe('JD publishing integration flow with real postgres and browser UI', () 
     const userId = await createIntegrationUser();
     try {
       const jobDescription = await createReadyJobDescription(userId, '重探索修复前端工程师');
-      const brokenSkill = await createExploredPublishSkill(brokenSkillRequiringReExplore());
+      await configureBossLikePlatform(userId, bossLike.baseUrl);
+      const config = await resolveRecruitmentPlatformRuntimeConfig({
+        userId,
+        platform: 'boss-like',
+      });
+      const brokenSkill = await createExploredPublishSkill({
+        ...brokenSkillRequiringReExplore(),
+        siteFingerprint: config.siteFingerprint,
+      });
 
       const failed = await publishWithBrowser(jobDescription, bossLike.baseUrl);
       const skillsAfterRepair = await prisma.publishSkill.findMany({

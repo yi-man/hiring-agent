@@ -17,14 +17,24 @@ import {
 import { createCandidateSourceAdapter } from './factory';
 import type { RawCandidateBatch } from './types';
 import type { CandidateActionPlan, SearchPlan } from '../types';
+import { resolveRecruitmentPlatformRuntimeConfig } from '@/lib/recruitment-platform-config';
 
 jest.mock('@/lib/browser/executors/browser-executor-factory', () => ({
   createBrowserExecutorFromEnv: jest.fn(),
 }));
 
+jest.mock('@/lib/recruitment-platform-config', () => {
+  const actual = jest.requireActual('@/lib/recruitment-platform-config');
+  return { ...actual, resolveRecruitmentPlatformRuntimeConfig: jest.fn() };
+});
+
 const createBrowserExecutorFromEnvMock = createBrowserExecutorFromEnv as jest.MockedFunction<
   typeof createBrowserExecutorFromEnv
 >;
+const resolveRecruitmentPlatformRuntimeConfigMock =
+  resolveRecruitmentPlatformRuntimeConfig as jest.MockedFunction<
+    typeof resolveRecruitmentPlatformRuntimeConfig
+  >;
 
 const resumeListFixture = `
 <article data-candidate-id="1" data-profile-url="/employer/resumes/1">
@@ -348,6 +358,8 @@ describe('BossLikeCandidateSourceAdapter', () => {
 
     expect(adapter.getWorkflowExploreContext()).toEqual({
       baseUrl: 'http://boss-like.fixture',
+      resumeListPath: '/employer/resumes',
+      siteFingerprint: expect.any(String),
       credentials: {
         username: 'fixture-user',
         password: 'fixture-password',
@@ -836,11 +848,20 @@ describe('BossLikeCandidateSourceAdapter', () => {
     );
   });
 
-  it('creates boss-like adapters from the factory', () => {
+  it('creates boss-like adapters from the factory', async () => {
     const executor = new FakeBrowserExecutor();
     createBrowserExecutorFromEnvMock.mockReturnValueOnce(executor);
+    resolveRecruitmentPlatformRuntimeConfigMock.mockResolvedValueOnce({
+      platform: 'boss-like',
+      baseUrl: 'http://localhost:6183',
+      username: 'admin',
+      password: 'boss123',
+      variables: { resumeListPath: '/employer/resumes' },
+      siteFingerprint: 'site-1',
+      siteTemplatePlatform: 'boss-like',
+    });
 
-    const adapter = createCandidateSourceAdapter('boss-like', { userId: 'user-1' });
+    const adapter = await createCandidateSourceAdapter('boss-like', { userId: 'user-1' });
 
     expect(adapter).toBeInstanceOf(BossLikeCandidateSourceAdapter);
     expect(adapter.platform).toBe('boss-like');

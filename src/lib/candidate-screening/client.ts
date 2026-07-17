@@ -13,6 +13,7 @@ import type {
 import type {
   CandidateDecisionAction,
   CandidateInterviewStage,
+  CandidateScreeningPlatform,
   CandidateScreeningSource,
   CreateScreeningRunRequest,
   ExecuteActionsRequest,
@@ -59,6 +60,24 @@ export async function createCandidateScreeningRun(
     throw new Error(data.error || '创建候选人筛选任务失败');
   }
   return data.run;
+}
+
+export async function createCandidateScreeningRuns(
+  jobDescriptionId: string,
+  payload: Omit<Partial<CreateScreeningRunRequest>, 'platform'> & {
+    platforms: CandidateScreeningPlatform[];
+  },
+): Promise<CandidateScreeningRunDto[]> {
+  const response = await fetch(`/api/jd/${jobDescriptionId}/candidate-screening/runs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson<{ runs?: CandidateScreeningRunDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.runs) || data.runs.length === 0) {
+    throw new Error(data.error || '创建候选人筛选任务失败');
+  }
+  return data.runs;
 }
 
 export async function fetchCandidateScreeningRuns(

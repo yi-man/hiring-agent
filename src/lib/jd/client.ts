@@ -5,7 +5,11 @@ import type {
   RegenerateJobDescriptionRequest,
   UpdateJobDescriptionRequest,
 } from '@/types';
-import type { PublishJobDescriptionSettings, PublishTaskResult } from '@/lib/jd-publishing/types';
+import type {
+  PublishJobDescriptionSettings,
+  PublishPlatform,
+  PublishTaskResult,
+} from '@/lib/jd-publishing/types';
 import type { PublishTaskDto } from '@/lib/jd-publishing/types';
 import type { JobDescriptionContextDto } from '@/lib/jd/context';
 import type {
@@ -252,6 +256,22 @@ export async function startJobDescriptionPublishRun(
     throw new Error(data.error || '创建发布任务失败');
   }
   return data.run;
+}
+
+export async function startJobDescriptionPublishRuns(
+  id: string,
+  payload: Omit<PublishJobDescriptionSettings, 'platform'> & { platforms: PublishPlatform[] },
+): Promise<JobDescriptionPublishRunDto[]> {
+  const response = await fetch('/api/jd/publish-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, id }),
+  });
+  const data = await readJson<{ runs?: JobDescriptionPublishRunDto[] }>(response);
+  if (!response.ok || !Array.isArray(data.runs) || data.runs.length === 0) {
+    throw new Error(data.error || '创建发布任务失败');
+  }
+  return data.runs;
 }
 
 export async function fetchJobDescriptionPublishRunWithEvents(runId: string): Promise<{

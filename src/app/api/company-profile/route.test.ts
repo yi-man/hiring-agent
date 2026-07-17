@@ -1,8 +1,13 @@
 /**
  * @jest-environment node
  */
-import { GET, PUT } from './route';
-import { getCompanyProfileForUser, upsertCompanyProfileForUser } from '@/lib/company-profile/repo';
+import { GET, PATCH, PUT } from './route';
+import {
+  getCompanyProfileForUser,
+  updateCompanyRecruitmentPlatformsForUser,
+  upsertCompanyProfileForUser,
+} from '@/lib/company-profile/repo';
+import { listRecruitmentPlatformMetadata } from '@/lib/recruitment-platform-config';
 
 const requireAuthMock = jest.fn();
 
@@ -28,7 +33,12 @@ jest.mock('@/lib/auth/session', () => ({
 
 jest.mock('@/lib/company-profile/repo', () => ({
   getCompanyProfileForUser: jest.fn(),
+  updateCompanyRecruitmentPlatformsForUser: jest.fn(),
   upsertCompanyProfileForUser: jest.fn(),
+}));
+
+jest.mock('@/lib/recruitment-platform-config', () => ({
+  listRecruitmentPlatformMetadata: jest.fn(),
 }));
 
 const getCompanyProfileForUserMock = getCompanyProfileForUser as jest.MockedFunction<
@@ -37,11 +47,20 @@ const getCompanyProfileForUserMock = getCompanyProfileForUser as jest.MockedFunc
 const upsertCompanyProfileForUserMock = upsertCompanyProfileForUser as jest.MockedFunction<
   typeof upsertCompanyProfileForUser
 >;
+const updateCompanyRecruitmentPlatformsForUserMock =
+  updateCompanyRecruitmentPlatformsForUser as jest.MockedFunction<
+    typeof updateCompanyRecruitmentPlatformsForUser
+  >;
+const listRecruitmentPlatformMetadataMock = listRecruitmentPlatformMetadata as jest.MockedFunction<
+  typeof listRecruitmentPlatformMetadata
+>;
 
 const profile = {
   id: 'profile-1',
   userId: 'u1',
   name: '深海数据',
+  supportedPlatforms: ['boss' as const, 'liepin' as const],
+  platformConfigs: [],
   locations: [
     {
       id: 'loc-1',
@@ -69,6 +88,9 @@ describe('/api/company-profile', () => {
     requireAuthMock.mockReset();
     getCompanyProfileForUserMock.mockReset();
     upsertCompanyProfileForUserMock.mockReset();
+    updateCompanyRecruitmentPlatformsForUserMock.mockReset();
+    listRecruitmentPlatformMetadataMock.mockReset();
+    listRecruitmentPlatformMetadataMock.mockResolvedValue([]);
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
   });
 
@@ -92,6 +114,7 @@ describe('/api/company-profile', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: ' 深海数据 ',
+          supportedPlatforms: ['boss', 'liepin'],
           locations: [
             { kind: 'office', label: ' 上海张江 ', city: '上海', address: '博云路 2 号' },
             { kind: 'remote', label: '远程' },
@@ -106,6 +129,7 @@ describe('/api/company-profile', () => {
     expect(upsertCompanyProfileForUserMock).toHaveBeenCalledWith({
       userId: 'u1',
       name: '深海数据',
+      supportedPlatforms: ['boss', 'liepin'],
       locations: [
         { kind: 'office', label: '上海张江', city: '上海', address: '博云路 2 号' },
         { kind: 'remote', label: '远程', city: null, address: null },
@@ -126,5 +150,72 @@ describe('/api/company-profile', () => {
     expect(response.status).toBe(400);
     expect(body.error).toBe('at least one work location is required');
     expect(upsertCompanyProfileForUserMock).not.toHaveBeenCalled();
+  });
+
+  it('updates only recruitment platform connections', async () => {
+    getCompanyProfileForUserMock.mockResolvedValueOnce(profile);
+    listRecruitmentPlatformMetadataMock.mockResolvedValueOnce([
+      {
+        id: 'boss',
+        label: 'BOSS 直聘',
+        shortLabel: 'BOSS',
+        description: 'BOSS 直聘企业端',
+        kind: 'production',
+        defaultBaseUrl: 'https://www.zhipin.com',
+        defaultVariables: {},
+      },
+      {
+        id: 'liepin',
+        label: '猎聘',
+        shortLabel: '猎聘',
+        description: '猎聘企业端',
+        kind: 'production',
+        defaultBaseUrl: 'https://lpt.liepin.com',
+        defaultVariables: {},
+      },
+    ]);
+    updateCompanyRecruitmentPlatformsForUserMock.mockResolvedValueOnce(profile);
+
+    const response = await PATCH(
+      new Request('http://localhost/api/company-profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platformConfigs: [
+            {
+              platformId: 'boss',
+              baseUrl: 'https://www.zhipin.com',
+              username: 'operator',
+              variables: {},
+            },
+            {
+              platformId: 'liepin',
+              baseUrl: 'https://lpt.liepin.com',
+              username: '',
+              variables: {},
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateCompanyRecruitmentPlatformsForUserMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      platformConfigs: [
+        {
+          platformId: 'boss',
+          baseUrl: 'https://www.zhipin.com',
+          username: 'operator',
+          variables: {},
+        },
+        {
+          platformId: 'liepin',
+          baseUrl: 'https://lpt.liepin.com',
+          username: '',
+          variables: {},
+        },
+      ],
+    });
   });
 });

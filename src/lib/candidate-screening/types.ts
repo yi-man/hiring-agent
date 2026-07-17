@@ -1,4 +1,6 @@
-export type CandidateScreeningPlatform = 'boss-like';
+import type { RecruitmentPlatform } from '@/lib/recruitment-platforms';
+
+export type CandidateScreeningPlatform = RecruitmentPlatform;
 export type CandidateScreeningMode = 'dry_run' | 'execution';
 export type CandidateScreeningRunStatus =
   | 'pending'

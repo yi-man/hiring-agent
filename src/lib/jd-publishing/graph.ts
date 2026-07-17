@@ -1,4 +1,5 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import { randomUUID } from 'node:crypto';
 import type { JobDescriptionDto } from '@/types';
 import { exploreBossLikePublishSkill, repairBossLikeTargetFromSnapshot } from './explore';
 import { buildBossLikeJobPayload } from './publish-payload';
@@ -34,7 +35,10 @@ import type {
 type PublishingRoute = 'execute' | 'fallback' | 'upgrade' | 'finalize';
 
 export type PublishingGraphDependencies = {
-  getActiveSkill?: (platform: PublishPlatform) => Promise<PublishSkill | null>;
+  getActiveSkill?: (
+    platform: PublishPlatform,
+    siteFingerprint?: string,
+  ) => Promise<PublishSkill | null>;
   exploreSkill?: (params: {
     executor: BrowserExecutor;
     context: PublishExecutionContext;
@@ -56,6 +60,7 @@ const PublishingState = Annotation.Root({
   executor: Annotation<BrowserExecutor>(),
   credentials: Annotation<Record<string, unknown>>(),
   target: Annotation<Record<string, unknown>>(),
+  siteFingerprint: Annotation<string | undefined>(),
   input: Annotation<Record<string, unknown>>(),
   context: Annotation<PublishExecutionContext>(),
   skill: Annotation<PublishSkill | undefined>(),
@@ -247,7 +252,9 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       taskId: undefined,
       stepId: 'explore_or_load_skill',
     });
-    const activeSkill = await dependencies.getActiveSkill(state.settings.platform);
+    const activeSkill = state.siteFingerprint
+      ? await dependencies.getActiveSkill(state.settings.platform, state.siteFingerprint)
+      : await dependencies.getActiveSkill(state.settings.platform);
     if (activeSkill) {
       return {
         skill: activeSkill,
@@ -259,7 +266,16 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
       executor: state.executor,
       context: state.context,
     });
-    const saved = await dependencies.createExploredSkill(explored);
+    const saved = await dependencies.createExploredSkill(
+      state.siteFingerprint
+        ? {
+            ...explored,
+            id: `${state.settings.platform}-${state.siteFingerprint}-publish-${randomUUID()}`,
+            platform: state.settings.platform,
+            siteFingerprint: state.siteFingerprint,
+          }
+        : explored,
+    );
     return {
       skill: saved,
       currentStepId: saved.steps[0]?.id,
@@ -514,7 +530,9 @@ function withDefaultDependencies(
   dependencies: PublishingGraphDependencies = {},
 ): Required<PublishingGraphDependencies> {
   return {
-    getActiveSkill: dependencies.getActiveSkill ?? getActivePublishSkillFromDb,
+    getActiveSkill:
+      dependencies.getActiveSkill ??
+      ((platform, siteFingerprint) => getActivePublishSkillFromDb(platform, siteFingerprint)),
     exploreSkill: dependencies.exploreSkill ?? exploreBossLikePublishSkill,
     createExploredSkill: dependencies.createExploredSkill ?? createExploredPublishSkill,
     createTask: dependencies.createTask ?? createPublishTask,
@@ -531,6 +549,7 @@ export async function runPublishingAgentGraph(options: {
   executor: BrowserExecutor;
   target: Record<string, unknown>;
   credentials: Record<string, unknown>;
+  siteFingerprint?: string;
   dependencies?: PublishingGraphDependencies;
 }): Promise<PublishTaskResult> {
   const graph = makeGraph(withDefaultDependencies(options.dependencies));
@@ -541,6 +560,7 @@ export async function runPublishingAgentGraph(options: {
       executor: options.executor,
       credentials: options.credentials,
       target: options.target,
+      siteFingerprint: options.siteFingerprint,
       input: {},
       context: {
         input: {},

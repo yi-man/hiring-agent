@@ -123,7 +123,6 @@ export function CandidateTrackingDashboard() {
     try {
       const run = await startCandidateCommunicationRun({
         mode: 'batch',
-        platform: 'boss-like',
         maxPasses: 10,
       });
       router.push(

@@ -35,6 +35,12 @@ jest.mock('@/components/ui', () => ({
     return <Component {...props}>{children}</Component>;
   },
   Chip: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Modal: ({ children, isOpen }: { children: ReactNode; isOpen: boolean }) =>
+    isOpen ? <div role="dialog">{children}</div> : null,
+  ModalBody: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ModalContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ModalFooter: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ModalHeader: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
 }));
 
 const sampleJobDescription: JobDescriptionDto = {
@@ -202,6 +208,16 @@ describe('JD pages', () => {
     expect(parsedHref(detailHref).pathname).toBe('/jd-generator/jd-1');
     expectReturnContext(detailHref, '/jd-generator', '返回列表');
     expect(screen.getByRole('button', { name: '继续筛选' })).toBeInTheDocument();
+    expect(screen.queryByText('本次批量任务平台')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '继续筛选' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('选择筛选平台');
+    expect(screen.getByRole('dialog')).toHaveTextContent('本次筛选平台');
+    expect(
+      (global.fetch as jest.Mock).mock.calls.some(
+        ([url, options]) =>
+          url === '/api/jd/jd-1/candidate-screening/runs' && options?.method === 'POST',
+      ),
+    ).toBe(false);
     const screeningRunHref =
       screen.getByRole('link', { name: '筛选记录' }).getAttribute('href') ?? '';
     expect(parsedHref(screeningRunHref).pathname).toBe('/jd-generator/jd-1/screening-runs/run-1');
@@ -632,6 +648,9 @@ describe('JD pages', () => {
     expect(within(topActions).queryByRole('button', { name: '批量沟通' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /查看执行日志/ })).not.toBeInTheDocument();
     expect(screen.queryByText('筛选历史')).not.toBeInTheDocument();
+
+    expect(screen.getByText('本次发布平台')).toBeInTheDocument();
+    expect(screen.getByText('本次筛选平台')).toBeInTheDocument();
 
     expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发布到 Boss-like' })).not.toBeInTheDocument();

@@ -1,4 +1,5 @@
 import type { CandidateScreeningPlatform } from '@/lib/candidate-screening/types';
+import { isRecruitmentPlatform } from '@/lib/recruitment-platforms';
 
 type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -44,7 +45,7 @@ function cleanText(value: unknown): string {
 }
 
 function isCandidatePlatform(value: unknown): value is CandidateScreeningPlatform {
-  return value === 'boss-like';
+  return isRecruitmentPlatform(value);
 }
 
 function isIntegerInRange(value: unknown, min: number, max: number): value is number {

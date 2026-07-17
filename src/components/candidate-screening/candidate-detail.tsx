@@ -100,7 +100,7 @@ export function CandidateDetail({
         jobDescriptionId,
         candidateId,
         sourceScreeningRunId: candidate?.runId,
-        platform: 'boss-like',
+        platform: candidate?.candidate.sourcePlatform ?? 'boss-like',
       });
       router.push(
         withReturnTarget(`/jd-generator/communication-runs/${run.id}`, detailReturnTarget),

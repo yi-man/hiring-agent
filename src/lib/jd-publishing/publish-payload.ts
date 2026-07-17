@@ -1,5 +1,6 @@
 import type { JobDescriptionDto } from '@/types';
 import type { BossLikeJobPayload, PublishJobDescriptionSettings, PublishPlatform } from './types';
+import { isRecruitmentPlatform } from '@/lib/recruitment-platforms';
 
 type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -39,7 +40,7 @@ export function parsePublishJobDescriptionPayload(
   }
 
   const platform = cleanText(body.platform);
-  if (platform !== 'boss-like') {
+  if (!isRecruitmentPlatform(platform)) {
     return { ok: false, error: 'platform is unsupported' };
   }
 

@@ -18,10 +18,26 @@ import {
   Rocket,
   Sparkles,
 } from 'lucide-react';
-import { Button, Chip } from '@/components/ui';
-import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
-import { createCandidateScreeningRun } from '@/lib/candidate-screening/client';
-import { fetchCompanyProfile } from '@/lib/company-profile/client';
+import {
+  Button,
+  Chip,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+} from '@/components/ui';
+import { RecruitmentPlatformSelector } from '@/components/recruitment-platform-selector';
+import {
+  startCandidateCommunicationRun,
+  startCandidateCommunicationRuns,
+} from '@/lib/candidate-communication/client';
+import {
+  createCandidateScreeningRun,
+  createCandidateScreeningRuns,
+} from '@/lib/candidate-screening/client';
+import { fetchCompanyProfile, fetchCompanySettings } from '@/lib/company-profile/client';
+import type { RecruitmentPlatformMetadataDto } from '@/lib/recruitment-platform-config';
 import type { CompanyProfileDto } from '@/lib/company-profile/types';
 import {
   fetchJobDescriptionCreateRuns,
@@ -31,6 +47,7 @@ import {
   fetchJobDescriptions,
   startJobDescriptionCreateRun,
   startJobDescriptionPublishRun,
+  startJobDescriptionPublishRuns,
   startJobDescriptionRegenerateRun,
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
@@ -38,6 +55,10 @@ import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
 import { getJobDescriptionDisplayTitle } from '@/lib/jd/display';
 import type { JobDescriptionRegenerateRunDto } from '@/lib/jd/regenerate-run-repo';
 import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
+import {
+  DEFAULT_RECRUITMENT_PLATFORMS,
+  type RecruitmentPlatform,
+} from '@/lib/recruitment-platforms';
 import { JD_STATUSES } from '@/types';
 import {
   currentPathWithSearch,
@@ -307,6 +328,60 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return <span className="text-foreground text-sm font-medium">{children}</span>;
 }
 
+function PlatformActionModal({
+  confirmLabel,
+  isOpen,
+  isSubmitting,
+  label,
+  title,
+  value,
+  onChange,
+  onClose,
+  onConfirm,
+  platforms,
+}: {
+  confirmLabel: string;
+  isOpen: boolean;
+  isSubmitting: boolean;
+  label: string;
+  title: string;
+  value: RecruitmentPlatform[];
+  onChange: (value: RecruitmentPlatform[]) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+  platforms: RecruitmentPlatformMetadataDto[];
+}) {
+  return (
+    <Modal isOpen={isOpen} size="2xl" onOpenChange={(open) => !open && onClose()}>
+      <ModalContent>
+        <ModalHeader>{title}</ModalHeader>
+        <ModalBody>
+          <RecruitmentPlatformSelector
+            label={label}
+            platforms={platforms}
+            value={value}
+            onChange={onChange}
+          />
+        </ModalBody>
+        <ModalFooter>
+          <Button disableRipple type="button" variant="light" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            color="primary"
+            disableRipple
+            isDisabled={isSubmitting || value.length === 0}
+            type="button"
+            onClick={onConfirm}
+          >
+            {isSubmitting ? '启动中' : confirmLabel}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 export function JDListView() {
   const router = useRouter();
   const listReturnTarget = { href: '/jd-generator', label: '返回列表' };
@@ -318,6 +393,20 @@ export function JDListView() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [startingScreeningId, setStartingScreeningId] = useState<string | null>(null);
   const [isSyncingCommunication, setIsSyncingCommunication] = useState(false);
+  const [companyPlatforms, setCompanyPlatforms] = useState<RecruitmentPlatform[]>(
+    DEFAULT_RECRUITMENT_PLATFORMS,
+  );
+  const [availablePlatforms, setAvailablePlatforms] = useState<RecruitmentPlatformMetadataDto[]>(
+    [],
+  );
+  const [screeningPlatforms, setScreeningPlatforms] = useState<RecruitmentPlatform[]>(
+    DEFAULT_RECRUITMENT_PLATFORMS,
+  );
+  const [communicationPlatforms, setCommunicationPlatforms] = useState<RecruitmentPlatform[]>(
+    DEFAULT_RECRUITMENT_PLATFORMS,
+  );
+  const [screeningTarget, setScreeningTarget] = useState<JobDescriptionDto | null>(null);
+  const [isCommunicationPickerOpen, setIsCommunicationPickerOpen] = useState(false);
   const [error, setError] = useState('');
 
   async function loadJds(options?: { silent?: boolean }) {
@@ -328,12 +417,19 @@ export function JDListView() {
     }
     setError('');
     try {
-      const [nextItems, nextCreateRuns] = await Promise.all([
+      const [nextItems, nextCreateRuns, companySettings] = await Promise.all([
         fetchJobDescriptions(statusFilter),
         fetchJobDescriptionCreateRuns({ limit: 5 }).catch(() => []),
+        fetchCompanySettings().catch(() => ({ profile: null, platforms: [] })),
       ]);
+      const { profile, platforms } = companySettings;
       setItems(nextItems);
       setCreateRuns(nextCreateRuns);
+      setAvailablePlatforms(platforms);
+      const defaultPlatforms = profile?.supportedPlatforms ?? DEFAULT_RECRUITMENT_PLATFORMS;
+      setCompanyPlatforms(defaultPlatforms);
+      setScreeningPlatforms(defaultPlatforms);
+      setCommunicationPlatforms(defaultPlatforms);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载 JD 列表失败');
     } finally {
@@ -351,12 +447,22 @@ export function JDListView() {
     setStartingScreeningId(item.id);
     setError('');
     try {
-      const run = await createCandidateScreeningRun(item.id, {
-        platform: 'boss-like',
-        mode: 'execution',
-      });
+      if (screeningPlatforms.length === 0) throw new Error('请至少选择一个筛选平台');
+      const runs =
+        screeningPlatforms.length === 1
+          ? [
+              await createCandidateScreeningRun(item.id, {
+                platform: screeningPlatforms[0],
+                mode: 'execution',
+              }),
+            ]
+          : await createCandidateScreeningRuns(item.id, {
+              platforms: screeningPlatforms,
+              mode: 'execution',
+            });
+      setScreeningTarget(null);
       router.push(
-        withReturnTarget(`/jd-generator/${item.id}/screening-runs/${run.id}`, listReturnTarget),
+        withReturnTarget(`/jd-generator/${item.id}/screening-runs/${runs[0].id}`, listReturnTarget),
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人筛选失败');
@@ -369,13 +475,24 @@ export function JDListView() {
     setIsSyncingCommunication(true);
     setError('');
     try {
-      const run = await startCandidateCommunicationRun({
-        mode: 'batch',
-        platform: 'boss-like',
-        maxPasses: 10,
-      });
+      if (communicationPlatforms.length === 0) throw new Error('请至少选择一个沟通平台');
+      const runs =
+        communicationPlatforms.length === 1
+          ? [
+              await startCandidateCommunicationRun({
+                mode: 'batch',
+                platform: communicationPlatforms[0],
+                maxPasses: 10,
+              }),
+            ]
+          : await startCandidateCommunicationRuns({
+              mode: 'batch',
+              platforms: communicationPlatforms,
+              maxPasses: 10,
+            });
+      setIsCommunicationPickerOpen(false);
       router.push(
-        withReturnTarget(`/jd-generator/communication-runs/${run.id}`, workbenchReturnTarget),
+        withReturnTarget(`/jd-generator/communication-runs/${runs[0].id}`, workbenchReturnTarget),
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动候选人沟通失败');
@@ -417,7 +534,10 @@ export function JDListView() {
             size="sm"
             type="button"
             variant={summary.status === 'not_started' ? 'solid' : 'bordered'}
-            onClick={() => void handleStartScreeningFromList(item)}
+            onClick={() => {
+              setScreeningPlatforms(companyPlatforms);
+              setScreeningTarget(item);
+            }}
           >
             <ListFilter className="h-4 w-4" aria-hidden />
             {startingScreeningId === item.id ? '启动中' : getScreeningActionLabel(summary)}
@@ -532,7 +652,10 @@ export function JDListView() {
             isDisabled={isSyncingCommunication}
             type="button"
             variant="bordered"
-            onClick={() => void handleSyncCommunication()}
+            onClick={() => {
+              setCommunicationPlatforms(companyPlatforms);
+              setIsCommunicationPickerOpen(true);
+            }}
           >
             <MessageCircle className="h-4 w-4" aria-hidden />
             {isSyncingCommunication ? '启动中' : '批量沟通'}
@@ -678,6 +801,33 @@ export function JDListView() {
           </div>
         )}
       </section>
+
+      <PlatformActionModal
+        confirmLabel="开始筛选"
+        isOpen={screeningTarget !== null}
+        isSubmitting={screeningTarget !== null && startingScreeningId === screeningTarget.id}
+        label="本次筛选平台"
+        platforms={availablePlatforms}
+        title="选择筛选平台"
+        value={screeningPlatforms}
+        onChange={setScreeningPlatforms}
+        onClose={() => setScreeningTarget(null)}
+        onConfirm={() => {
+          if (screeningTarget) void handleStartScreeningFromList(screeningTarget);
+        }}
+      />
+      <PlatformActionModal
+        confirmLabel="开始沟通"
+        isOpen={isCommunicationPickerOpen}
+        isSubmitting={isSyncingCommunication}
+        label="本次沟通平台"
+        platforms={availablePlatforms}
+        title="选择沟通平台"
+        value={communicationPlatforms}
+        onChange={setCommunicationPlatforms}
+        onClose={() => setIsCommunicationPickerOpen(false)}
+        onConfirm={() => void handleSyncCommunication()}
+      />
     </div>
   );
 }
@@ -959,6 +1109,15 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [isPublishing, setIsPublishing] = useState(false);
   const [isScreening, setIsScreening] = useState(false);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
+  const [availablePlatforms, setAvailablePlatforms] = useState<RecruitmentPlatformMetadataDto[]>(
+    [],
+  );
+  const [publishPlatforms, setPublishPlatforms] = useState<RecruitmentPlatform[]>(
+    DEFAULT_RECRUITMENT_PLATFORMS,
+  );
+  const [screeningPlatforms, setScreeningPlatforms] = useState<RecruitmentPlatform[]>(
+    DEFAULT_RECRUITMENT_PLATFORMS,
+  );
   const [publishCompany, setPublishCompany] = useState('');
   const [publishSalary, setPublishSalary] = useState('');
   const [selectedPublishLocations, setSelectedPublishLocations] = useState<string[]>([]);
@@ -973,13 +1132,14 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     setIsLoading(true);
     setError('');
     try {
-      const [data, tasks, profile, creationRuns, regenerationRuns] = await Promise.all([
+      const [data, tasks, companySettings, creationRuns, regenerationRuns] = await Promise.all([
         fetchJobDescription(jobDescriptionId),
         fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
-        fetchCompanyProfile().catch(() => null),
+        fetchCompanySettings().catch(() => ({ profile: null, platforms: [] })),
         fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
         fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
       ]);
+      const { profile, platforms } = companySettings;
       setJobDescription(data);
       setForm(jdToForm(data.content));
       setStatus(data.status);
@@ -988,6 +1148,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setCreateRuns(creationRuns);
       setRegenerateRuns(regenerationRuns);
       setCompanyProfile(profile);
+      setAvailablePlatforms(platforms);
+      const defaultPlatforms = profile?.supportedPlatforms ?? DEFAULT_RECRUITMENT_PLATFORMS;
+      setPublishPlatforms(defaultPlatforms);
+      setScreeningPlatforms(defaultPlatforms);
       setPublishCompany(profile?.name ?? '');
       setPublishSalary(data.salaryRange ?? '');
       setSelectedPublishLocations(
@@ -1041,6 +1205,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setError('发布前请完善公司名称、薪资范围和工作地点。');
       return;
     }
+    if (publishPlatforms.length === 0) {
+      setError('请至少选择一个本次发布平台。');
+      return;
+    }
     setIsPublishing(true);
     setError('');
     try {
@@ -1054,16 +1222,27 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setForm(jdToForm(saved.content));
       setStatus(saved.status);
 
-      const run = await startJobDescriptionPublishRun(saved.id, {
-        platform: 'boss-like',
+      const publishSettings = {
         company: trimmedCompany,
         salary: trimmedSalary,
         location: publishLocation,
         keywords: parseKeywordInput(publishKeywords),
-      });
+      };
+      const runs =
+        publishPlatforms.length === 1
+          ? [
+              await startJobDescriptionPublishRun(saved.id, {
+                platform: publishPlatforms[0],
+                ...publishSettings,
+              }),
+            ]
+          : await startJobDescriptionPublishRuns(saved.id, {
+              ...publishSettings,
+              platforms: publishPlatforms,
+            });
 
       router.push(
-        withReturnTarget(`/jd-generator/publish-runs/${run.id}`, {
+        withReturnTarget(`/jd-generator/publish-runs/${runs[0].id}`, {
           href: `/jd-generator/${saved.id}`,
           label: '返回详情',
         }),
@@ -1079,14 +1258,27 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     if (!jobDescription) return;
     setIsScreening(true);
     setError('');
+    if (screeningPlatforms.length === 0) {
+      setError('请至少选择一个本次筛选平台。');
+      setIsScreening(false);
+      return;
+    }
     try {
-      const run = await createCandidateScreeningRun(jobDescription.id, {
-        platform: 'boss-like',
-        mode: 'execution',
-      });
+      const runs =
+        screeningPlatforms.length === 1
+          ? [
+              await createCandidateScreeningRun(jobDescription.id, {
+                platform: screeningPlatforms[0],
+                mode: 'execution',
+              }),
+            ]
+          : await createCandidateScreeningRuns(jobDescription.id, {
+              platforms: screeningPlatforms,
+              mode: 'execution',
+            });
       router.push(
         withReturnTarget(
-          `/jd-generator/${jobDescription.id}/screening-runs/${run.id}`,
+          `/jd-generator/${jobDescription.id}/screening-runs/${runs[0].id}`,
           detailReturnTarget,
         ),
       );
@@ -1389,6 +1581,13 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 <Rocket className="text-muted-foreground h-4 w-4" aria-hidden />
                 <div className="text-foreground text-sm font-medium">发布设置</div>
               </div>
+              <RecruitmentPlatformSelector
+                disabled={!isEditable}
+                label="本次发布平台"
+                platforms={availablePlatforms}
+                value={publishPlatforms}
+                onChange={setPublishPlatforms}
+              />
               <label className="block space-y-2">
                 <FieldLabel>公司名称</FieldLabel>
                 <input
@@ -1508,6 +1707,12 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                   <ListFilter className="text-muted-foreground h-4 w-4" aria-hidden />
                   <div className="text-foreground text-sm font-medium">候选人筛选</div>
                 </div>
+                <RecruitmentPlatformSelector
+                  label="本次筛选平台"
+                  platforms={availablePlatforms}
+                  value={screeningPlatforms}
+                  onChange={setScreeningPlatforms}
+                />
                 <div className="flex flex-wrap items-center gap-2">
                   <ScreeningSummaryChip summary={screeningSummary} />
                   <span className="text-muted-foreground text-xs">

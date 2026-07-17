@@ -14,6 +14,7 @@ jest.mock('lucide-react', () => ({
   FileCode: () => <svg aria-hidden="true" />,
   FileText: () => <svg aria-hidden="true" />,
   GitBranch: () => <svg aria-hidden="true" />,
+  Globe2: () => <svg aria-hidden="true" />,
   LayoutDashboard: () => <svg aria-hidden="true" />,
   MessageCircle: () => <svg aria-hidden="true" />,
   Users: () => <svg aria-hidden="true" />,

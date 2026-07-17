@@ -125,7 +125,7 @@ async function processUnreadMessage(params: {
     },
     dependencies: {
       repo: params.repo,
-      createAdapter: () => replyAdapter,
+      createAdapter: async () => replyAdapter,
       closeAdapterAfterReply: false,
     },
   });

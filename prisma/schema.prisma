@@ -64,16 +64,53 @@ model User {
 }
 
 model CompanyProfile {
-  id        String                @id @default(uuid())
-  userId    String                @unique @map("user_id")
-  name      String
-  createdAt DateTime              @default(now()) @map("created_at")
-  updatedAt DateTime              @updatedAt @map("updated_at")
-  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  locations CompanyWorkLocation[]
+  id                   String                       @id @default(uuid())
+  userId               String                       @unique @map("user_id")
+  name                 String
+  supportedPlatforms   String[]                     @default(["boss-like"]) @map("supported_platforms")
+  createdAt            DateTime                     @default(now()) @map("created_at")
+  updatedAt            DateTime                     @updatedAt @map("updated_at")
+  user                 User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  locations            CompanyWorkLocation[]
+  recruitmentPlatforms CompanyRecruitmentPlatform[]
 
   @@index([userId], map: "idx_company_profiles_user_id")
   @@map("company_profiles")
+}
+
+model RecruitmentPlatform {
+  id               String                       @id
+  label            String
+  shortLabel       String                       @map("short_label")
+  description      String
+  kind             String
+  defaultBaseUrl   String                       @map("default_base_url")
+  defaultVariables Json                         @default("{}") @map("default_variables")
+  isActive         Boolean                      @default(true) @map("is_active")
+  createdAt        DateTime                     @default(now()) @map("created_at")
+  updatedAt        DateTime                     @updatedAt @map("updated_at")
+  companyConfigs   CompanyRecruitmentPlatform[]
+
+  @@index([isActive, kind], map: "idx_recruitment_platforms_active_kind")
+  @@map("recruitment_platforms")
+}
+
+model CompanyRecruitmentPlatform {
+  id                String              @id @default(uuid())
+  companyProfileId  String              @map("company_profile_id")
+  platformId        String              @map("platform_id")
+  baseUrl           String              @map("base_url")
+  username          String?
+  passwordEncrypted String?             @map("password_encrypted")
+  variables         Json                @default("{}")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  companyProfile    CompanyProfile      @relation(fields: [companyProfileId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  platform          RecruitmentPlatform @relation(fields: [platformId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([companyProfileId, platformId], map: "company_recruitment_platforms_profile_platform_key")
+  @@index([platformId], map: "idx_company_recruitment_platforms_platform")
+  @@map("company_recruitment_platforms")
 }
 
 model CompanyWorkLocation {
@@ -219,21 +256,21 @@ model JobDescriptionRegenerateRunEvent {
 }
 
 model JobDescriptionPublishRun {
-  id               String                         @id @default(uuid())
-  userId           String                         @map("user_id")
-  jobDescriptionId String                         @map("job_description_id")
+  id               String                          @id @default(uuid())
+  userId           String                          @map("user_id")
+  jobDescriptionId String                          @map("job_description_id")
   platform         String
-  status           String                         @default("pending")
-  currentStage     String?                        @map("current_stage")
-  errorMessage     String?                        @map("error_message")
-  publishTaskId    String?                        @map("publish_task_id")
-  skillId          String?                        @map("skill_id")
-  startedAt        DateTime?                      @map("started_at")
-  finishedAt       DateTime?                      @map("finished_at")
-  createdAt        DateTime                       @default(now()) @map("created_at")
-  updatedAt        DateTime                       @updatedAt @map("updated_at")
-  user             User                           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  jobDescription   JobDescription                 @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  status           String                          @default("pending")
+  currentStage     String?                         @map("current_stage")
+  errorMessage     String?                         @map("error_message")
+  publishTaskId    String?                         @map("publish_task_id")
+  skillId          String?                         @map("skill_id")
+  startedAt        DateTime?                       @map("started_at")
+  finishedAt       DateTime?                       @map("finished_at")
+  createdAt        DateTime                        @default(now()) @map("created_at")
+  updatedAt        DateTime                        @updatedAt @map("updated_at")
+  user             User                            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription   JobDescription                  @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
   events           JobDescriptionPublishRunEvent[]
 
   @@unique([id, userId], map: "job_description_publish_runs_id_user_id_key")
@@ -244,16 +281,16 @@ model JobDescriptionPublishRun {
 }
 
 model JobDescriptionPublishRunEvent {
-  id        String                       @id @default(uuid())
-  userId    String                       @map("user_id")
-  runId     String                       @map("run_id")
+  id        String                   @id @default(uuid())
+  userId    String                   @map("user_id")
+  runId     String                   @map("run_id")
   stage     String
-  level     String                       @default("info")
+  level     String                   @default("info")
   message   String
   detail    Json?
-  createdAt DateTime                     @default(now()) @map("created_at")
-  user      User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  run       JobDescriptionPublishRun     @relation(fields: [runId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  createdAt DateTime                 @default(now()) @map("created_at")
+  user      User                     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  run       JobDescriptionPublishRun @relation(fields: [runId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([userId, runId, createdAt], map: "idx_jd_publish_run_events_user_run_created")
   @@index([runId, createdAt], map: "idx_jd_publish_run_events_run_created")
@@ -261,23 +298,24 @@ model JobDescriptionPublishRunEvent {
 }
 
 model PublishSkill {
-  id          String            @id @default(uuid())
-  name        String
-  platform    String
-  description String
-  version     Int
-  isActive    Boolean           @default(true) @map("is_active")
-  inputSchema Json              @map("input_schema")
-  variables   Json
-  steps       Json
-  meta        Json?
-  createdAt   DateTime          @default(now()) @map("created_at")
-  updatedAt   DateTime          @updatedAt @map("updated_at")
-  tasks       JobPublishTask[]
-  traces      JobPublishTrace[]
+  id              String            @id @default(uuid())
+  name            String
+  platform        String
+  siteFingerprint String            @default("default") @map("site_fingerprint")
+  description     String
+  version         Int
+  isActive        Boolean           @default(true) @map("is_active")
+  inputSchema     Json              @map("input_schema")
+  variables       Json
+  steps           Json
+  meta            Json?
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  tasks           JobPublishTask[]
+  traces          JobPublishTrace[]
 
-  @@unique([name, platform, version], map: "publish_skills_name_platform_version_key")
-  @@index([name, platform, isActive, version], map: "idx_publish_skills_lookup")
+  @@unique([name, platform, siteFingerprint, version], map: "publish_skills_name_platform_site_version_key")
+  @@index([name, platform, siteFingerprint, isActive, version], map: "idx_publish_skills_lookup")
   @@index([platform, isActive], map: "idx_publish_skills_platform_active")
   @@map("publish_skills")
 }
@@ -368,18 +406,18 @@ model ConversationDocument {
 }
 
 model ConversationDocumentChunk {
-  id                 String               @id @default(uuid())
-  documentId         String               @map("document_id")
-  conversationId     String               @map("conversation_id")
-  chunkIndex         Int                  @map("chunk_index")
+  id                 String                 @id @default(uuid())
+  documentId         String                 @map("document_id")
+  conversationId     String                 @map("conversation_id")
+  chunkIndex         Int                    @map("chunk_index")
   content            String
-  tokenEstimate      Int?                 @map("token_estimate")
-  embeddingModel     String               @map("embedding_model")
-  embeddingDimension Int                  @map("embedding_dimension")
+  tokenEstimate      Int?                   @map("token_estimate")
+  embeddingModel     String                 @map("embedding_model")
+  embeddingDimension Int                    @map("embedding_dimension")
   embedding          Unsupported("vector")?
-  createdAt          DateTime             @default(now()) @map("created_at")
-  document           ConversationDocument @relation(fields: [documentId, conversationId], references: [id, conversationId], onDelete: Cascade, onUpdate: Restrict)
-  conversation       Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  createdAt          DateTime               @default(now()) @map("created_at")
+  document           ConversationDocument   @relation(fields: [documentId, conversationId], references: [id, conversationId], onDelete: Cascade, onUpdate: Restrict)
+  conversation       Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([documentId, chunkIndex], map: "conversation_document_chunks_document_id_chunk_index_key")
   @@index([documentId], map: "idx_conversation_document_chunks_document_id")
@@ -552,28 +590,28 @@ model CandidateResumeChunk {
 }
 
 model CandidateScreeningRun {
-  id               String                       @id @default(uuid())
-  userId           String                       @map("user_id")
-  jobDescriptionId String                       @map("job_description_id")
-  platform         String
-  mode             String                       @default("dry_run")
-  status           String                       @default("pending")
-  currentStage     String?                      @map("current_stage")
-  skillId             String?                    @map("skill_id")
-  currentWorkflowStep String?                    @map("current_workflow_step")
-  searchPlan       Json?                        @map("search_plan")
-  evaluationSchema Json?                        @map("evaluation_schema")
-  stats            Json?
-  errorMessage     String?                      @map("error_message")
-  startedAt        DateTime?                    @map("started_at")
-  finishedAt       DateTime?                    @map("finished_at")
-  createdAt        DateTime                     @default(now()) @map("created_at")
-  updatedAt        DateTime                     @updatedAt @map("updated_at")
-  user             User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  jobDescription   JobDescription               @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
-  results          CandidateScreeningResult[]
-  actionLogs       CandidateActionLog[]
-  events           CandidateScreeningRunEvent[]
+  id                  String                       @id @default(uuid())
+  userId              String                       @map("user_id")
+  jobDescriptionId    String                       @map("job_description_id")
+  platform            String
+  mode                String                       @default("dry_run")
+  status              String                       @default("pending")
+  currentStage        String?                      @map("current_stage")
+  skillId             String?                      @map("skill_id")
+  currentWorkflowStep String?                      @map("current_workflow_step")
+  searchPlan          Json?                        @map("search_plan")
+  evaluationSchema    Json?                        @map("evaluation_schema")
+  stats               Json?
+  errorMessage        String?                      @map("error_message")
+  startedAt           DateTime?                    @map("started_at")
+  finishedAt          DateTime?                    @map("finished_at")
+  createdAt           DateTime                     @default(now()) @map("created_at")
+  updatedAt           DateTime                     @updatedAt @map("updated_at")
+  user                User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription      JobDescription               @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  results             CandidateScreeningResult[]
+  actionLogs          CandidateActionLog[]
+  events              CandidateScreeningRunEvent[]
 
   @@unique([id, userId], map: "candidate_screening_runs_id_user_id_key")
   @@unique([id, userId, jobDescriptionId], map: "candidate_screening_runs_id_user_jd_key")

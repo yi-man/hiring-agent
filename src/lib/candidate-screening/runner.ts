@@ -1231,7 +1231,7 @@ function makeCandidateScreeningGraph(resources: CandidateScreeningGraphResources
       },
     });
 
-    const adapter = state.dependencies.createAdapter(state.request.platform, {
+    const adapter = await state.dependencies.createAdapter(state.request.platform, {
       userId: state.userId,
     });
     resources.adapter = adapter;
@@ -2488,7 +2488,7 @@ export async function executeScreeningRunActions(params: {
       return adapter;
     }
 
-    const nextAdapter = dependencies.createAdapter(currentRun.platform, {
+    const nextAdapter = await dependencies.createAdapter(currentRun.platform, {
       userId: params.userId,
     });
     try {
@@ -2509,7 +2509,7 @@ export async function executeScreeningRunActions(params: {
       throw new Error('stored workflow skill id is required for workflow execution');
     }
 
-    const nextAdapter = dependencies.createAdapter(currentRun.platform, {
+    const nextAdapter = await dependencies.createAdapter(currentRun.platform, {
       userId: params.userId,
     });
     const nextWorkflowSession = dependencies.createWorkflowSession({
@@ -2698,7 +2698,7 @@ export async function executeSingleCandidateAction(params: {
       };
     }
 
-    const nextAdapter = dependencies.createAdapter(run.platform, {
+    const nextAdapter = await dependencies.createAdapter(run.platform, {
       userId: params.userId,
     });
     adapter = nextAdapter;

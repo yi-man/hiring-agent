@@ -58,6 +58,8 @@ export type CandidateBrowserActionOptions = {
 
 export type CandidateWorkflowExploreContext = {
   baseUrl: string;
+  resumeListPath?: string;
+  siteFingerprint?: string;
   credentials: {
     username: string;
     password: string;
