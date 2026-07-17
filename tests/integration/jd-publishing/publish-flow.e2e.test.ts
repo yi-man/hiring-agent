@@ -328,8 +328,6 @@ function brokenSkillRequiringReExplore(): PublishSkill {
 
 describe('JD publishing integration flow with real postgres and browser UI', () => {
   beforeAll(async () => {
-    process.env.PLATFORM_CREDENTIALS_ENCRYPTION_KEY =
-      originalBossLikeEnv.encryptionKey || 'jd-publishing-integration-test-key';
     requireIntegrationEnv('POSTGRES_HOST');
     requireIntegrationEnv('POSTGRES_PORT');
     requireIntegrationEnv('POSTGRES_USER');
@@ -343,6 +341,8 @@ describe('JD publishing integration flow with real postgres and browser UI', () 
   });
 
   beforeEach(async () => {
+    process.env.PLATFORM_CREDENTIALS_ENCRYPTION_KEY =
+      originalBossLikeEnv.encryptionKey || 'jd-publishing-integration-test-key';
     await clearBossLikePublishingData();
   });
 
