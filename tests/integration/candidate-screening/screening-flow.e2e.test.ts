@@ -30,6 +30,7 @@ import {
 import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-executor';
 import { createJobDescription } from '@/lib/jd/job-description-repo';
 import { prisma } from '@/lib/prisma';
+import { createSiteFingerprint } from '@/lib/recruitment-platform-config';
 import type { JD, JobDescriptionDto } from '@/types';
 import type { CreateScreeningRunRequest } from '@/lib/candidate-screening/types';
 
@@ -403,6 +404,10 @@ const workflowSearchPlan = {
   priorityTags: [],
   retrievalQuery: 'Java 后端',
 };
+
+function screeningSiteFingerprint(baseUrl: string): string {
+  return createSiteFingerprint(baseUrl, { resumeListPath: '/employer/resumes' });
+}
 
 async function createRunAndExecute(params: {
   userId: string;
@@ -1059,7 +1064,11 @@ describe('candidate screening integration flow with real postgres and boss-like 
     try {
       await cleanupScreeningWorkflows();
       const jobDescription = await createPublishedJobDescription(userId);
-      await createExploredPublishSkill(buildBossLikeScreeningSkill());
+      await createExploredPublishSkill(
+        buildBossLikeScreeningSkill({
+          siteFingerprint: screeningSiteFingerprint(bossLike.baseUrl),
+        }),
+      );
       const run = await createCandidateScreeningRun({
         userId,
         jobDescriptionId: jobDescription.id,
@@ -1133,7 +1142,11 @@ describe('candidate screening integration flow with real postgres and boss-like 
     try {
       await cleanupScreeningWorkflows();
       const legacy = await createExploredPublishSkill({
-        ...buildBossLikeScreeningSkill({ id: 'screen-candidates-legacy-v4', version: 4 }),
+        ...buildBossLikeScreeningSkill({
+          id: 'screen-candidates-legacy-v4',
+          siteFingerprint: screeningSiteFingerprint(bossLike.baseUrl),
+          version: 4,
+        }),
         steps: [
           {
             id: 'legacy_search',
@@ -1235,7 +1248,11 @@ describe('candidate screening integration flow with real postgres and boss-like 
       await cleanupScreeningWorkflows();
       const jobDescription = await createPublishedJobDescription(userId);
       const v1 = await createExploredPublishSkill(
-        buildBossLikeScreeningSkill({ id: 'screen-candidates-stale-v1', version: 1 }),
+        buildBossLikeScreeningSkill({
+          id: 'screen-candidates-stale-v1',
+          siteFingerprint: screeningSiteFingerprint(bossLike.baseUrl),
+          version: 1,
+        }),
       );
       const v2 = await createNextActivePublishSkillVersion({ previousSkill: v1, steps: v1.steps });
       const run = await createCandidateScreeningRun({
@@ -1270,20 +1287,17 @@ describe('candidate screening integration flow with real postgres and boss-like 
       });
       const active = workflows.filter((workflow) => workflow.isActive);
 
-      expect(persisted?.skillId).toBe('screen_candidates-boss-like-v3');
+      expect(persisted?.skillId).toBe(active[0]?.id);
       expect(workflows).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: v2.id, version: 2, isActive: false }),
           expect.objectContaining({
-            id: 'screen_candidates-boss-like-v3',
             version: 3,
             isActive: true,
           }),
         ]),
       );
-      expect(active).toEqual([
-        expect.objectContaining({ id: 'screen_candidates-boss-like-v3', version: 3 }),
-      ]);
+      expect(active).toEqual([expect.objectContaining({ version: 3 })]);
     } finally {
       await session?.close();
       await cleanupIntegrationUser(userId);

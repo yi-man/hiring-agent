@@ -1,9 +1,14 @@
-import { fetchCompanyProfile, saveCompanyProfile } from '@/lib/company-profile/client';
+import {
+  fetchCompanyProfile,
+  saveCompanyProfile,
+  saveCompanyRecruitmentPlatforms,
+} from '@/lib/company-profile/client';
 
 const profile = {
   id: 'profile-1',
   userId: 'u1',
   name: '深海数据',
+  supportedPlatforms: ['boss' as const],
   locations: [
     {
       id: 'loc-1',
@@ -42,6 +47,7 @@ describe('company profile client', () => {
     await expect(
       saveCompanyProfile({
         name: '深海数据',
+        supportedPlatforms: ['boss'],
         locations: [{ kind: 'remote', label: '远程', city: null, address: null }],
       }),
     ).resolves.toEqual(profile);
@@ -53,9 +59,43 @@ describe('company profile client', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: '深海数据',
+          supportedPlatforms: ['boss'],
           locations: [{ kind: 'remote', label: '远程', city: null, address: null }],
         }),
       }),
     );
+  });
+
+  it('saves recruitment platform connections without updating company fields', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ profile }),
+    });
+
+    await expect(
+      saveCompanyRecruitmentPlatforms([
+        {
+          platformId: 'boss',
+          baseUrl: 'https://www.zhipin.com',
+          username: 'operator',
+          variables: {},
+        },
+      ]),
+    ).resolves.toEqual(profile);
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/company-profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platformConfigs: [
+          {
+            platformId: 'boss',
+            baseUrl: 'https://www.zhipin.com',
+            username: 'operator',
+            variables: {},
+          },
+        ],
+      }),
+    });
   });
 });

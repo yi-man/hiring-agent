@@ -42,6 +42,10 @@ describe('AppSidebar', () => {
       'href',
       '/settings/company',
     );
+    expect(screen.getByRole('link', { name: /招聘平台/i })).toHaveAttribute(
+      'href',
+      '/settings/recruitment-platforms',
+    );
 
     const menuText = menu.textContent ?? '';
 

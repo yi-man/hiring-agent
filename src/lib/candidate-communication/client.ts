@@ -9,7 +9,8 @@ export type SyncUnreadCandidateConversationsRequest = {
 export type StartCandidateCommunicationRunRequest =
   | {
       mode: Extract<CandidateCommunicationRunMode, 'batch'>;
-      platform: CandidateScreeningPlatform;
+      platform?: CandidateScreeningPlatform;
+      platforms?: CandidateScreeningPlatform[];
       jobDescriptionId?: string;
       maxPasses?: number;
     }
@@ -81,6 +82,24 @@ export async function startCandidateCommunicationRun(
     throw new Error(data.error || '启动候选人沟通失败');
   }
   return data.run;
+}
+
+export async function startCandidateCommunicationRuns(
+  payload: Extract<StartCandidateCommunicationRunRequest, { mode: 'batch' }> & {
+    platforms: CandidateScreeningPlatform[];
+  },
+): Promise<CandidateCommunicationRunDto[]> {
+  const response = await fetch('/api/candidate-conversations/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson<{ runs?: unknown[] }>(response);
+  const runs = Array.isArray(data.runs) ? data.runs.filter(isCommunicationRun) : [];
+  if (!response.ok || runs.length === 0) {
+    throw new Error(data.error || '启动候选人沟通失败');
+  }
+  return runs;
 }
 
 export async function fetchCandidateCommunicationRun(

@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import type { PublishPlatform, PublishTaskStatus } from '@/lib/jd-publishing/types';
 import { JD_STATUSES, type JD, type JDStatus } from '@/types';
+import { RECRUITMENT_PLATFORM_IDS, isRecruitmentPlatform } from '@/lib/recruitment-platforms';
 import type {
   DashboardCandidateSignal,
   DashboardCandidateStats,
@@ -35,17 +36,18 @@ const statusLabels: Record<JDStatus, string> = {
 
 const dashboardPlatformFilters = [
   DASHBOARD_PLATFORM_ALL,
-  'boss-like',
+  ...RECRUITMENT_PLATFORM_IDS,
   DASHBOARD_PLATFORM_UNTRACKED,
 ] as const satisfies readonly DashboardPlatformFilter[];
 
 const platformLabels: Record<DashboardPlatformFilter, string> = {
   [DASHBOARD_PLATFORM_ALL]: '全部平台',
+  boss: 'BOSS 直聘',
+  liepin: '猎聘',
+  zhilian: '智联招聘',
   'boss-like': 'BOSS-like',
   [DASHBOARD_PLATFORM_UNTRACKED]: '未记录平台',
 };
-
-const publishPlatforms = ['boss-like'] as const satisfies readonly PublishPlatform[];
 
 type DashboardJobRow = {
   id: string;
@@ -126,7 +128,7 @@ function isDashboardPlatformFilter(value: string): value is DashboardPlatformFil
 }
 
 function isPublishPlatform(value: string): value is PublishPlatform {
-  return publishPlatforms.includes(value as PublishPlatform);
+  return isRecruitmentPlatform(value);
 }
 
 function toPublishPlatform(value: string): PublishPlatform {

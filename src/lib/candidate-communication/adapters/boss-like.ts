@@ -2,6 +2,7 @@ import {
   BossLikeCandidateSourceAdapter,
   extractBossLikeCandidatesFromHtml,
 } from '@/lib/candidate-screening/adapters/boss-like';
+import type { BossLikeCandidateSourceAdapterOptions } from '@/lib/candidate-screening/adapters/boss-like';
 import type { CandidateSourceAdapter } from '@/lib/candidate-screening/adapters/types';
 import type { RawCandidate } from '@/lib/candidate-screening/ingest';
 import type { CandidateActionPlan } from '@/lib/candidate-screening/types';
@@ -313,7 +314,9 @@ export function extractBossLikeUnreadMessagesFromRenderedHtml(
 }
 
 class BossLikeBrowserConversationReplyAdapter implements CandidateSourceAdapter {
-  readonly platform = 'boss-like' as const;
+  get platform() {
+    return this.owner.platform;
+  }
 
   constructor(
     private readonly owner: BossLikeCandidateCommunicationAdapter,
@@ -359,6 +362,30 @@ export class BossLikeCandidateCommunicationAdapter
   extends BossLikeCandidateSourceAdapter
   implements CandidateCommunicationSkillAdapter
 {
+  private readonly messagePath: string;
+  private readonly communicationResumePath: string;
+  private readonly threadListSelector: string;
+  private readonly replyInputSelector: string;
+  private readonly sendButtonSelector: string;
+
+  constructor(
+    options: BossLikeCandidateSourceAdapterOptions & {
+      messagePath?: string;
+      communicationResumePath?: string;
+      threadListSelector?: string;
+      replyInputSelector?: string;
+      sendButtonSelector?: string;
+    },
+  ) {
+    super(options);
+    this.messagePath = options.messagePath ?? '/employer/messages';
+    this.communicationResumePath = options.communicationResumePath ?? '/employer/resumes';
+    this.threadListSelector =
+      options.threadListSelector ?? '[data-conversation-thread], [data-testid="message-thread"]';
+    this.replyInputSelector = options.replyInputSelector ?? REPLY_TEXTAREA_SELECTOR;
+    this.sendButtonSelector = options.sendButtonSelector ?? SEND_BUTTON_SELECTOR;
+  }
+
   async listUnreadMessages(): Promise<UnreadCandidateMessage[]> {
     await this.loginIfNeeded();
     await this.openMessagesPage();
@@ -471,11 +498,11 @@ export class BossLikeCandidateCommunicationAdapter
       await this.clickSelector(selector, 'open unread conversation');
       await this.executor.check({
         type: 'dom_exists',
-        selector: REPLY_TEXTAREA_SELECTOR,
+        selector: this.replyInputSelector,
         timeout: 5_000,
       });
-      await this.fillSelector(REPLY_TEXTAREA_SELECTOR, text, 'fill chat message');
-      await this.clickSelector(SEND_BUTTON_SELECTOR, 'send chat message');
+      await this.fillSelector(this.replyInputSelector, text, 'fill chat message');
+      await this.clickSelector(this.sendButtonSelector, 'send chat message');
       return {
         success: true,
         browserTrace: {
@@ -498,8 +525,8 @@ export class BossLikeCandidateCommunicationAdapter
   private async openMessagesPage(): Promise<void> {
     await requireSuccessfulStep(this.executor.navigate(this.unreadMessageUrl()), 'open messages');
     await this.executor.check({
-      type: 'text_contains',
-      text: '消息列表',
+      type: 'dom_exists',
+      selector: this.threadListSelector,
       timeout: 5_000,
     });
   }
@@ -559,11 +586,11 @@ export class BossLikeCandidateCommunicationAdapter
   }
 
   private communicationResumeListUrl(): string {
-    return `${this.baseUrl.replace(/\/+$/, '')}/employer/resumes`;
+    return new URL(this.communicationResumePath, `${this.baseUrl.replace(/\/+$/, '')}/`).toString();
   }
 
   private unreadMessageUrl(): string {
-    return `${this.baseUrl.replace(/\/+$/, '')}/employer/messages`;
+    return new URL(this.messagePath, `${this.baseUrl.replace(/\/+$/, '')}/`).toString();
   }
 
   private async readRawSnapshot(): Promise<string> {

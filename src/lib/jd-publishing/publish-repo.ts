@@ -16,6 +16,7 @@ type PublishSkillRecord = {
   id: string;
   name: string;
   platform: string;
+  siteFingerprint: string;
   description: string;
   version: number;
   isActive: boolean;
@@ -70,6 +71,7 @@ function mapSkill(row: PublishSkillRecord): PublishSkill {
     id: row.id,
     name: row.name,
     platform: row.platform as PublishPlatform,
+    siteFingerprint: row.siteFingerprint,
     description: row.description,
     version: row.version,
     isActive: row.isActive,
@@ -85,6 +87,7 @@ function skillCreateData(skill: PublishSkill): Prisma.PublishSkillCreateInput {
     id: skill.id,
     name: skill.name,
     platform: skill.platform,
+    siteFingerprint: skill.siteFingerprint ?? 'default',
     description: skill.description,
     version: skill.version,
     isActive: skill.isActive,
@@ -119,10 +122,11 @@ async function retryPublishSkillVersionWrite<T>(operation: () => Promise<T>): Pr
 
 async function lockPublishSkillVersion(
   tx: Prisma.TransactionClient,
-  skill: Pick<PublishSkill, 'name' | 'platform'>,
+  skill: Pick<PublishSkill, 'name' | 'platform' | 'siteFingerprint'>,
 ): Promise<void> {
+  const scope = `${skill.platform}:${skill.siteFingerprint ?? 'default'}`;
   await tx.$executeRaw`
-    SELECT pg_advisory_xact_lock(hashtext(${skill.name}), hashtext(${skill.platform}))
+    SELECT pg_advisory_xact_lock(hashtext(${skill.name}), hashtext(${scope}))
   `;
 }
 
@@ -155,11 +159,13 @@ function mapTask(row: PublishTaskRecord): PublishTaskDto {
 }
 
 export async function upsertDefaultPublishSkill(skill: PublishSkill): Promise<PublishSkill> {
+  const meta = skill.meta ?? { success_rate: 0, usage_count: 0, created_from: 'agent' };
   const row = await prisma.publishSkill.upsert({
     where: {
-      name_platform_version: {
+      name_platform_siteFingerprint_version: {
         name: skill.name,
         platform: skill.platform,
+        siteFingerprint: skill.siteFingerprint ?? 'default',
         version: skill.version,
       },
     },
@@ -167,13 +173,14 @@ export async function upsertDefaultPublishSkill(skill: PublishSkill): Promise<Pu
       id: skill.id,
       name: skill.name,
       platform: skill.platform,
+      siteFingerprint: skill.siteFingerprint ?? 'default',
       description: skill.description,
       version: skill.version,
       isActive: skill.isActive,
       inputSchema: toJson(skill.inputSchema),
       variables: toJson(skill.variables),
       steps: toJson(skill.steps),
-      meta: toJson({ success_rate: 0, usage_count: 0, created_from: 'agent' }),
+      meta: toJson(meta),
     },
     update: {
       description: skill.description,
@@ -181,6 +188,7 @@ export async function upsertDefaultPublishSkill(skill: PublishSkill): Promise<Pu
       inputSchema: toJson(skill.inputSchema),
       variables: toJson(skill.variables),
       steps: toJson(skill.steps),
+      meta: toJson(meta),
     },
   });
   return mapSkill(row);
@@ -191,7 +199,11 @@ export async function createExploredPublishSkill(skill: PublishSkill): Promise<P
     prisma.$transaction(async (tx) => {
       await lockPublishSkillVersion(tx, skill);
       const latest = await tx.publishSkill.findFirst({
-        where: { name: skill.name, platform: skill.platform },
+        where: {
+          name: skill.name,
+          platform: skill.platform,
+          siteFingerprint: skill.siteFingerprint ?? 'default',
+        },
         orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
       });
       const nextVersion = latest ? Math.max(skill.version, latest.version + 1) : skill.version;
@@ -207,6 +219,7 @@ export async function createExploredPublishSkill(skill: PublishSkill): Promise<P
         where: {
           name: skill.name,
           platform: skill.platform,
+          siteFingerprint: skill.siteFingerprint ?? 'default',
           isActive: true,
           id: { not: row.id },
         },
@@ -227,13 +240,17 @@ export async function createNextActivePublishSkillVersion(params: {
     prisma.$transaction(async (tx) => {
       await lockPublishSkillVersion(tx, previousSkill);
       const latest = await tx.publishSkill.findFirst({
-        where: { name: previousSkill.name, platform: previousSkill.platform },
+        where: {
+          name: previousSkill.name,
+          platform: previousSkill.platform,
+          siteFingerprint: previousSkill.siteFingerprint ?? 'default',
+        },
         orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
       });
       const version = Math.max(previousSkill.version + 1, (latest?.version ?? 0) + 1);
       const nextSkill: PublishSkill = {
         ...previousSkill,
-        id: `${previousSkill.name}-${previousSkill.platform}-v${version}`,
+        id: `${previousSkill.name}-${previousSkill.platform}-${previousSkill.siteFingerprint ?? 'default'}-v${version}`,
         version,
         isActive: true,
         steps,
@@ -244,6 +261,7 @@ export async function createNextActivePublishSkillVersion(params: {
         where: {
           name: previousSkill.name,
           platform: previousSkill.platform,
+          siteFingerprint: previousSkill.siteFingerprint ?? 'default',
           isActive: true,
           id: { not: row.id },
         },
@@ -257,9 +275,15 @@ export async function createNextActivePublishSkillVersion(params: {
 export async function getActivePublishSkillByName(params: {
   name: string;
   platform: PublishPlatform;
+  siteFingerprint?: string;
 }): Promise<PublishSkill | null> {
   const row = await prisma.publishSkill.findFirst({
-    where: { name: params.name, platform: params.platform, isActive: true },
+    where: {
+      name: params.name,
+      platform: params.platform,
+      siteFingerprint: params.siteFingerprint ?? 'default',
+      isActive: true,
+    },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
   });
   return row ? mapSkill(row) : null;
@@ -272,6 +296,7 @@ export function isBrowserV2Skill(skill: Pick<PublishSkill, 'meta'>): boolean {
 export async function getActiveBrowserV2SkillByName(params: {
   name: string;
   platform: PublishPlatform;
+  siteFingerprint?: string;
 }): Promise<PublishSkill | null> {
   const active = await getActivePublishSkillByName(params);
   return active && isBrowserV2Skill(active) ? active : null;
@@ -279,8 +304,9 @@ export async function getActiveBrowserV2SkillByName(params: {
 
 export function getActivePublishSkillFromDb(
   platform: PublishPlatform,
+  siteFingerprint = 'default',
 ): Promise<PublishSkill | null> {
-  return getActivePublishSkillByName({ name: 'publish_jd', platform });
+  return getActivePublishSkillByName({ name: 'publish_jd', platform, siteFingerprint });
 }
 
 export async function createPublishTask(params: {

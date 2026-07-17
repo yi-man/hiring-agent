@@ -9,6 +9,7 @@ import {
   type BossLikeScreeningTargets,
   type ScreeningWorkflowSkill,
 } from './types';
+import type { RecruitmentPlatform } from '@/lib/recruitment-platforms';
 
 function fieldTarget(name: string): TargetDescriptor {
   return {
@@ -463,4 +464,123 @@ export function buildBossLikeScreeningSkill(
     },
     ...skillOverrides,
   };
+}
+
+type PlatformScreeningConfig = {
+  platform: Exclude<RecruitmentPlatform, 'boss-like'>;
+  targets: Partial<BossLikeScreeningTargets>;
+  candidateSelector: string;
+  emptyText: string;
+  description: string;
+};
+
+function buildPlatformScreeningSkill(config: PlatformScreeningConfig): ScreeningWorkflowSkill {
+  const base = buildBossLikeScreeningSkill(
+    {
+      id: `${config.platform}-screen-candidates`,
+      platform: config.platform,
+      description: config.description,
+    },
+    config.targets,
+  );
+  return {
+    ...base,
+    steps: base.steps.map((step) => {
+      if (step.id === SCREENING_STEP_IDS.searchOpen && step.type === 'action') {
+        return { ...step, params: { ...step.params, url: '{{input.searchUrl}}' } };
+      }
+      if (step.id === SCREENING_STEP_IDS.loginWait && step.type === 'action') {
+        return { ...step, params: { ...step.params, url: '{{input.searchUrl}}' } };
+      }
+      if (step.id === SCREENING_STEP_IDS.searchWait && step.type === 'action') {
+        return {
+          ...step,
+          params: {
+            ...step.params,
+            previousUrl: '{{input.searchUrl}}',
+            readyChecks: [
+              { type: 'dom_exists', selector: config.candidateSelector, timeout: 10_000 },
+              { type: 'text_contains', text: config.emptyText, timeout: 10_000 },
+            ],
+          },
+        };
+      }
+      return step;
+    }),
+  };
+}
+
+export const bossScreeningSkill = buildPlatformScreeningSkill({
+  platform: 'boss',
+  description: 'Search, inspect, greet and collect candidates in the BOSS enterprise workflow.',
+  candidateSelector: '[data-geek-id], .candidate-card, .geek-card',
+  emptyText: '暂无牛人',
+  targets: {
+    username: fieldTarget('手机号'),
+    searchInput: fieldTarget('搜索牛人'),
+    searchSubmit: buttonTarget('搜索'),
+    detailContent: { kind: 'text', name: '牛人详情' },
+    greetButton: buttonTarget('打招呼'),
+    messageInput: fieldTarget('输入消息'),
+    sendButton: buttonTarget('发送'),
+    collectButton: buttonTarget('收藏'),
+  },
+});
+
+export const liepinScreeningSkill = buildPlatformScreeningSkill({
+  platform: 'liepin',
+  description: 'Search, inspect, message and save candidates in the Liepin enterprise workflow.',
+  candidateSelector: '[data-resume-id], .resume-card, .talent-card',
+  emptyText: '暂无人才',
+  targets: {
+    username: fieldTarget('账号/手机号'),
+    searchInput: fieldTarget('搜索人才'),
+    searchSubmit: buttonTarget('搜索人才'),
+    detailContent: { kind: 'text', name: '人才详情' },
+    greetButton: buttonTarget('立即沟通'),
+    messageInput: fieldTarget('请输入沟通内容'),
+    sendButton: buttonTarget('发送消息'),
+    collectButton: buttonTarget('加入收藏'),
+  },
+});
+
+export const zhilianScreeningSkill = buildPlatformScreeningSkill({
+  platform: 'zhilian',
+  description: 'Search, inspect, contact and save candidates in the Zhilian enterprise workflow.',
+  candidateSelector: '[data-resume-id], .resume-list-item, .talent-item',
+  emptyText: '暂无简历',
+  targets: {
+    username: fieldTarget('用户名/手机号'),
+    searchInput: fieldTarget('搜索简历'),
+    searchSubmit: buttonTarget('搜索'),
+    detailContent: { kind: 'text', name: '简历详情' },
+    greetButton: buttonTarget('立即沟通'),
+    messageInput: fieldTarget('请输入消息'),
+    sendButton: buttonTarget('发送'),
+    collectButton: buttonTarget('收藏简历'),
+  },
+});
+
+const activeScreeningSkills: Record<RecruitmentPlatform, ScreeningWorkflowSkill> = {
+  boss: bossScreeningSkill,
+  liepin: liepinScreeningSkill,
+  zhilian: zhilianScreeningSkill,
+  'boss-like': buildBossLikeScreeningSkill(),
+};
+
+export function getActiveScreeningSkill(platform: RecruitmentPlatform): ScreeningWorkflowSkill {
+  return activeScreeningSkills[platform];
+}
+
+export function isCompatibleScreeningSkill(skill: PublishSkill): boolean {
+  if (skill.platform === 'boss-like') return isCompatibleBossLikeScreeningSkill(skill);
+  const expected = activeScreeningSkills[skill.platform];
+  return Boolean(
+    expected &&
+    skill.name === 'screen_candidates' &&
+    skill.meta?.dsl_version === BROWSER_WORKFLOW_DSL_VERSION &&
+    skill.steps.some((step) => step.id === SCREENING_STEP_IDS.searchOpen) &&
+    skill.steps.some((step) => step.id === SCREENING_STEP_IDS.contactSend) &&
+    skill.steps.some((step) => step.id === SCREENING_STEP_IDS.collectClick),
+  );
 }

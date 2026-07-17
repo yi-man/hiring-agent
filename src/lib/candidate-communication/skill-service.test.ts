@@ -5,6 +5,7 @@ import { runUnreadCandidateCommunicationSkill } from './skill-service';
 import { BossLikeCandidateCommunicationAdapter } from './adapters/boss-like';
 import { runCandidateCommunicationSkill } from './skill-runner';
 import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-executor-factory';
+import { resolveRecruitmentPlatformRuntimeConfig } from '@/lib/recruitment-platform-config';
 
 jest.mock('./adapters/boss-like', () => ({
   BossLikeCandidateCommunicationAdapter: jest.fn(),
@@ -18,6 +19,10 @@ jest.mock('@/lib/browser/executors/browser-executor-factory', () => ({
   createBrowserExecutorFromEnv: jest.fn(),
 }));
 
+jest.mock('@/lib/recruitment-platform-config', () => ({
+  resolveRecruitmentPlatformRuntimeConfig: jest.fn(),
+}));
+
 const BossLikeCandidateCommunicationAdapterMock =
   BossLikeCandidateCommunicationAdapter as jest.MockedClass<
     typeof BossLikeCandidateCommunicationAdapter
@@ -28,6 +33,10 @@ const runCandidateCommunicationSkillMock = runCandidateCommunicationSkill as jes
 const createBrowserExecutorFromEnvMock = createBrowserExecutorFromEnv as jest.MockedFunction<
   typeof createBrowserExecutorFromEnv
 >;
+const resolveRecruitmentPlatformRuntimeConfigMock =
+  resolveRecruitmentPlatformRuntimeConfig as jest.MockedFunction<
+    typeof resolveRecruitmentPlatformRuntimeConfig
+  >;
 
 describe('runUnreadCandidateCommunicationSkill', () => {
   const originalEnv = process.env;
@@ -57,6 +66,18 @@ describe('runUnreadCandidateCommunicationSkill', () => {
       failed: 0,
       passes: 1,
     });
+    resolveRecruitmentPlatformRuntimeConfigMock.mockResolvedValueOnce({
+      platform: 'boss-like',
+      baseUrl: 'http://localhost:6183',
+      username: 'admin',
+      password: 'boss123',
+      variables: {
+        resumeListPath: '/employer/resumes',
+        messagePath: '/employer/messages',
+      },
+      siteFingerprint: 'site-1',
+      siteTemplatePlatform: 'boss-like',
+    });
 
     await runUnreadCandidateCommunicationSkill({
       userId: 'user-1',
@@ -71,7 +92,15 @@ describe('runUnreadCandidateCommunicationSkill', () => {
       }),
       { defaultTimeoutMs: 10_000, userId: 'user-1' },
     );
-    expect(BossLikeCandidateCommunicationAdapterMock).toHaveBeenCalledWith({ executor });
+    expect(BossLikeCandidateCommunicationAdapterMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executor,
+        platform: 'boss-like',
+        baseUrl: 'http://localhost:6183',
+        username: 'admin',
+        password: 'boss123',
+      }),
+    );
     expect(runCandidateCommunicationSkillMock).toHaveBeenCalledWith(
       expect.objectContaining({
         adapter,

@@ -1,4 +1,10 @@
-import { buildBossLikeScreeningSkill, isCompatibleBossLikeScreeningSkill } from './skill-registry';
+import {
+  buildBossLikeScreeningSkill,
+  getActiveScreeningSkill,
+  isCompatibleBossLikeScreeningSkill,
+  isCompatibleScreeningSkill,
+} from './skill-registry';
+import { RECRUITMENT_PLATFORM_IDS } from '@/lib/recruitment-platforms';
 
 function stepById(skill: ReturnType<typeof buildBossLikeScreeningSkill>, id: string) {
   const step = skill.steps.find((candidate) => candidate.id === id);
@@ -7,6 +13,17 @@ function stepById(skill: ReturnType<typeof buildBossLikeScreeningSkill>, id: str
 }
 
 describe('boss-like screening workflow skill', () => {
+  it('registers a compatible and distinct workflow for every platform', () => {
+    const skills = RECRUITMENT_PLATFORM_IDS.map(getActiveScreeningSkill);
+    expect(skills.map((skill) => skill.id)).toEqual([
+      'boss-screen-candidates',
+      'liepin-screen-candidates',
+      'zhilian-screen-candidates',
+      'boss-like-screen-candidates',
+    ]);
+    expect(skills.every(isCompatibleScreeningSkill)).toBe(true);
+  });
+
   it('builds one browser-v2 primitive screening graph', () => {
     const skill = buildBossLikeScreeningSkill();
     const actionSteps = skill.steps.filter((step) => step.type === 'action');

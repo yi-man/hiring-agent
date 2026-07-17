@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { getCandidateScreeningDetail } from '@/lib/candidate-screening/repo';
 import type { CandidateScreeningPlatform } from '@/lib/candidate-screening/types';
-
-const DEFAULT_LOCAL_BOSS_LIKE_BASE_URL = 'http://localhost:6183';
+import { resolveRecruitmentPlatformRuntimeConfig } from '@/lib/recruitment-platform-config';
 const BOSS_LIKE_PROFILE_PATH_PREFIX = '/employer/resumes/';
 
 function badRequest(message: string) {
@@ -30,14 +29,6 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
-function getBossLikeBaseUrl(): string | null {
-  const configured = process.env.BOSS_LIKE_BASE_URL?.trim();
-  if (configured) {
-    return normalizeBaseUrl(configured);
-  }
-  return process.env.NODE_ENV === 'production' ? null : DEFAULT_LOCAL_BOSS_LIKE_BASE_URL;
-}
-
 function hasCandidateDetailPath(url: URL): boolean {
   return (
     url.pathname.startsWith(BOSS_LIKE_PROFILE_PATH_PREFIX) &&
@@ -45,22 +36,24 @@ function hasCandidateDetailPath(url: URL): boolean {
   );
 }
 
-function resolveBossLikeProfileUrl(profileUrl: string | null | undefined): URL | null {
+function resolveBossLikeProfileUrl(
+  profileUrl: string | null | undefined,
+  baseUrl: string,
+): URL | null {
   const trimmed = profileUrl?.trim();
   if (!trimmed) {
     return null;
   }
 
-  const baseUrl = getBossLikeBaseUrl();
   try {
-    const resolved = baseUrl ? new URL(trimmed, `${baseUrl}/`) : new URL(trimmed);
+    const resolved = new URL(trimmed, `${normalizeBaseUrl(baseUrl)}/`);
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
       return null;
     }
     if (!hasCandidateDetailPath(resolved)) {
       return null;
     }
-    if (baseUrl && resolved.origin !== new URL(baseUrl).origin) {
+    if (resolved.origin !== new URL(baseUrl).origin) {
       return null;
     }
     return resolved;
@@ -70,17 +63,27 @@ function resolveBossLikeProfileUrl(profileUrl: string | null | undefined): URL |
 }
 
 function resolveOriginalProfileUrl(params: {
-  platform: CandidateScreeningPlatform;
+  baseUrl: string;
+  siteTemplatePlatform: CandidateScreeningPlatform;
   candidateProfileUrl: string | null;
   resumeProfileUrl: string | null;
 }): URL | null {
-  if (params.platform !== 'boss-like') {
+  if (params.siteTemplatePlatform === 'boss-like') {
+    return (
+      resolveBossLikeProfileUrl(params.candidateProfileUrl, params.baseUrl) ??
+      resolveBossLikeProfileUrl(params.resumeProfileUrl, params.baseUrl)
+    );
+  }
+  const candidateUrl = params.candidateProfileUrl?.trim() || params.resumeProfileUrl?.trim();
+  if (!candidateUrl) return null;
+  try {
+    const resolved = new URL(candidateUrl, `${normalizeBaseUrl(params.baseUrl)}/`);
+    const expected = new URL(params.baseUrl);
+    if (!/^https?:$/.test(resolved.protocol) || resolved.origin !== expected.origin) return null;
+    return resolved.pathname === '/' ? null : resolved;
+  } catch {
     return null;
   }
-  return (
-    resolveBossLikeProfileUrl(params.candidateProfileUrl) ??
-    resolveBossLikeProfileUrl(params.resumeProfileUrl)
-  );
 }
 
 export async function GET(
@@ -106,8 +109,13 @@ export async function GET(
       return notFound('candidate screening result not found');
     }
 
-    const originalProfileUrl = resolveOriginalProfileUrl({
+    const platformConfig = await resolveRecruitmentPlatformRuntimeConfig({
+      userId: auth.user.id,
       platform: candidate.candidate.sourcePlatform,
+    });
+    const originalProfileUrl = resolveOriginalProfileUrl({
+      baseUrl: platformConfig.baseUrl,
+      siteTemplatePlatform: platformConfig.siteTemplatePlatform,
       candidateProfileUrl: candidate.candidate.profileUrl,
       resumeProfileUrl: candidate.resume?.profileUrl ?? null,
     });

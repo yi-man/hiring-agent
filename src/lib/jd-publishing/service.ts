@@ -3,45 +3,32 @@ import { createBrowserExecutorFromEnv } from '@/lib/browser/executors/browser-ex
 import { runPublishingAgentGraph } from './graph';
 import type { BrowserExecutor } from '@/lib/browser/types';
 import type { PublishJobDescriptionSettings, PublishTaskResult } from './types';
+import { resolveRecruitmentPlatformRuntimeConfig } from '@/lib/recruitment-platform-config';
 
-const DEFAULT_BOSS_LIKE_BASE_URL = 'http://localhost:6183';
-const DEFAULT_BOSS_LIKE_USERNAME = 'admin';
-const DEFAULT_BOSS_LIKE_PASSWORD = 'boss123';
-
-function allowsLocalBossLikeDefaults(): boolean {
-  return (
-    process.env.NODE_ENV === 'test' ||
-    process.env.NODE_ENV === 'development' ||
-    process.env.BOSS_LIKE_ALLOW_LOCAL_DEFAULTS === 'true'
-  );
+function joinUrl(baseUrl: string, path: string): string {
+  return new URL(path, `${baseUrl.replace(/\/+$/, '')}/`).toString();
 }
 
-function readBossLikeConfig(name: string, localDefault: string): string {
-  const value = process.env[name];
-  if (value?.trim()) return value;
-  if (allowsLocalBossLikeDefaults()) return localDefault;
-  throw new Error(`${name} is required outside local test runtimes`);
-}
-
-function targetUrls(baseUrl: string): Record<string, string> {
+function targetUrls(baseUrl: string, variables: Record<string, string>): Record<string, string> {
   const normalized = baseUrl.replace(/\/+$/, '');
   return {
-    loginUrl: `${normalized}/employer/login`,
-    newJobUrl: `${normalized}/employer/jobs/new`,
+    loginUrl: joinUrl(normalized, variables.loginPath || '/'),
+    newJobUrl: joinUrl(normalized, variables.newJobPath || '/'),
+    jobsListUrl: joinUrl(normalized, variables.jobsListPath || '/'),
+    loginSuccessUrl: joinUrl(normalized, variables.loginSuccessPath || '/'),
   };
 }
 
-export async function publishJobDescriptionToBossLike(options: {
+export async function publishJobDescription(options: {
   jobDescription: JobDescriptionDto;
   settings: PublishJobDescriptionSettings;
   executor?: BrowserExecutor;
 }): Promise<PublishTaskResult> {
   const { jobDescription, settings } = options;
-  const baseUrl = readBossLikeConfig('BOSS_LIKE_BASE_URL', DEFAULT_BOSS_LIKE_BASE_URL);
-  const credentials = {
-    username: readBossLikeConfig('BOSS_LIKE_EMPLOYER_USERNAME', DEFAULT_BOSS_LIKE_USERNAME),
-    password: readBossLikeConfig('BOSS_LIKE_EMPLOYER_PASSWORD', DEFAULT_BOSS_LIKE_PASSWORD),
-  };
+  const config = await resolveRecruitmentPlatformRuntimeConfig({
+    userId: jobDescription.userId,
+    platform: settings.platform,
+  });
   const executor =
     options.executor ??
     createBrowserExecutorFromEnv(process.env, {
@@ -54,12 +41,19 @@ export async function publishJobDescriptionToBossLike(options: {
       jobDescription,
       settings,
       executor,
-      credentials,
-      target: targetUrls(baseUrl),
+      credentials: { username: config.username, password: config.password },
+      target: targetUrls(config.baseUrl, config.variables),
+      siteFingerprint: config.siteFingerprint,
     });
   } finally {
-    if (shouldCloseExecutor) {
-      await executor.close?.();
-    }
+    if (shouldCloseExecutor) await executor.close?.();
   }
+}
+
+export async function publishJobDescriptionToBossLike(options: {
+  jobDescription: JobDescriptionDto;
+  settings: PublishJobDescriptionSettings;
+  executor?: BrowserExecutor;
+}): Promise<PublishTaskResult> {
+  return publishJobDescription(options);
 }

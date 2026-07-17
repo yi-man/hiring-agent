@@ -16,6 +16,7 @@ import type {
   StoredCandidateRef,
 } from './types';
 import { CandidateAdapterTargetError } from './types';
+import { createSiteFingerprint } from '@/lib/recruitment-platform-config';
 
 const DEFAULT_BOSS_LIKE_BASE_URL = 'http://localhost:6183';
 const DEFAULT_BOSS_LIKE_USERNAME = 'admin';
@@ -26,11 +27,13 @@ const EMPTY_RAW_SNAPSHOT_ERROR = 'boss-like candidate search returned an empty b
 const INVALID_PROFILE_URL_ERROR =
   'invalid candidate profileUrl: expected a same-origin boss-like numeric resume URL';
 
-type BossLikeCandidateSourceAdapterOptions = {
+export type BossLikeCandidateSourceAdapterOptions = {
   executor: BrowserExecutor;
+  platform?: CandidateScreeningPlatform;
   baseUrl?: string;
   username?: string;
   password?: string;
+  resumeListPath?: string;
 };
 
 type BossLikeCredentials = {
@@ -229,24 +232,35 @@ export function extractBossLikeCandidatesFromHtml(html: string): RawCandidate[] 
 }
 
 export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
-  readonly platform: CandidateScreeningPlatform = 'boss-like';
+  readonly platform: CandidateScreeningPlatform;
   protected readonly executor: BrowserExecutor;
   protected readonly baseUrl: string;
   protected readonly credentials: BossLikeCredentials;
+  protected readonly resumeListPath: string;
 
   constructor(options: BossLikeCandidateSourceAdapterOptions) {
+    this.platform = options.platform ?? 'boss-like';
     this.executor = options.executor;
     this.baseUrl = normalizeBaseUrl(
-      options.baseUrl ?? readBossLikeConfig('BOSS_LIKE_BASE_URL', DEFAULT_BOSS_LIKE_BASE_URL),
+      options.baseUrl ??
+        (this.platform === 'boss-like'
+          ? readBossLikeConfig('BOSS_LIKE_BASE_URL', DEFAULT_BOSS_LIKE_BASE_URL)
+          : ''),
     );
+    if (!this.baseUrl) throw new Error(`${this.platform} candidate source base URL is required`);
     this.credentials = {
       username:
         options.username ??
-        readBossLikeConfig('BOSS_LIKE_EMPLOYER_USERNAME', DEFAULT_BOSS_LIKE_USERNAME),
+        (this.platform === 'boss-like'
+          ? readBossLikeConfig('BOSS_LIKE_EMPLOYER_USERNAME', DEFAULT_BOSS_LIKE_USERNAME)
+          : ''),
       password:
         options.password ??
-        readBossLikeConfig('BOSS_LIKE_EMPLOYER_PASSWORD', DEFAULT_BOSS_LIKE_PASSWORD),
+        (this.platform === 'boss-like'
+          ? readBossLikeConfig('BOSS_LIKE_EMPLOYER_PASSWORD', DEFAULT_BOSS_LIKE_PASSWORD)
+          : ''),
     };
+    this.resumeListPath = options.resumeListPath ?? '/employer/resumes';
   }
 
   getBrowserExecutor(): BrowserExecutor {
@@ -256,6 +270,10 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
   getWorkflowExploreContext() {
     return {
       baseUrl: this.baseUrl,
+      resumeListPath: this.resumeListPath,
+      siteFingerprint: createSiteFingerprint(this.baseUrl, {
+        resumeListPath: this.resumeListPath,
+      }),
       credentials: {
         username: this.credentials.username,
         password: this.credentials.password,
@@ -495,12 +513,24 @@ export class BossLikeCandidateSourceAdapter implements CandidateSourceAdapter {
     await this.executor.close?.();
   }
 
-  private resumeListUrl(): string {
-    return `${this.baseUrl}/employer/resumes`;
+  protected resumeListUrl(): string {
+    return new URL(this.resumeListPath, `${this.baseUrl}/`).toString();
   }
 
-  private resolveProfileUrl(profileUrl?: string | null): BossLikeProfileUrlResolution {
-    return resolveBossLikeProfileUrl(profileUrl, this.baseUrl);
+  protected resolveProfileUrl(profileUrl?: string | null): BossLikeProfileUrlResolution {
+    if (this.platform === 'boss-like') return resolveBossLikeProfileUrl(profileUrl, this.baseUrl);
+    const trimmed = profileUrl?.trim();
+    if (!trimmed) return { profileUrl: null };
+    try {
+      const resolved = new URL(trimmed, `${this.baseUrl}/`);
+      const base = new URL(this.baseUrl);
+      if (resolved.origin !== base.origin || !/^https?:$/.test(resolved.protocol)) {
+        return { profileUrl: null, error: `invalid ${this.platform} candidate profileUrl` };
+      }
+      return { profileUrl: resolved.toString() };
+    } catch {
+      return { profileUrl: null, error: `invalid ${this.platform} candidate profileUrl` };
+    }
   }
 
   private targetFor(

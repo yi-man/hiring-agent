@@ -46,6 +46,7 @@ const saveCandidateInterviewFeedbackMock = jest.fn();
 const evaluateJdCandidateDecisionMock = jest.fn();
 const startCandidateCommunicationRunMock = jest.fn();
 const fetchCandidateCommunicationRunMock = jest.fn();
+const fetchCompanySettingsMock = jest.fn();
 const routerPushMock = jest.fn();
 let mockSearchParams = new URLSearchParams();
 
@@ -96,6 +97,11 @@ jest.mock('@/lib/candidate-communication/client', () => ({
     fetchCandidateCommunicationRunMock(...args),
 }));
 
+jest.mock('@/lib/company-profile/client', () => ({
+  fetchCompanyProfile: jest.fn().mockResolvedValue(null),
+  fetchCompanySettings: (...args: unknown[]) => fetchCompanySettingsMock(...args),
+}));
+
 jest.mock('@/components/ui', () => ({
   Button: ({
     as: Component = 'button',
@@ -125,6 +131,12 @@ jest.mock('@/components/ui', () => ({
   Card: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,
   CardBody: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   Chip: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  Modal: ({ children, isOpen }: { children: React.ReactNode; isOpen?: boolean }) =>
+    isOpen ? <div role="dialog">{children}</div> : null,
+  ModalBody: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ModalContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ModalHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   Input: ({
     'aria-label': ariaLabel,
     label,
@@ -768,9 +780,24 @@ describe('candidate screening UI', () => {
     evaluateJdCandidateDecisionMock.mockReset();
     startCandidateCommunicationRunMock.mockReset();
     fetchCandidateCommunicationRunMock.mockReset();
+    fetchCompanySettingsMock.mockReset();
     routerPushMock.mockReset();
     startCandidateCommunicationRunMock.mockResolvedValue(sampleCommunicationRun);
     fetchCandidateCommunicationRunMock.mockResolvedValue(sampleCommunicationRun);
+    fetchCompanySettingsMock.mockResolvedValue({
+      profile: null,
+      platforms: [
+        {
+          id: 'boss-like',
+          label: 'BOSS-like 本地站点',
+          shortLabel: 'BOSS-like',
+          description: '本地招聘平台',
+          kind: 'local',
+          defaultBaseUrl: 'http://localhost:6183',
+          defaultVariables: {},
+        },
+      ],
+    });
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -958,6 +985,7 @@ describe('candidate screening UI', () => {
     expectReturnContext(candidatesHref, '/jd-generator', '返回列表');
 
     fireEvent.click(screen.getByText('继续筛选').closest('button') as HTMLButtonElement);
+    fireEvent.click(await screen.findByRole('button', { name: '开始筛选' }));
 
     await waitFor(() =>
       expect(createCandidateScreeningRunMock).toHaveBeenCalledWith('jd-published', {
@@ -1120,6 +1148,7 @@ describe('candidate screening UI', () => {
     render(<JDListView />);
 
     fireEvent.click(await screen.findByRole('button', { name: '批量沟通' }));
+    fireEvent.click(await screen.findByRole('button', { name: '开始沟通' }));
 
     await waitFor(() =>
       expect(startCandidateCommunicationRunMock).toHaveBeenCalledWith({
@@ -1508,7 +1537,6 @@ describe('candidate screening UI', () => {
     await waitFor(() =>
       expect(startCandidateCommunicationRunMock).toHaveBeenCalledWith({
         mode: 'batch',
-        platform: 'boss-like',
         maxPasses: 10,
       }),
     );

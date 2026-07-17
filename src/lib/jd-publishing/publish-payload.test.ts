@@ -26,6 +26,17 @@ const sampleJobDescription: JobDescriptionDto = {
 };
 
 describe('JD publish payload helpers', () => {
+  it.each(['boss', 'liepin', 'zhilian', 'boss-like'])('accepts the %s platform', (platform) => {
+    expect(
+      parsePublishJobDescriptionPayload({
+        platform,
+        company: '深海数据',
+        salary: '30-50K',
+        location: '上海',
+      }),
+    ).toMatchObject({ ok: true, value: { platform } });
+  });
+
   it('parses boss-like publish settings with trimmed fields and optional keywords', () => {
     expect(
       parsePublishJobDescriptionPayload({
@@ -48,7 +59,7 @@ describe('JD publish payload helpers', () => {
   });
 
   it('rejects unsupported platform and missing required publish settings', () => {
-    expect(parsePublishJobDescriptionPayload({ platform: 'boss' })).toEqual({
+    expect(parsePublishJobDescriptionPayload({ platform: 'unknown' })).toEqual({
       ok: false,
       error: 'platform is unsupported',
     });

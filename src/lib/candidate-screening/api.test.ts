@@ -10,6 +10,13 @@ import {
 } from './api';
 
 describe('candidate screening API parsing', () => {
+  it.each(['boss', 'liepin', 'zhilian', 'boss-like'])('accepts the %s platform', (platform) => {
+    expect(parseCreateScreeningRunPayload({ platform })).toMatchObject({
+      ok: true,
+      value: { platform },
+    });
+  });
+
   it('parses a default dry-run create request', () => {
     expect(parseCreateScreeningRunPayload({ platform: 'boss-like' })).toEqual({
       ok: true,

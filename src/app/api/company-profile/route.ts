@@ -1,7 +1,15 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { parseCompanyProfilePayload } from '@/lib/company-profile/api';
-import { getCompanyProfileForUser, upsertCompanyProfileForUser } from '@/lib/company-profile/repo';
+import {
+  parseCompanyProfilePayload,
+  parseCompanyRecruitmentPlatformsPayload,
+} from '@/lib/company-profile/api';
+import {
+  getCompanyProfileForUser,
+  updateCompanyRecruitmentPlatformsForUser,
+  upsertCompanyProfileForUser,
+} from '@/lib/company-profile/repo';
+import { listRecruitmentPlatformMetadata } from '@/lib/recruitment-platform-config';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -23,8 +31,11 @@ function serverErrorResponse(error: unknown) {
 export async function GET() {
   try {
     const auth = await requireAuth();
-    const profile = await getCompanyProfileForUser(auth.user.id);
-    return NextResponse.json({ profile });
+    const [profile, platforms] = await Promise.all([
+      getCompanyProfileForUser(auth.user.id),
+      listRecruitmentPlatformMetadata(),
+    ]);
+    return NextResponse.json({ profile, platforms });
   } catch (error) {
     return serverErrorResponse(error);
   }
@@ -43,6 +54,33 @@ export async function PUT(request: Request) {
       ...parsed.value,
     });
 
+    return NextResponse.json({ profile });
+  } catch (error) {
+    return serverErrorResponse(error);
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const auth = await requireAuth();
+    const [current, platforms] = await Promise.all([
+      getCompanyProfileForUser(auth.user.id),
+      listRecruitmentPlatformMetadata(),
+    ]);
+    if (!current) {
+      return NextResponse.json({ error: 'company profile not found' }, { status: 404 });
+    }
+
+    const parsed = parseCompanyRecruitmentPlatformsPayload(
+      await request.json(),
+      platforms.map((platform) => platform.id),
+    );
+    if (!parsed.ok) return badRequest(parsed.error);
+
+    const profile = await updateCompanyRecruitmentPlatformsForUser({
+      userId: auth.user.id,
+      platformConfigs: parsed.value,
+    });
     return NextResponse.json({ profile });
   } catch (error) {
     return serverErrorResponse(error);

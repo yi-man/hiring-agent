@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { parseCandidateCommunicationRunPayload } from '@/lib/candidate-communication/api';
+import {
+  parseCandidateCommunicationRunPayload,
+  type CandidateCommunicationRunPayload,
+} from '@/lib/candidate-communication/api';
 import {
   createCandidateCommunicationRun,
   updateCandidateCommunicationRun,
@@ -10,6 +13,8 @@ import {
 } from '@/lib/candidate-communication/repo';
 import { executeSingleCandidateAction } from '@/lib/candidate-screening/runner';
 import { runUnreadCandidateCommunicationSkill } from '@/lib/candidate-communication/skill-service';
+import { getCompanyProfileForUser } from '@/lib/company-profile/repo';
+import { resolveRecruitmentPlatforms } from '@/lib/recruitment-platforms';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -89,6 +94,77 @@ async function markRunFailed(params: {
   );
 }
 
+async function executeRun(
+  userId: string,
+  payload: CandidateCommunicationRunPayload,
+): Promise<CandidateCommunicationRunDto> {
+  const run = await createCandidateCommunicationRun({
+    userId,
+    jobDescriptionId: payload.jobDescriptionId ?? null,
+    candidateId: payload.mode === 'single' ? payload.candidateId : null,
+    platform: payload.platform,
+    mode: payload.mode,
+    status: 'running',
+    stats: null,
+    errorMessage: null,
+    startedAt: new Date(),
+    finishedAt: null,
+  });
+
+  try {
+    if (payload.mode === 'batch') {
+      const result = await runUnreadCandidateCommunicationSkill({
+        userId,
+        jobDescriptionId: payload.jobDescriptionId,
+        platform: payload.platform,
+        maxPasses: payload.maxPasses,
+      });
+      return (
+        (await updateCandidateCommunicationRun({
+          userId,
+          runId: run.id,
+          status: 'success',
+          stats: batchStats(result),
+          errorMessage: null,
+          finishedAt: new Date(),
+        })) ?? run
+      );
+    }
+
+    const singleResult = payload.sourceScreeningRunId
+      ? await executeSingleCandidateAction({
+          userId,
+          runId: payload.sourceScreeningRunId,
+          jobDescriptionId: payload.jobDescriptionId,
+          candidateId: payload.candidateId,
+        })
+      : {
+          status: 'success' as const,
+          candidateId: payload.candidateId,
+          candidateName: null,
+          detail: '已创建单点沟通任务',
+          errorMessage: null,
+        };
+    return (
+      (await updateCandidateCommunicationRun({
+        userId,
+        runId: run.id,
+        status: singleResult.status,
+        stats: singleStats({
+          candidateId: singleResult.candidateId,
+          candidateName: singleResult.candidateName,
+          status: singleResult.status,
+          detail: singleResult.detail,
+        }),
+        errorMessage: singleResult.errorMessage ?? null,
+        finishedAt: new Date(),
+      })) ?? run
+    );
+  } catch (error) {
+    return markRunFailed({ userId, run, error });
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const auth = await requireAuth();
@@ -97,77 +173,23 @@ export async function POST(request: Request) {
       return badRequest(body.error);
     }
 
-    const parsed = parseCandidateCommunicationRunPayload(body.value);
-    if (!parsed.ok) {
-      return badRequest(parsed.error);
+    const requestBody =
+      body.value && typeof body.value === 'object' ? (body.value as Record<string, unknown>) : {};
+    const hasPlatformOverride =
+      requestBody.platform !== undefined || requestBody.platforms !== undefined;
+    const profile = hasPlatformOverride ? null : await getCompanyProfileForUser(auth.user.id);
+    const platforms = resolveRecruitmentPlatforms(requestBody, profile?.supportedPlatforms);
+    if (platforms.length === 0) {
+      return badRequest('at least one recruitment platform is required');
     }
-
-    const run = await createCandidateCommunicationRun({
-      userId: auth.user.id,
-      jobDescriptionId: parsed.value.jobDescriptionId ?? null,
-      candidateId: parsed.value.mode === 'single' ? parsed.value.candidateId : null,
-      platform: parsed.value.platform,
-      mode: parsed.value.mode,
-      status: 'running',
-      stats: null,
-      errorMessage: null,
-      startedAt: new Date(),
-      finishedAt: null,
-    });
-
-    try {
-      if (parsed.value.mode === 'batch') {
-        const result = await runUnreadCandidateCommunicationSkill({
-          userId: auth.user.id,
-          jobDescriptionId: parsed.value.jobDescriptionId,
-          platform: parsed.value.platform,
-          maxPasses: parsed.value.maxPasses,
-        });
-        const finished =
-          (await updateCandidateCommunicationRun({
-            userId: auth.user.id,
-            runId: run.id,
-            status: 'success',
-            stats: batchStats(result),
-            errorMessage: null,
-            finishedAt: new Date(),
-          })) ?? run;
-        return NextResponse.json({ run: finished }, { status: 202 });
-      }
-
-      const singleResult = parsed.value.sourceScreeningRunId
-        ? await executeSingleCandidateAction({
-            userId: auth.user.id,
-            runId: parsed.value.sourceScreeningRunId,
-            jobDescriptionId: parsed.value.jobDescriptionId,
-            candidateId: parsed.value.candidateId,
-          })
-        : {
-            status: 'success' as const,
-            candidateId: parsed.value.candidateId,
-            candidateName: null,
-            detail: '已创建单点沟通任务',
-            errorMessage: null,
-          };
-      const finished =
-        (await updateCandidateCommunicationRun({
-          userId: auth.user.id,
-          runId: run.id,
-          status: singleResult.status,
-          stats: singleStats({
-            candidateId: singleResult.candidateId,
-            candidateName: singleResult.candidateName,
-            status: singleResult.status,
-            detail: singleResult.detail,
-          }),
-          errorMessage: singleResult.errorMessage ?? null,
-          finishedAt: new Date(),
-        })) ?? run;
-      return NextResponse.json({ run: finished }, { status: 202 });
-    } catch (error) {
-      const failed = await markRunFailed({ userId: auth.user.id, run, error });
-      return NextResponse.json({ run: failed }, { status: 202 });
-    }
+    const parsedPayloads = platforms.map((platform) =>
+      parseCandidateCommunicationRunPayload({ ...requestBody, platform }),
+    );
+    const invalid = parsedPayloads.find((parsed) => !parsed.ok);
+    if (invalid && !invalid.ok) return badRequest(invalid.error);
+    const payloads = parsedPayloads.flatMap((parsed) => (parsed.ok ? [parsed.value] : []));
+    const runs = await Promise.all(payloads.map((payload) => executeRun(auth.user.id, payload)));
+    return NextResponse.json({ run: runs[0], runs }, { status: 202 });
   } catch (error) {
     return serverErrorResponse(error);
   }

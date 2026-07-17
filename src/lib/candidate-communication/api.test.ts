@@ -1,6 +1,20 @@
-import { parseCandidateMessagePayload, parseUnreadSyncPayload } from './api';
+import {
+  parseCandidateCommunicationRunPayload,
+  parseCandidateMessagePayload,
+  parseUnreadSyncPayload,
+} from './api';
 
 describe('candidate communication api payload', () => {
+  it.each(['boss', 'liepin', 'zhilian', 'boss-like'])(
+    'accepts %s batch communication',
+    (platform) => {
+      expect(parseCandidateCommunicationRunPayload({ mode: 'batch', platform })).toEqual({
+        ok: true,
+        value: { mode: 'batch', platform },
+      });
+    },
+  );
+
   it('parses a valid candidate message payload and defaults executeReply to true', () => {
     const parsed = parseCandidateMessagePayload({
       jobDescriptionId: 'jd-1',

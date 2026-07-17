@@ -5,6 +5,7 @@ type PublishSkillRecord = {
   id: string;
   name: string;
   platform: string;
+  siteFingerprint: string;
   description: string;
   version: number;
   isActive: boolean;
@@ -20,6 +21,7 @@ export type PublishedWorkflowSummary = {
   id: string;
   name: string;
   platform: PublishPlatform;
+  siteFingerprint: string;
   description: string;
   version: number;
   isActive: boolean;
@@ -62,6 +64,7 @@ function mapSummary(row: PublishSkillRecord): PublishedWorkflowSummary {
     id: row.id,
     name: row.name,
     platform: row.platform as PublishPlatform,
+    siteFingerprint: row.siteFingerprint,
     description: row.description,
     version: row.version,
     isActive: row.isActive,
@@ -81,8 +84,10 @@ function mapWorkflow(row: PublishSkillRecord): PublishedWorkflow {
   };
 }
 
-function workflowKey(workflow: Pick<PublishedWorkflowSummary, 'name' | 'platform'>): string {
-  return `${workflow.platform}:${workflow.name}`;
+function workflowKey(
+  workflow: Pick<PublishedWorkflowSummary, 'name' | 'platform' | 'siteFingerprint'>,
+): string {
+  return `${workflow.platform}:${workflow.siteFingerprint}:${workflow.name}`;
 }
 
 export async function listLatestActivePublishedWorkflows(): Promise<PublishedWorkflowSummary[]> {
@@ -119,7 +124,11 @@ export async function getPublishedWorkflowDetail(
   }
 
   const versions = await prisma.publishSkill.findMany({
-    where: { name: row.name, platform: row.platform },
+    where: {
+      name: row.name,
+      platform: row.platform,
+      siteFingerprint: row.siteFingerprint,
+    },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
   });
 

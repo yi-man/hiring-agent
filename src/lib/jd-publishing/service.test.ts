@@ -4,6 +4,7 @@ import { runPublishingAgentGraph } from './graph';
 import { publishJobDescriptionToBossLike } from './service';
 import type { BrowserExecutor } from '@/lib/browser/types';
 import type { PublishTaskResult } from './types';
+import { resolveRecruitmentPlatformRuntimeConfig } from '@/lib/recruitment-platform-config';
 
 jest.mock('@/lib/browser/executors/browser-executor-factory', () => ({
   createBrowserExecutorFromEnv: jest.fn(),
@@ -13,12 +14,20 @@ jest.mock('./graph', () => ({
   runPublishingAgentGraph: jest.fn(),
 }));
 
+jest.mock('@/lib/recruitment-platform-config', () => ({
+  resolveRecruitmentPlatformRuntimeConfig: jest.fn(),
+}));
+
 const createBrowserExecutorFromEnvMock = createBrowserExecutorFromEnv as jest.MockedFunction<
   typeof createBrowserExecutorFromEnv
 >;
 const runPublishingAgentGraphMock = runPublishingAgentGraph as jest.MockedFunction<
   typeof runPublishingAgentGraph
 >;
+const resolveRecruitmentPlatformRuntimeConfigMock =
+  resolveRecruitmentPlatformRuntimeConfig as jest.MockedFunction<
+    typeof resolveRecruitmentPlatformRuntimeConfig
+  >;
 
 const sampleJd: JD = {
   title: '高级前端工程师',
@@ -108,6 +117,20 @@ describe('publishJobDescriptionToBossLike', () => {
     restoreEnv('BROWSER_COMMAND_ENDPOINT');
     restoreEnv('BROWSER_COMMAND_TIMEOUT_MS');
     runPublishingAgentGraphMock.mockResolvedValue(successfulResult);
+    resolveRecruitmentPlatformRuntimeConfigMock.mockResolvedValue({
+      platform: 'boss-like',
+      baseUrl: 'http://127.0.0.1:6183',
+      username: 'hr-admin',
+      password: 'secret',
+      variables: {
+        loginPath: '/employer/login',
+        newJobPath: '/employer/jobs/new',
+        jobsListPath: '/employer/jobs',
+        loginSuccessPath: '/employer/resumes',
+      },
+      siteFingerprint: 'site-1',
+      siteTemplatePlatform: 'boss-like',
+    });
   });
 
   afterAll(() => {
@@ -140,10 +163,11 @@ describe('publishJobDescriptionToBossLike', () => {
         settings: settings(),
         executor,
         credentials: { username: 'hr-admin', password: 'secret' },
-        target: {
+        siteFingerprint: 'site-1',
+        target: expect.objectContaining({
           loginUrl: 'http://127.0.0.1:6183/employer/login',
           newJobUrl: 'http://127.0.0.1:6183/employer/jobs/new',
-        },
+        }),
       }),
     );
     expect(executor.close).not.toHaveBeenCalled();
@@ -178,12 +202,11 @@ describe('publishJobDescriptionToBossLike', () => {
     expect(runPublishingAgentGraphMock.mock.calls[0]?.[0].executor).toBe(executor);
   });
 
-  it('requires an explicit boss-like base URL outside local test runtimes', async () => {
+  it('reports a missing company platform configuration', async () => {
     const executor = createExecutor();
-    setNodeEnv('production');
-    delete process.env.BOSS_LIKE_BASE_URL;
-    process.env.BOSS_LIKE_EMPLOYER_USERNAME = 'hr-admin';
-    process.env.BOSS_LIKE_EMPLOYER_PASSWORD = 'secret';
+    resolveRecruitmentPlatformRuntimeConfigMock.mockRejectedValueOnce(
+      new Error('recruitment platform is not configured: boss-like'),
+    );
 
     await expect(
       publishJobDescriptionToBossLike({
@@ -191,24 +214,7 @@ describe('publishJobDescriptionToBossLike', () => {
         settings: settings(),
         executor,
       }),
-    ).rejects.toThrow(/BOSS_LIKE_BASE_URL is required/);
-    expect(runPublishingAgentGraphMock).not.toHaveBeenCalled();
-  });
-
-  it('requires explicit boss-like credentials outside local test runtimes', async () => {
-    const executor = createExecutor();
-    setNodeEnv('production');
-    process.env.BOSS_LIKE_BASE_URL = 'https://boss-like.example.com';
-    delete process.env.BOSS_LIKE_EMPLOYER_USERNAME;
-    delete process.env.BOSS_LIKE_EMPLOYER_PASSWORD;
-
-    await expect(
-      publishJobDescriptionToBossLike({
-        jobDescription: sampleJobDescription,
-        settings: settings(),
-        executor,
-      }),
-    ).rejects.toThrow(/BOSS_LIKE_EMPLOYER_USERNAME is required/);
+    ).rejects.toThrow(/recruitment platform is not configured/);
     expect(runPublishingAgentGraphMock).not.toHaveBeenCalled();
   });
 });

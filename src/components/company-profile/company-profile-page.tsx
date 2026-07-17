@@ -1,14 +1,21 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { MapPin, Plus, Save, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { Cable, MapPin, Plus, Save, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui';
-import { fetchCompanyProfile, saveCompanyProfile } from '@/lib/company-profile/client';
+import { RecruitmentPlatformSelector } from '@/components/recruitment-platform-selector';
+import { fetchCompanySettings, saveCompanyProfile } from '@/lib/company-profile/client';
 import type {
   CompanyProfileDto,
   CompanyWorkLocationInput,
   CompanyWorkLocationKind,
 } from '@/lib/company-profile/types';
+import type { RecruitmentPlatformMetadataDto } from '@/lib/recruitment-platform-config';
+import {
+  DEFAULT_RECRUITMENT_PLATFORMS,
+  type RecruitmentPlatform,
+} from '@/lib/recruitment-platforms';
 
 type LocationRow = CompanyWorkLocationInput & {
   clientId: string;
@@ -67,6 +74,10 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 
 export function CompanyProfilePage() {
   const [companyName, setCompanyName] = useState('');
+  const [supportedPlatforms, setSupportedPlatforms] = useState<RecruitmentPlatform[]>(
+    DEFAULT_RECRUITMENT_PLATFORMS,
+  );
+  const [platforms, setPlatforms] = useState<RecruitmentPlatformMetadataDto[]>([]);
   const [locations, setLocations] = useState<LocationRow[]>([createOfficeRow(0)]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -80,9 +91,12 @@ export function CompanyProfilePage() {
       setIsLoading(true);
       setError('');
       try {
-        const profile = await fetchCompanyProfile();
+        const settings = await fetchCompanySettings();
+        const { profile, platforms: availablePlatforms } = settings;
         if (!isActive) return;
+        setPlatforms(availablePlatforms);
         setCompanyName(profile?.name ?? '');
+        setSupportedPlatforms(profile?.supportedPlatforms ?? DEFAULT_RECRUITMENT_PLATFORMS);
         setLocations(dtoToRows(profile));
       } catch (e) {
         if (isActive) {
@@ -125,9 +139,11 @@ export function CompanyProfilePage() {
     try {
       const saved = await saveCompanyProfile({
         name: companyName.trim(),
+        supportedPlatforms,
         locations: locations.map(cleanLocation),
       });
       setCompanyName(saved.name);
+      setSupportedPlatforms(saved.supportedPlatforms);
       setLocations(dtoToRows(saved));
       setMessage('公司信息已保存');
     } catch (e) {
@@ -146,7 +162,7 @@ export function CompanyProfilePage() {
       <div className="border-border border-b pb-4">
         <h1 className="text-foreground text-2xl font-semibold tracking-normal">公司设置</h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          维护发布 JD 时使用的公司名称和工作地点。
+          维护公司信息与默认招聘平台。发布、筛选和沟通任务会默认使用这些平台。
         </p>
       </div>
 
@@ -174,6 +190,36 @@ export function CompanyProfilePage() {
             onChange={(event) => setCompanyName(event.target.value)}
           />
         </label>
+
+        <RecruitmentPlatformSelector
+          label="公司默认招聘平台"
+          platforms={platforms}
+          value={supportedPlatforms}
+          onChange={setSupportedPlatforms}
+        />
+        {supportedPlatforms.length === 0 ? (
+          <p className="text-destructive text-xs">请至少选择一个招聘平台。</p>
+        ) : null}
+
+        <div className="border-border bg-muted/20 flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="bg-background border-border flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border">
+              <Cable className="text-muted-foreground h-4 w-4" aria-hidden />
+            </span>
+            <div>
+              <div className="text-foreground text-sm font-medium">平台连接已独立管理</div>
+              <p className="text-muted-foreground mt-0.5 text-xs leading-5">
+                地址、登录凭据和 Workflow 变量请前往招聘平台页面维护。
+              </p>
+            </div>
+          </div>
+          <Link
+            className="text-primary shrink-0 text-sm font-medium hover:underline"
+            href="/settings/recruitment-platforms"
+          >
+            管理平台连接
+          </Link>
+        </div>
 
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -281,7 +327,7 @@ export function CompanyProfilePage() {
           className="gap-2"
           color="primary"
           disableRipple
-          isDisabled={isSaving || !companyName.trim()}
+          isDisabled={isSaving || !companyName.trim() || supportedPlatforms.length === 0}
           type="button"
           onClick={() => void handleSave()}
         >

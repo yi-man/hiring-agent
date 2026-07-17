@@ -128,7 +128,7 @@ describe('candidate communication service', () => {
       },
       dependencies: {
         repo,
-        createAdapter: () => adapter,
+        createAdapter: async () => adapter,
         runLLM: async () => ({
           intent: 'contact_shared',
           intentLevel: 'high',
@@ -202,7 +202,7 @@ describe('candidate communication service', () => {
       },
       dependencies: {
         repo,
-        createAdapter: () => adapter,
+        createAdapter: async () => adapter,
         runLLM: async () => ({
           intent: 'not_interested',
           intentLevel: 'low',

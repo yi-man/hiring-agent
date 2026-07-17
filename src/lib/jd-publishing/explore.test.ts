@@ -214,6 +214,7 @@ describe('exploreBossLikePublishSkill', () => {
         credentials: { username: 'admin', password: 'boss123' },
         target: {
           loginUrl: 'http://localhost:6183/employer/login',
+          loginSuccessUrl: 'http://localhost:6183/employer/resumes',
           newJobUrl: 'http://localhost:6183/employer/jobs/new',
         },
       },
@@ -317,6 +318,7 @@ describe('exploreBossLikePublishSkill', () => {
         credentials: { username: 'hr', password: 'secret' },
         target: {
           loginUrl: 'http://localhost:6183/employer/login',
+          loginSuccessUrl: 'http://localhost:6183/employer/resumes',
           newJobUrl: 'http://localhost:6183/employer/jobs/new',
         },
       },
@@ -330,7 +332,7 @@ describe('exploreBossLikePublishSkill', () => {
       'fill:用户名:hr',
       'fill:密码:secret',
       'click:登录',
-      'waitForUrl:/employer/resumes',
+      'waitForUrl:http://localhost:6183/employer/resumes',
     ]);
     expect(executor.resolvedTargets.map((target) => target.name)).toEqual(
       expect.arrayContaining(['用户名', '密码', '登录']),

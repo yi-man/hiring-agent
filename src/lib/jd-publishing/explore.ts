@@ -484,6 +484,7 @@ async function ensureBossLikeFormVisible(params: {
   const credentials = context.credentials;
   const newJobUrl = readString(target, 'newJobUrl');
   const loginUrl = readString(target, 'loginUrl');
+  const loginSuccessUrl = readString(target, 'loginSuccessUrl');
 
   ensureSuccess('open new job page', await executor.navigate(newJobUrl));
 
@@ -515,7 +516,7 @@ async function ensureBossLikeFormVisible(params: {
     await executor.fill(loginTargets.password, readString(credentials, 'password')),
   );
   ensureSuccess('submit login', await executor.click(loginTargets.loginButton));
-  ensureSuccess('wait after login', await executor.waitForUrl('/employer/resumes'));
+  ensureSuccess('wait after login', await executor.waitForUrl(loginSuccessUrl));
   ensureSuccess('open new job page after login', await executor.navigate(newJobUrl));
   return loginTargets;
 }

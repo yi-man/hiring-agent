@@ -48,6 +48,7 @@ describe('Workflows page', () => {
         id: 'boss-like-publish-jd-v3',
         name: 'publish_jd',
         platform: 'boss-like',
+        siteFingerprint: 'site-1',
         description: 'Publish a generated JD.',
         version: 3,
         isActive: true,

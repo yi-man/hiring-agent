@@ -27,6 +27,11 @@ export type CandidateCommunicationSkill = {
   description: string;
   stopCondition: 'no_unread_messages';
   maxPasses: number;
+  targets: {
+    threadList: string;
+    replyInput: string;
+    sendButton: string;
+  };
 };
 
 export type CandidateCommunicationSkillAdapter = CandidateSourceAdapter & {
@@ -52,4 +57,55 @@ export const bossLikeUnreadCommunicationSkill: CandidateCommunicationSkill = {
     'Open boss-like unread messages, process every unread candidate reply, and stop only after no unread messages remain.',
   stopCondition: 'no_unread_messages',
   maxPasses: 10,
+  targets: {
+    threadList: '[data-conversation-thread], [data-testid="message-thread"]',
+    replyInput: 'textarea[placeholder="输入回复..."]',
+    sendButton: 'button:has-text("发送")',
+  },
+};
+
+export const candidateCommunicationSkills: Record<
+  CandidateScreeningPlatform,
+  CandidateCommunicationSkill
+> = {
+  boss: {
+    id: 'boss-unread-communication',
+    name: 'process_unread_candidate_messages',
+    platform: 'boss',
+    description: 'Process unread candidate conversations in the BOSS enterprise message center.',
+    stopCondition: 'no_unread_messages',
+    maxPasses: 10,
+    targets: {
+      threadList: '[data-geek-id], .chat-conversation-item',
+      replyInput: '.chat-input textarea, textarea[placeholder*="消息"]',
+      sendButton: '.chat-send-button, button:has-text("发送")',
+    },
+  },
+  liepin: {
+    id: 'liepin-unread-communication',
+    name: 'process_unread_candidate_messages',
+    platform: 'liepin',
+    description: 'Process unread candidate conversations in the Liepin enterprise message center.',
+    stopCondition: 'no_unread_messages',
+    maxPasses: 10,
+    targets: {
+      threadList: '[data-resume-id], .im-conversation-item',
+      replyInput: '.im-chat-editor textarea, textarea[placeholder*="沟通"]',
+      sendButton: '.im-send-btn, button:has-text("发送消息")',
+    },
+  },
+  zhilian: {
+    id: 'zhilian-unread-communication',
+    name: 'process_unread_candidate_messages',
+    platform: 'zhilian',
+    description: 'Process unread candidate conversations in the Zhilian enterprise message center.',
+    stopCondition: 'no_unread_messages',
+    maxPasses: 10,
+    targets: {
+      threadList: '[data-resume-id], .message-session-item',
+      replyInput: '.message-editor textarea, textarea[placeholder*="消息"]',
+      sendButton: '.send-message, button:has-text("发送")',
+    },
+  },
+  'boss-like': bossLikeUnreadCommunicationSkill,
 };

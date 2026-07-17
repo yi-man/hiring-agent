@@ -3,6 +3,8 @@ import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { parsePublishJobDescriptionPayload } from '@/lib/jd-publishing/publish-payload';
 import { createAndStartPublishRun } from '@/lib/jd-publishing/publish-run-service';
 import { updateJobDescription } from '@/lib/jd/job-description-repo';
+import { getCompanyProfileForUser } from '@/lib/company-profile/repo';
+import { resolveRecruitmentPlatforms } from '@/lib/recruitment-platforms';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -29,10 +31,18 @@ export async function POST(request: Request) {
       return badRequest('job description id is required');
     }
 
-    const parsed = parsePublishJobDescriptionPayload(body);
-    if (!parsed.ok) {
-      return badRequest(parsed.error);
+    const hasPlatformOverride = body.platform !== undefined || body.platforms !== undefined;
+    const profile = hasPlatformOverride ? null : await getCompanyProfileForUser(auth.user.id);
+    const platforms = resolveRecruitmentPlatforms(body, profile?.supportedPlatforms);
+    if (platforms.length === 0) {
+      return badRequest('at least one recruitment platform is required');
     }
+    const parsedSettings = platforms.map((platform) =>
+      parsePublishJobDescriptionPayload({ ...body, platform }),
+    );
+    const invalid = parsedSettings.find((parsed) => !parsed.ok);
+    if (invalid && !invalid.ok) return badRequest(invalid.error);
+    const settings = parsedSettings.flatMap((parsed) => (parsed.ok ? [parsed.value] : []));
 
     await updateJobDescription({
       userId: auth.user.id,
@@ -40,13 +50,17 @@ export async function POST(request: Request) {
       status: 'ready_to_publish',
     });
 
-    const run = await createAndStartPublishRun({
-      userId: auth.user.id,
-      jobDescriptionId: id,
-      settings: { ...parsed.value, platform: 'boss-like' },
-    });
+    const runs = await Promise.all(
+      settings.map((platformSettings) =>
+        createAndStartPublishRun({
+          userId: auth.user.id,
+          jobDescriptionId: id,
+          settings: platformSettings,
+        }),
+      ),
+    );
 
-    return NextResponse.json({ run }, { status: 202 });
+    return NextResponse.json({ run: runs[0], runs }, { status: 202 });
   } catch (error) {
     return serverErrorResponse(error);
   }
