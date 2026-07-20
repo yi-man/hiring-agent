@@ -41,8 +41,9 @@ const overview: DashboardOverviewDto = {
     { status: 'ready_to_publish', label: '待发布', count: 0 },
     { status: 'publishing', label: '发布中', count: 0 },
     { status: 'published', label: '招聘中', count: 0 },
+    { status: 'filled', label: '已招满', count: 0 },
     { status: 'publish_failed', label: '发布异常', count: 1 },
-    { status: 'offline', label: '已下线', count: 0 },
+    { status: 'offline', label: '已停止招聘（系统内）', count: 0 },
     { status: 'archived', label: '已归档', count: 0 },
   ],
   platforms: [
@@ -57,6 +58,7 @@ const overview: DashboardOverviewDto = {
       position: '前端工程师',
       title: '高级前端工程师',
       status: 'publish_failed',
+      hiringTarget: 3,
       salaryRange: '25-40K',
       workLocations: ['上海'],
       updatedAt: now,
@@ -72,6 +74,7 @@ const overview: DashboardOverviewDto = {
         interviewingCandidates: 1,
         highPriorityCandidates: 2,
         followUpCandidates: 1,
+        onboardedCount: 1,
       },
       latestTask: {
         id: 'task-1',
@@ -128,5 +131,44 @@ describe('DashboardJobList', () => {
       'href',
       '/?status=publish_failed&platform=boss-like',
     );
+  });
+
+  it('renders hiring progress and the filled status clearly', () => {
+    const filledOverview: DashboardOverviewDto = {
+      ...overview,
+      statusCounts: overview.statusCounts.map((item) =>
+        item.status === 'filled' ? { ...item, count: 1 } : item,
+      ),
+      jobs: [
+        {
+          ...overview.jobs[0]!,
+          status: 'filled',
+          hiringTarget: 2,
+          candidateStats: {
+            ...overview.jobs[0]!.candidateStats,
+            onboardedCount: 2,
+          },
+        },
+      ],
+    };
+
+    render(<DashboardJobList overview={filledOverview} />);
+
+    expect(screen.getByRole('link', { name: '已招满' })).toHaveAttribute(
+      'href',
+      '/?status=filled&platform=boss-like',
+    );
+    expect(screen.getByText('已入职 2 / 目标 2')).toBeInTheDocument();
+  });
+
+  it('marks historical jobs without a hiring target', () => {
+    const historicalOverview: DashboardOverviewDto = {
+      ...overview,
+      jobs: [{ ...overview.jobs[0]!, hiringTarget: null }],
+    };
+
+    render(<DashboardJobList overview={historicalOverview} />);
+
+    expect(screen.getByText('已入职 1 / 目标未设置')).toBeInTheDocument();
   });
 });

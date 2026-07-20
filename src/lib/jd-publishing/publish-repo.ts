@@ -1,5 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import {
+  getWorkflowExecutionStatsBySkillId,
+  isEffectiveWorkflowVersion,
+} from '@/lib/workflows/execution-stats';
 import { BROWSER_WORKFLOW_DSL_VERSION } from './types';
 import type {
   PublishPlatform,
@@ -286,7 +290,10 @@ export async function getActivePublishSkillByName(params: {
     },
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
   });
-  return row ? mapSkill(row) : null;
+  if (!row) return null;
+
+  const statsBySkillId = await getWorkflowExecutionStatsBySkillId([row.id]);
+  return isEffectiveWorkflowVersion(statsBySkillId.get(row.id)) ? mapSkill(row) : null;
 }
 
 export function isBrowserV2Skill(skill: Pick<PublishSkill, 'meta'>): boolean {

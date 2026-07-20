@@ -7,6 +7,7 @@ import {
   type JobDescriptionRegenerateRunStage,
 } from './regenerate-run-repo';
 import { getJobDescriptionById, updateMutableJobDescription } from './job-description-repo';
+import { isEditableJobDescriptionStatus } from './api';
 
 type RunJobDescriptionRegenerateRunParams = {
   userId: string;
@@ -80,8 +81,8 @@ export async function runJobDescriptionRegenerateRun({
     if (!current) {
       throw new Error('job description not found');
     }
-    if (current.status === 'published') {
-      throw new Error('published job descriptions cannot be modified');
+    if (!isEditableJobDescriptionStatus(current.status)) {
+      throw new Error(`${current.status} job descriptions cannot be modified`);
     }
 
     await recordEvent({

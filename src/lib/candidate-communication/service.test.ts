@@ -29,7 +29,10 @@ function createRepo(overrides: Partial<CandidateConversationRepository> = {}) {
         rawText: 'Java PostgreSQL 招聘 SaaS',
       },
       screeningResult: {
+        id: 'result-1',
+        runId: 'run-1',
         finalScore: 91,
+        interviewStage: 'replied',
       },
     }),
     findOrCreateConversation: jest.fn().mockResolvedValue({
@@ -98,6 +101,9 @@ function createRepo(overrides: Partial<CandidateConversationRepository> = {}) {
 describe('candidate communication service', () => {
   it('persists an inbound message, sends the decided reply, and writes memory at contact exchange', async () => {
     const repo = createRepo();
+    const createActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'planned' });
+    const claimActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'running' });
+    const updateActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'success' });
     const chatCandidate = jest.fn().mockResolvedValue({
       success: true,
       browserTrace: { action: 'chat' },
@@ -128,6 +134,9 @@ describe('candidate communication service', () => {
       },
       dependencies: {
         repo,
+        createActionLog,
+        claimActionLog,
+        updateActionLog,
         createAdapter: async () => adapter,
         runLLM: async () => ({
           intent: 'contact_shared',
@@ -164,6 +173,31 @@ describe('candidate communication service', () => {
         message: expect.stringContaining('收到'),
       }),
     );
+    expect(createActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        runId: 'run-1',
+        screeningResultId: 'result-1',
+        candidateId: 'candidate-1',
+        jobDescriptionId: 'jd-1',
+        action: 'chat',
+        status: 'planned',
+        idempotencyKey: 'candidate-communication:incoming-1',
+      }),
+    );
+    expect(claimActionLog).toHaveBeenCalledWith({
+      userId: 'user-1',
+      id: 'action-1',
+      expectedInterviewStage: 'replied',
+    });
+    expect(updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        id: 'action-1',
+        expectedStatus: 'running',
+        status: 'success',
+      }),
+    );
     expect(repo.createMemory).toHaveBeenCalledWith(
       expect.objectContaining({
         conversationId: 'conversation-1',
@@ -172,6 +206,272 @@ describe('candidate communication service', () => {
     );
     expect(result.conversation.stage).toBe('contact_exchanged');
     expect(result.outgoingMessage?.deliveryStatus).toBe('sent');
+  });
+
+  it('does not send an automatic reply when a final hiring outcome wins the action claim', async () => {
+    const repo = createRepo({
+      getSubject: jest.fn().mockResolvedValue({
+        jobDescription: {
+          id: 'jd-1',
+          position: '高级后端工程师',
+          content: { title: '高级后端工程师' },
+        },
+        candidate: {
+          id: 'candidate-1',
+          displayName: 'Ada Lovelace',
+          profileUrl: 'http://127.0.0.1:6183/employer/resumes/boss-cand-1',
+          sourcePlatform: 'boss-like',
+        },
+        latestResume: null,
+        screeningResult: {
+          id: 'result-1',
+          runId: 'run-1',
+          finalScore: 91,
+          interviewStage: 'offer',
+        },
+      }),
+    });
+    const createActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'planned' });
+    const claimActionLog = jest.fn().mockResolvedValue(null);
+    const updateActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'skipped' });
+    const chatCandidate = jest.fn();
+    const createAdapter = jest.fn();
+
+    const result = await handleCandidateMessage({
+      userId: 'user-1',
+      payload: {
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        message: {
+          content: '你好，还在招吗？',
+          externalMessageId: 'msg-final-race',
+          receivedAt: new Date(createdAt),
+        },
+        executeReply: true,
+      },
+      dependencies: {
+        repo,
+        createActionLog,
+        claimActionLog,
+        updateActionLog,
+        createAdapter,
+        runLLM: async () => ({
+          intent: 'greeting',
+          intentLevel: 'medium',
+          nextStage: 'contact_requested',
+          shouldReply: true,
+          reply: '还在招聘，方便继续聊聊吗？',
+          actions: ['reply'],
+          rationale: 'continue recruiting conversation',
+        }),
+        strictLlm: false,
+      },
+    });
+
+    expect(claimActionLog).toHaveBeenCalledWith({
+      userId: 'user-1',
+      id: 'action-1',
+      expectedInterviewStage: 'offer',
+    });
+    expect(updateActionLog).toHaveBeenCalledWith({
+      userId: 'user-1',
+      id: 'action-1',
+      expectedStatus: 'planned',
+      status: 'skipped',
+      errorMessage: 'candidate interview stage changed before automatic reply',
+    });
+    expect(createAdapter).not.toHaveBeenCalled();
+    expect(chatCandidate).not.toHaveBeenCalled();
+    expect(repo.createMessage).toHaveBeenCalledTimes(1);
+    expect(result.outgoingMessage).toBeNull();
+  });
+
+  it('short-circuits an already-final candidate before claiming or creating an outgoing message', async () => {
+    const repo = createRepo({
+      getSubject: jest.fn().mockResolvedValue({
+        jobDescription: {
+          id: 'jd-1',
+          position: '高级后端工程师',
+          content: { title: '高级后端工程师' },
+        },
+        candidate: {
+          id: 'candidate-1',
+          displayName: 'Ada Lovelace',
+          profileUrl: 'http://127.0.0.1:6183/employer/resumes/boss-cand-1',
+          sourcePlatform: 'boss-like',
+        },
+        latestResume: null,
+        screeningResult: {
+          id: 'result-1',
+          runId: 'run-1',
+          finalScore: 91,
+          interviewStage: 'onboarded',
+        },
+      }),
+    });
+    const createActionLog = jest.fn();
+    const claimActionLog = jest.fn();
+    const updateActionLog = jest.fn();
+    const createAdapter = jest.fn();
+
+    const result = await handleCandidateMessage({
+      userId: 'user-1',
+      payload: {
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        message: {
+          content: '入职后还能聊聊吗？',
+          externalMessageId: 'msg-already-final',
+          receivedAt: new Date(createdAt),
+        },
+        executeReply: true,
+      },
+      dependencies: {
+        repo,
+        createActionLog,
+        claimActionLog,
+        updateActionLog,
+        createAdapter,
+        runLLM: async () => ({
+          intent: 'greeting',
+          intentLevel: 'medium',
+          nextStage: 'contact_requested',
+          shouldReply: true,
+          reply: '方便继续聊聊吗？',
+          actions: ['reply'],
+          rationale: 'continue recruiting conversation',
+        }),
+        strictLlm: false,
+      },
+    });
+
+    expect(createActionLog).not.toHaveBeenCalled();
+    expect(claimActionLog).not.toHaveBeenCalled();
+    expect(updateActionLog).not.toHaveBeenCalled();
+    expect(createAdapter).not.toHaveBeenCalled();
+    expect(repo.createMessage).toHaveBeenCalledTimes(1);
+    expect(result.outgoingMessage).toBeNull();
+  });
+
+  it.each(['running', 'success'] as const)(
+    'preserves an existing %s action log when a duplicate incoming message loses the claim',
+    async (status) => {
+      const repo = createRepo();
+      const createActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status });
+      const claimActionLog = jest.fn().mockResolvedValue(null);
+      const updateActionLog = jest.fn();
+      const createAdapter = jest.fn();
+
+      const result = await handleCandidateMessage({
+        userId: 'user-1',
+        payload: {
+          jobDescriptionId: 'jd-1',
+          candidateId: 'candidate-1',
+          platform: 'boss-like',
+          message: {
+            content: '可以继续聊聊',
+            externalMessageId: 'msg-duplicate',
+            receivedAt: new Date(createdAt),
+          },
+          executeReply: true,
+        },
+        dependencies: {
+          repo,
+          createActionLog,
+          claimActionLog,
+          updateActionLog,
+          createAdapter,
+          runLLM: async () => ({
+            intent: 'greeting',
+            intentLevel: 'medium',
+            nextStage: 'contact_requested',
+            shouldReply: true,
+            reply: '好的，我们继续沟通。',
+            actions: ['reply'],
+            rationale: 'continue recruiting conversation',
+          }),
+          strictLlm: false,
+        },
+      });
+
+      expect(claimActionLog).toHaveBeenCalledTimes(1);
+      expect(updateActionLog).toHaveBeenCalledWith({
+        userId: 'user-1',
+        id: 'action-1',
+        expectedStatus: 'planned',
+        status: 'skipped',
+        errorMessage: 'candidate interview stage changed before automatic reply',
+      });
+      expect(createAdapter).not.toHaveBeenCalled();
+      expect(repo.createMessage).toHaveBeenCalledTimes(1);
+      expect(result.outgoingMessage).toBeNull();
+    },
+  );
+
+  it('finalizes the action log before updating delivery after a successful external reply', async () => {
+    const repo = createRepo({
+      updateMessageDelivery: jest.fn().mockRejectedValue(new Error('message persistence failed')),
+    });
+    const createActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'planned' });
+    const claimActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'running' });
+    const updateActionLog = jest.fn().mockResolvedValue({ id: 'action-1', status: 'success' });
+    const adapter = {
+      platform: 'boss-like' as const,
+      getBrowserExecutor: jest.fn(),
+      loginIfNeeded: jest.fn().mockResolvedValue(undefined),
+      searchCandidates: jest.fn(),
+      enrichCandidate: jest.fn(async (candidate: RawCandidate) => candidate),
+      collectCandidate: jest.fn(),
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      handleCandidateMessage({
+        userId: 'user-1',
+        payload: {
+          jobDescriptionId: 'jd-1',
+          candidateId: 'candidate-1',
+          platform: 'boss-like',
+          message: {
+            content: '可以继续聊聊',
+            externalMessageId: 'msg-delivery-failure',
+            receivedAt: new Date(createdAt),
+          },
+          executeReply: true,
+        },
+        dependencies: {
+          repo,
+          createActionLog,
+          claimActionLog,
+          updateActionLog,
+          createAdapter: async () => adapter,
+          runLLM: async () => ({
+            intent: 'greeting',
+            intentLevel: 'medium',
+            nextStage: 'contact_requested',
+            shouldReply: true,
+            reply: '好的，我们继续沟通。',
+            actions: ['reply'],
+            rationale: 'continue recruiting conversation',
+          }),
+          strictLlm: false,
+        },
+      }),
+    ).rejects.toThrow('message persistence failed');
+
+    expect(updateActionLog).toHaveBeenCalledTimes(1);
+    expect(updateActionLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        id: 'action-1',
+        expectedStatus: 'running',
+        status: 'success',
+      }),
+    );
+    expect(adapter.close).toHaveBeenCalledTimes(1);
   });
 
   it('withdraws the candidate from the interview flow after an explicit rejection', async () => {

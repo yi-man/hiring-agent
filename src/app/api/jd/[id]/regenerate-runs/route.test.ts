@@ -101,6 +101,8 @@ describe('/api/jd/[id]/regenerate-runs', () => {
       positionDescription: '描述',
       salaryRange: '25-40K',
       workLocations: ['上海'],
+      hiringTarget: null,
+      onboardedCount: 0,
       tone: 'tech',
       status: 'created',
       content: currentJd,
@@ -147,6 +149,8 @@ describe('/api/jd/[id]/regenerate-runs', () => {
       positionDescription: '描述',
       salaryRange: '25-40K',
       workLocations: ['上海'],
+      hiringTarget: null,
+      onboardedCount: 0,
       tone: 'tech',
       status: 'created',
       content: currentJd,
@@ -197,38 +201,43 @@ describe('/api/jd/[id]/regenerate-runs', () => {
     expect(createAndStartMock).not.toHaveBeenCalled();
   });
 
-  it('returns 409 when the JD is published', async () => {
-    getJdMock.mockResolvedValueOnce({
-      id: 'jd-1',
-      userId: 'u1',
-      department: '技术部',
-      position: '高级前端工程师',
-      positionDescription: '描述',
-      salaryRange: '25-40K',
-      workLocations: ['上海'],
-      tone: 'tech',
-      status: 'published',
-      content: currentJd,
-      evaluation: null,
-      generationMeta: null,
-      createdAt: '2026-07-13T08:00:00.000Z',
-      updatedAt: '2026-07-13T08:00:00.000Z',
-    });
+  it.each(['published', 'filled', 'offline', 'publishing', 'archived'] as const)(
+    'returns 409 when the JD is %s',
+    async (status) => {
+      getJdMock.mockResolvedValueOnce({
+        id: 'jd-1',
+        userId: 'u1',
+        department: '技术部',
+        position: '高级前端工程师',
+        positionDescription: '描述',
+        salaryRange: '25-40K',
+        workLocations: ['上海'],
+        hiringTarget: 1,
+        onboardedCount: 0,
+        tone: 'tech',
+        status,
+        content: currentJd,
+        evaluation: null,
+        generationMeta: null,
+        createdAt: '2026-07-13T08:00:00.000Z',
+        updatedAt: '2026-07-13T08:00:00.000Z',
+      });
 
-    const response = await POST(
-      new Request('http://localhost/api/jd/jd-1/regenerate-runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentJd }),
-      }),
-      { params: Promise.resolve({ id: 'jd-1' }) },
-    );
-    const body = await response.json();
+      const response = await POST(
+        new Request('http://localhost/api/jd/jd-1/regenerate-runs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ currentJd }),
+        }),
+        { params: Promise.resolve({ id: 'jd-1' }) },
+      );
+      const body = await response.json();
 
-    expect(response.status).toBe(409);
-    expect(body.error).toMatch(/published/i);
-    expect(createAndStartMock).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(409);
+      expect(body.error).toBe(`${status} job descriptions cannot be modified`);
+      expect(createAndStartMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('returns 400 for invalid tone', async () => {
     getJdMock.mockResolvedValueOnce({
@@ -239,6 +248,8 @@ describe('/api/jd/[id]/regenerate-runs', () => {
       positionDescription: '描述',
       salaryRange: '25-40K',
       workLocations: ['上海'],
+      hiringTarget: null,
+      onboardedCount: 0,
       tone: 'tech',
       status: 'created',
       content: currentJd,

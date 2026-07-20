@@ -73,8 +73,9 @@ const overview: DashboardOverviewDto = {
     { status: 'ready_to_publish', label: '待发布', count: 4 },
     { status: 'publishing', label: '发布中', count: 3 },
     { status: 'published', label: '招聘中', count: 12 },
+    { status: 'filled', label: '已招满', count: 0 },
     { status: 'publish_failed', label: '发布异常', count: 2 },
-    { status: 'offline', label: '已下线', count: 0 },
+    { status: 'offline', label: '已停止招聘（系统内）', count: 0 },
     { status: 'archived', label: '已归档', count: 0 },
   ],
   platforms: [
@@ -89,6 +90,7 @@ const overview: DashboardOverviewDto = {
       position: '前端工程师',
       title: '高级前端工程师',
       status: 'published',
+      hiringTarget: 3,
       salaryRange: '25-40K',
       workLocations: ['上海'],
       updatedAt: now,
@@ -104,6 +106,7 @@ const overview: DashboardOverviewDto = {
         interviewingCandidates: 1,
         highPriorityCandidates: 2,
         followUpCandidates: 1,
+        onboardedCount: 1,
       },
       latestTask: {
         id: 'task-1',

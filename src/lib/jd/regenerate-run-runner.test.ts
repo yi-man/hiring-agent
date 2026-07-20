@@ -182,6 +182,8 @@ describe('JD regenerate run runner', () => {
       positionDescription: '负责招聘工作台体验',
       salaryRange: '25-40K',
       workLocations: ['上海'],
+      hiringTarget: null,
+      onboardedCount: 0,
       tone: 'tech',
       status: 'created',
       content: currentJd,
@@ -199,6 +201,8 @@ describe('JD regenerate run runner', () => {
       positionDescription: '负责招聘工作台体验',
       salaryRange: '25-40K',
       workLocations: ['上海'],
+      hiringTarget: null,
+      onboardedCount: 0,
       tone: 'tech',
       status: 'created',
       content: agentResponse.jd,
@@ -260,37 +264,42 @@ describe('JD regenerate run runner', () => {
     expect(updateRunMock).not.toHaveBeenCalled();
   });
 
-  it('fails when the JD is published during input_preparation', async () => {
-    getRunMock.mockResolvedValueOnce(makeRun());
-    getJdMock.mockResolvedValueOnce({
-      id: 'jd-1',
-      userId: 'u1',
-      department: '技术部',
-      position: '高级前端工程师',
-      positionDescription: '负责招聘工作台体验',
-      salaryRange: '25-40K',
-      workLocations: ['上海'],
-      tone: 'tech',
-      status: 'published',
-      content: currentJd,
-      evaluation: null,
-      generationMeta: null,
-      createdAt: now,
-      updatedAt: now,
-    });
+  it.each(['published', 'filled', 'offline', 'publishing', 'archived'] as const)(
+    'fails when the JD is %s during input_preparation',
+    async (status) => {
+      getRunMock.mockResolvedValueOnce(makeRun());
+      getJdMock.mockResolvedValueOnce({
+        id: 'jd-1',
+        userId: 'u1',
+        department: '技术部',
+        position: '高级前端工程师',
+        positionDescription: '负责招聘工作台体验',
+        salaryRange: '25-40K',
+        workLocations: ['上海'],
+        hiringTarget: 1,
+        onboardedCount: 0,
+        tone: 'tech',
+        status,
+        content: currentJd,
+        evaluation: null,
+        generationMeta: null,
+        createdAt: now,
+        updatedAt: now,
+      });
 
-    await runJobDescriptionRegenerateRun({ userId: 'u1', runId: 'jd-regen-run-1' });
+      await runJobDescriptionRegenerateRun({ userId: 'u1', runId: 'jd-regen-run-1' });
 
-    expect(runJDAgentMock).not.toHaveBeenCalled();
-    expect(updateRunMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        status: 'failed',
-        currentStage: 'input_preparation',
-        errorMessage: expect.stringMatching(/published|已发布|不可/),
-        finishedAt: expect.any(Date),
-      }),
-    );
-  });
+      expect(runJDAgentMock).not.toHaveBeenCalled();
+      expect(updateRunMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          status: 'failed',
+          currentStage: 'input_preparation',
+          errorMessage: `${status} job descriptions cannot be modified`,
+          finishedAt: expect.any(Date),
+        }),
+      );
+    },
+  );
 
   it('fails when updateMutableJobDescription returns null', async () => {
     getRunMock.mockResolvedValueOnce(makeRun());
@@ -302,6 +311,8 @@ describe('JD regenerate run runner', () => {
       positionDescription: '负责招聘工作台体验',
       salaryRange: '25-40K',
       workLocations: ['上海'],
+      hiringTarget: null,
+      onboardedCount: 0,
       tone: 'tech',
       status: 'created',
       content: currentJd,
@@ -334,6 +345,8 @@ describe('JD regenerate run runner', () => {
       positionDescription: '负责招聘工作台体验',
       salaryRange: '25-40K',
       workLocations: ['上海'],
+      hiringTarget: null,
+      onboardedCount: 0,
       tone: 'tech',
       status: 'created',
       content: currentJd,

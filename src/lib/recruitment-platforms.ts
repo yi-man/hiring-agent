@@ -4,10 +4,21 @@ export type RecruitmentPlatform = (typeof RECRUITMENT_PLATFORM_IDS)[number];
 
 export const DEFAULT_RECRUITMENT_PLATFORMS: RecruitmentPlatform[] = ['boss-like'];
 
+const recruitmentPlatformLabels: Record<RecruitmentPlatform, string> = {
+  boss: 'BOSS 直聘',
+  liepin: '猎聘',
+  zhilian: '智联招聘',
+  'boss-like': 'BOSS-like',
+};
+
 const platformIds = new Set<string>(RECRUITMENT_PLATFORM_IDS);
 
 export function isRecruitmentPlatform(value: unknown): value is RecruitmentPlatform {
   return typeof value === 'string' && platformIds.has(value);
+}
+
+export function getRecruitmentPlatformLabel(platform: RecruitmentPlatform): string {
+  return recruitmentPlatformLabels[platform];
 }
 
 export function normalizeRecruitmentPlatforms(

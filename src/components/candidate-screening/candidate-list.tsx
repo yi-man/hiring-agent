@@ -12,6 +12,7 @@ import {
   type CandidateListFilters,
 } from '@/lib/candidate-screening/client';
 import {
+  CANDIDATE_INTERVIEW_STAGE_LABELS,
   CANDIDATE_SCREENING_INTERVIEW_STAGES,
   QUALIFIED_CANDIDATE_SCORE,
 } from '@/lib/candidate-screening/constants';
@@ -207,7 +208,7 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
                   <option value="">全部阶段</option>
                   {CANDIDATE_SCREENING_INTERVIEW_STAGES.map((stage) => (
                     <option key={stage} value={stage}>
-                      {stage}
+                      {CANDIDATE_INTERVIEW_STAGE_LABELS[stage]}
                     </option>
                   ))}
                 </select>
@@ -316,7 +317,9 @@ export function CandidateList({ jobDescriptionId }: { jobDescriptionId: string }
                       </div>
                       <div className="text-xs">
                         <div className="text-muted-foreground text-[11px]">进展</div>
-                        <div className="text-foreground mt-1">{item.interviewStage}</div>
+                        <div className="text-foreground mt-1">
+                          {CANDIDATE_INTERVIEW_STAGE_LABELS[item.interviewStage]}
+                        </div>
                         <div className="text-muted-foreground mt-0.5">{item.actionStatus}</div>
                       </div>
                       <div className="min-w-0">

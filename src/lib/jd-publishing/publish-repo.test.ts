@@ -27,6 +27,10 @@ jest.mock('@/lib/prisma', () => ({
       create: jest.fn(),
       findMany: jest.fn(),
       update: jest.fn(),
+      groupBy: jest.fn(),
+    },
+    candidateScreeningRun: {
+      groupBy: jest.fn(),
     },
     jobPublishTrace: {
       create: jest.fn(),
@@ -48,6 +52,10 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
       create: jest.Mock;
       findMany: jest.Mock;
       update: jest.Mock;
+      groupBy: jest.Mock;
+    };
+    candidateScreeningRun: {
+      groupBy: jest.Mock;
     };
     jobPublishTrace: {
       create: jest.Mock;
@@ -93,6 +101,10 @@ describe('publish repository', () => {
     prismaMock.jobPublishTask.create.mockReset();
     prismaMock.jobPublishTask.findMany.mockReset();
     prismaMock.jobPublishTask.update.mockReset();
+    prismaMock.jobPublishTask.groupBy.mockReset();
+    prismaMock.jobPublishTask.groupBy.mockResolvedValue([]);
+    prismaMock.candidateScreeningRun.groupBy.mockReset();
+    prismaMock.candidateScreeningRun.groupBy.mockResolvedValue([]);
     prismaMock.jobPublishTrace.create.mockReset();
   });
 
@@ -152,6 +164,24 @@ describe('publish repository', () => {
     });
   });
 
+  it('does not reuse a 0%-successful current publish workflow when an older version succeeded', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(
+      skillRow({ id: 'publish-current-v2', version: 2 }),
+    );
+    prismaMock.jobPublishTask.groupBy.mockResolvedValueOnce([
+      { skillId: 'publish-old-v1', status: 'success', _count: { _all: 3 } },
+      { skillId: 'publish-current-v2', status: 'failed', _count: { _all: 2 } },
+    ]);
+
+    await expect(getActivePublishSkillFromDb('boss-like')).resolves.toBeNull();
+
+    expect(prismaMock.jobPublishTask.groupBy).toHaveBeenCalledWith({
+      by: ['skillId', 'status'],
+      where: { skillId: { in: ['publish-current-v2'] } },
+      _count: { _all: true },
+    });
+  });
+
   it('loads the active workflow for an explicit name and platform', async () => {
     prismaMock.publishSkill.findFirst.mockResolvedValueOnce({
       ...skillRow(),
@@ -201,6 +231,31 @@ describe('publish repository', () => {
         meta: { dsl_version: 'browser-v2', created_from: 'explore' },
       }),
     );
+  });
+
+  it('does not reuse a 0%-successful current screening workflow when an older version succeeded', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(
+      skillRow({
+        id: 'screen-current-v6',
+        name: 'screen_candidates',
+        version: 6,
+        meta: { dsl_version: 'browser-v2', created_from: 'explore' },
+      }),
+    );
+    prismaMock.candidateScreeningRun.groupBy.mockResolvedValueOnce([
+      { skillId: 'screen-old-v5', status: 'success', _count: { _all: 4 } },
+      { skillId: 'screen-current-v6', status: 'failed', _count: { _all: 1 } },
+    ]);
+
+    await expect(
+      getActiveBrowserV2SkillByName({ name: 'screen_candidates', platform: 'boss-like' }),
+    ).resolves.toBeNull();
+
+    expect(prismaMock.candidateScreeningRun.groupBy).toHaveBeenCalledWith({
+      by: ['skillId', 'status'],
+      where: { skillId: { in: ['screen-current-v6'] } },
+      _count: { _all: true },
+    });
   });
 
   it('allocates browser-v2 v5 after legacy v4', async () => {

@@ -74,6 +74,31 @@ describe('candidate interview stage transitions', () => {
     });
   });
 
+  it('records final hiring outcomes only after the offer stage', () => {
+    expect(getAllowedCandidateInterviewStageTransitions('offer', [])).toEqual([
+      'onboarded',
+      'not_joined',
+      'withdrawn',
+    ]);
+    expect(validateCandidateInterviewStageTransition('offer', 'onboarded', [])).toEqual({
+      ok: true,
+    });
+    expect(validateCandidateInterviewStageTransition('offer', 'not_joined', [])).toEqual({
+      ok: true,
+    });
+    expect(
+      validateCandidateInterviewStageTransition('interview_completed', 'onboarded', []),
+    ).toEqual({
+      ok: false,
+      error: '不能从“面试完成”直接推进到“已入职”',
+    });
+  });
+
+  it('allows correcting the final hiring outcome without reopening the offer stage', () => {
+    expect(getAllowedCandidateInterviewStageTransitions('onboarded', [])).toEqual(['not_joined']);
+    expect(getAllowedCandidateInterviewStageTransitions('not_joined', [])).toEqual(['onboarded']);
+  });
+
   it('prevents feedback from skipping the candidate stage or interview order', () => {
     expect(validateCandidateInterviewFeedbackStage('contacted', 'final_interview', [])).toEqual({
       ok: false,

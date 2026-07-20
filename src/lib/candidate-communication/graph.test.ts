@@ -2,6 +2,7 @@
 
 import { runCandidateCommunicationGraph } from './graph';
 import type { CandidateConversationRepository } from './repo';
+import { buildScreeningPlanFromJd } from '@/lib/candidate-screening/planner';
 import type { JobDescriptionDto } from '@/types';
 
 const createdAt = '2026-06-30T12:00:00.000Z';
@@ -24,6 +25,8 @@ function createRepo(overrides: Partial<CandidateConversationRepository> = {}) {
         department: '技术部',
         position: '高级后端工程师',
         positionDescription: '负责招聘平台核心链路',
+        hiringTarget: 3,
+        onboardedCount: 2,
         tone: 'tech',
         status: 'published',
         content: jobDescriptionContent,
@@ -121,6 +124,7 @@ describe('candidate communication LangGraph', () => {
       score: { skill: 90, domain: 80, ability: 70, risk: 0, llmBonus: 5, total: 82 },
       decision: { action: 'chat', priority: 'high', reason: 'Java PostgreSQL 匹配' },
     });
+    const buildPlan = jest.fn(buildScreeningPlanFromJd);
     const runLLM = jest.fn().mockResolvedValue({
       intent: 'greeting',
       intentLevel: 'high',
@@ -137,6 +141,7 @@ describe('candidate communication LangGraph', () => {
       dependencies: {
         repo,
         evaluateCandidate,
+        buildPlan,
         runLLM,
         strictLlm: true,
         strictResumeEvaluation: true,
@@ -155,6 +160,9 @@ describe('candidate communication LangGraph', () => {
       'Java',
       'PostgreSQL',
     ]);
+    expect(buildPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ hiringTarget: 3, onboardedCount: 2 }),
+    );
     expect(runLLM).toHaveBeenCalledWith(
       expect.objectContaining({
         candidate: expect.objectContaining({

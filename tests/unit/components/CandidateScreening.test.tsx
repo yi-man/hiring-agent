@@ -972,15 +972,22 @@ describe('candidate screening UI', () => {
     expect(
       parsedHref(screen.getByText('重试发布').closest('a')?.getAttribute('href') ?? '').pathname,
     ).toBe('/jd-generator/jd-failed');
-    expect(
-      parsedHref(screen.getByText('查看').closest('a')?.getAttribute('href') ?? '').pathname,
-    ).toBe('/jd-generator/jd-offline');
+    const offlineCandidateHref = screen
+      .getAllByText('候选人')
+      .map((node) => node.closest('a')?.getAttribute('href') ?? '')
+      .find((href) => parsedHref(href).pathname === '/jd-generator/jd-offline/candidates');
+    expect(offlineCandidateHref).toBeDefined();
     const runLogHref = screen.getByText('筛选记录').closest('a')?.getAttribute('href') ?? '';
     expect(parsedHref(runLogHref).pathname).toBe(
       '/jd-generator/jd-published/screening-runs/run-latest',
     );
     expectReturnContext(runLogHref, '/jd-generator', '返回列表');
-    const candidatesHref = screen.getByText('候选人').closest('a')?.getAttribute('href') ?? '';
+    const candidatesHref =
+      screen
+        .getAllByText('候选人')
+        .map((node) => node.closest('a')?.getAttribute('href') ?? '')
+        .find((href) => parsedHref(href).pathname === '/jd-generator/jd-published/candidates') ??
+      '';
     expect(parsedHref(candidatesHref).pathname).toBe('/jd-generator/jd-published/candidates');
     expectReturnContext(candidatesHref, '/jd-generator', '返回列表');
 
@@ -1201,7 +1208,7 @@ describe('candidate screening UI', () => {
     expect(screen.getAllByText('chat').length).toBeGreaterThan(0);
     expect(screen.getAllByText('both').length).toBeGreaterThan(0);
     expect(screen.getByText('planned')).toBeInTheDocument();
-    expect(screen.getAllByText('to_contact').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('待联系').length).toBeGreaterThan(0);
 
     const sourceRunLink = screen.getByRole('link', { name: '来自第 2 次筛选' });
     expect(parsedHref(sourceRunLink.getAttribute('href') ?? '').pathname).toBe(
@@ -1387,6 +1394,8 @@ describe('candidate screening UI', () => {
     expect(parsedHref(jdLink.getAttribute('href') ?? '').pathname).toBe('/jd-generator/jd-1');
     expectReturnContext(jdLink.getAttribute('href') ?? '', '/interviews', '返回面试记录');
 
+    expect(screen.getByText('Engineering · 招聘中')).toBeInTheDocument();
+    expect(screen.queryByText('Engineering · published')).not.toBeInTheDocument();
     expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
     expect(screen.getAllByText('pass').length).toBeGreaterThan(0);
     expect(screen.getByText('Java 基础扎实')).toBeInTheDocument();
@@ -1445,6 +1454,9 @@ describe('candidate screening UI', () => {
     render(<CandidateList jobDescriptionId="jd-1" />);
 
     await screen.findByRole('link', { name: /Ada Lovelace/ });
+    expect(screen.getByRole('option', { name: '已入职' })).toHaveValue('onboarded');
+    expect(screen.getByRole('option', { name: '未入职' })).toHaveValue('not_joined');
+    expect(screen.getAllByText('待联系').length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText('分数范围'), { target: { value: 'all' } });
 
     await waitFor(() =>
@@ -1507,6 +1519,29 @@ describe('candidate screening UI', () => {
             displayName: 'Offer Candidate',
           },
           interviewStage: 'offer',
+          decisionAction: 'skip',
+        },
+        {
+          ...sampleTrackingOverview.candidates[0],
+          id: 'result-onboarded',
+          candidateId: 'cand-onboarded',
+          candidate: {
+            ...sampleCandidate,
+            id: 'cand-onboarded',
+            displayName: 'Onboarded Candidate',
+          },
+          interviewStage: 'onboarded',
+        },
+        {
+          ...sampleTrackingOverview.candidates[0],
+          id: 'result-not-joined',
+          candidateId: 'cand-not-joined',
+          candidate: {
+            ...sampleCandidate,
+            id: 'cand-not-joined',
+            displayName: 'Not Joined Candidate',
+          },
+          interviewStage: 'not_joined',
         },
       ],
     });
@@ -1519,14 +1554,27 @@ describe('candidate screening UI', () => {
     expect(activeCandidateRow).not.toBeNull();
     expect(within(activeCandidateRow as HTMLElement).getByText('正在推进')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Ended Candidate/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Offer Candidate/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Onboarded Candidate/ })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('跟踪范围'), { target: { value: 'ended' } });
 
     expect(await screen.findByRole('link', { name: /Ended Candidate/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Offer Candidate/ })).toBeInTheDocument();
+    const onboardedCandidateLink = screen.getByRole('link', { name: /Onboarded Candidate/ });
+    const notJoinedCandidateLink = screen.getByRole('link', { name: /Not Joined Candidate/ });
+    expect(onboardedCandidateLink).toBeInTheDocument();
+    expect(notJoinedCandidateLink).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Ada Lovelace/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Offer Candidate/ })).not.toBeInTheDocument();
     expect(screen.getByText('淘汰')).toBeInTheDocument();
-    expect(screen.getByText('录取/Offer')).toBeInTheDocument();
+    expect(
+      within(onboardedCandidateLink.closest('article') as HTMLElement).getAllByText('已入职')
+        .length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(notJoinedCandidateLink.closest('article') as HTMLElement).getAllByText('未入职')
+        .length,
+    ).toBeGreaterThan(0);
   });
 
   it('starts a global batch communication run from the tracking dashboard', async () => {
@@ -1689,7 +1737,45 @@ describe('candidate screening UI', () => {
     );
 
     const progressRegion = screen.getByLabelText('当前候选人进度');
-    expect(within(progressRegion).getByText('contacted')).toBeInTheDocument();
+    expect(within(progressRegion).getByText('已联系')).toBeInTheDocument();
+  });
+
+  it('interview detail records the outcome after an offer', async () => {
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      interviewStage: 'offer',
+    });
+    updateJdCandidateProgressMock.mockResolvedValueOnce({
+      ...sampleCandidateListItem,
+      interviewStage: 'onboarded',
+    });
+    fetchJobDescriptionMock.mockResolvedValueOnce({
+      ...sampleJobDescription,
+      status: 'filled',
+      hiringTarget: 1,
+      onboardedCount: 1,
+    });
+
+    render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    const stageSelect = await screen.findByLabelText('面试阶段');
+    expect(within(stageSelect).getByRole('option', { name: '已入职' })).toHaveValue('onboarded');
+    expect(within(stageSelect).getByRole('option', { name: '未入职' })).toHaveValue('not_joined');
+    fireEvent.change(stageSelect, { target: { value: 'onboarded' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存进度' }));
+
+    await waitFor(() =>
+      expect(updateJdCandidateProgressMock).toHaveBeenCalledWith('jd-1', 'cand-1', {
+        interviewStage: 'onboarded',
+        notes: sampleCandidateDetail.notes ?? '',
+      }),
+    );
+    expect(within(screen.getByLabelText('当前候选人进度')).getByText('已入职')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '已达到招聘目标（已入职 1 / 目标 1），JD 已更新为“已招满”。',
+    );
+    expect(screen.getByText('候选人最终结果已记录，无需再生成录用建议。')).toBeInTheDocument();
+    expect(screen.queryByText('录用建议')).not.toBeInTheDocument();
   });
 
   it('interview detail repairs a replied candidate with a stale contacted stage', async () => {

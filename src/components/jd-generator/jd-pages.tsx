@@ -49,6 +49,7 @@ import {
   startJobDescriptionPublishRun,
   startJobDescriptionPublishRuns,
   startJobDescriptionRegenerateRun,
+  updateJobDescriptionLifecycle,
   updateJobDescriptionResource,
 } from '@/lib/jd/client';
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
@@ -71,6 +72,7 @@ import type {
   JDScreeningSummary,
   JDStatus,
   JDTone,
+  JobDescriptionLifecycleRequest,
   JobDescriptionDto,
 } from '@/types';
 
@@ -116,34 +118,38 @@ const salaryRangeOptions = [
 
 const statusMeta: Record<JDStatus, { label: string; className: string }> = {
   created: {
-    label: 'created',
+    label: '已创建',
     className: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/40',
   },
   ready_to_publish: {
-    label: 'ready_to_publish',
+    label: '待发布',
     className:
       'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40',
   },
   publishing: {
-    label: 'publishing',
+    label: '发布中',
     className:
       'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40',
   },
   published: {
-    label: 'published',
+    label: '招聘中',
     className:
       'border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950/40',
   },
+  filled: {
+    label: '已招满',
+    className: 'border-teal-200 bg-teal-50 text-teal-700 dark:border-teal-900 dark:bg-teal-950/40',
+  },
   publish_failed: {
-    label: 'publish_failed',
+    label: '发布失败',
     className: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40',
   },
   offline: {
-    label: 'offline',
+    label: '已停止招聘（系统内）',
     className: 'border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60',
   },
   archived: {
-    label: 'archived',
+    label: '已归档',
     className:
       'border-stone-200 bg-stone-50 text-stone-700 dark:border-stone-800 dark:bg-stone-900/60',
   },
@@ -152,14 +158,8 @@ const statusMeta: Record<JDStatus, { label: string; className: string }> = {
 type JDStatusFilter = JDStatus | 'all';
 
 const statusFilterOptions: Array<{ value: JDStatusFilter; label: string }> = [
-  { value: 'published', label: 'published' },
-  { value: 'created', label: 'created' },
-  { value: 'ready_to_publish', label: 'ready_to_publish' },
-  { value: 'publishing', label: 'publishing' },
-  { value: 'publish_failed', label: 'publish_failed' },
-  { value: 'offline', label: 'offline' },
-  { value: 'archived', label: 'archived' },
   { value: 'all', label: '全部状态' },
+  ...JD_STATUSES.map((status) => ({ value: status, label: statusMeta[status].label })),
 ];
 
 const defaultScreeningSummary: JDScreeningSummary = {
@@ -234,6 +234,29 @@ function formatUpdatedAt(value: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date);
+}
+
+function formatHiringProgress(
+  jobDescription: Pick<JobDescriptionDto, 'hiringTarget' | 'onboardedCount'>,
+) {
+  const onboardedCount = jobDescription.onboardedCount ?? 0;
+  if (jobDescription.hiringTarget === null || jobDescription.hiringTarget === undefined) {
+    return `已入职 ${onboardedCount} / 目标未设置`;
+  }
+  return `已入职 ${onboardedCount} / 目标 ${jobDescription.hiringTarget}`;
+}
+
+function parseHiringTarget(value: string): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999 ? parsed : null;
+}
+
+function hiringTargetInputValue(hiringTarget: number | null | undefined): string {
+  return hiringTarget === null || hiringTarget === undefined ? '' : String(hiringTarget);
+}
+
+function isEditableJobDescriptionStatus(status: JDStatus): boolean {
+  return status === 'created' || status === 'ready_to_publish' || status === 'publish_failed';
 }
 
 function StatusChip({ status }: { status: JDStatus }) {
@@ -388,7 +411,7 @@ export function JDListView() {
   const workbenchReturnTarget = { href: '/jd-generator', label: '返回 JD 工作台' };
   const [items, setItems] = useState<JobDescriptionDto[]>([]);
   const [createRuns, setCreateRuns] = useState<JobDescriptionCreateRunDto[]>([]);
-  const [statusFilter, setStatusFilter] = useState<JDStatusFilter>('published');
+  const [statusFilter, setStatusFilter] = useState<JDStatusFilter>('all');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [startingScreeningId, setStartingScreeningId] = useState<string | null>(null);
@@ -584,15 +607,33 @@ export function JDListView() {
       return renderPublishedActions(item);
     }
 
+    if (item.status === 'filled' || item.status === 'offline') {
+      return (
+        <>
+          {renderDetailAction(item)}
+          <Button
+            as={Link}
+            className="gap-2"
+            disableRipple
+            href={withReturnTarget(`/jd-generator/${item.id}/candidates`, listReturnTarget)}
+            size="sm"
+            variant="light"
+          >
+            <ListFilter className="h-4 w-4" aria-hidden />
+            候选人
+          </Button>
+        </>
+      );
+    }
+
     const actionMeta: Record<
-      Exclude<JDStatus, 'published'>,
+      Exclude<JDStatus, 'published' | 'filled' | 'offline'>,
       { label: string; icon: React.ReactNode; variant?: 'light' | 'bordered' | 'solid' }
     > = {
       created: { label: '编辑', icon: <FileText className="h-4 w-4" aria-hidden /> },
       ready_to_publish: { label: '发布', icon: <Rocket className="h-4 w-4" aria-hidden /> },
       publishing: { label: '发布记录', icon: <Eye className="h-4 w-4" aria-hidden /> },
       publish_failed: { label: '重试发布', icon: <RefreshCw className="h-4 w-4" aria-hidden /> },
-      offline: { label: '查看', icon: <Eye className="h-4 w-4" aria-hidden /> },
       archived: { label: '查看', icon: <Eye className="h-4 w-4" aria-hidden /> },
     };
     const meta = actionMeta[item.status];
@@ -747,6 +788,7 @@ export function JDListView() {
                 ))}
               </select>
             </label>
+
             <div className="text-muted-foreground text-xs">
               {isLoading ? '加载中' : `${items.length} 条`}
             </div>
@@ -777,6 +819,9 @@ export function JDListView() {
                   <div className="text-muted-foreground mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                     <span>{item.department}</span>
                     <span className="min-w-0 truncate">{item.position}</span>
+                  </div>
+                  <div className="text-muted-foreground mt-1 text-xs">
+                    {formatHiringProgress(item)}
                   </div>
                 </div>
                 <StatusChip status={item.status} />
@@ -1107,6 +1152,9 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [isLoading, setIsLoading] = useState(true);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [lifecycleAction, setLifecycleAction] = useState<
+    JobDescriptionLifecycleRequest['action'] | null
+  >(null);
   const [isScreening, setIsScreening] = useState(false);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
   const [availablePlatforms, setAvailablePlatforms] = useState<RecruitmentPlatformMetadataDto[]>(
@@ -1120,6 +1168,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   );
   const [publishCompany, setPublishCompany] = useState('');
   const [publishSalary, setPublishSalary] = useState('');
+  const [hiringTargetInput, setHiringTargetInput] = useState('');
   const [selectedPublishLocations, setSelectedPublishLocations] = useState<string[]>([]);
   const [publishKeywords, setPublishKeywords] = useState('TypeScript, React');
   const [publishTasks, setPublishTasks] = useState<PublishTaskDto[]>([]);
@@ -1154,6 +1203,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setScreeningPlatforms(defaultPlatforms);
       setPublishCompany(profile?.name ?? '');
       setPublishSalary(data.salaryRange ?? '');
+      setHiringTargetInput(hiringTargetInputValue(data.hiringTarget));
       setSelectedPublishLocations(
         data.workLocations.length > 0
           ? data.workLocations
@@ -1175,7 +1225,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   async function handleRegenerate() {
     if (!jobDescription || !form) return;
-    if (status === 'published') return;
+    if (!isEditableJobDescriptionStatus(status)) return;
     setIsRegenerating(true);
     setError('');
     try {
@@ -1197,7 +1247,16 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
 
   async function handlePublish() {
     if (!jobDescription || !form) return;
-    if (status === 'published') return;
+    if (!isEditableJobDescriptionStatus(status)) return;
+    const hiringTarget = parseHiringTarget(hiringTargetInput);
+    if (hiringTarget === null) {
+      setError('招聘人数需为 1 到 999 的整数。');
+      return;
+    }
+    if (hiringTarget <= jobDescription.onboardedCount) {
+      setError(`计划招聘人数必须大于已入职人数（${jobDescription.onboardedCount} 人）。`);
+      return;
+    }
     const trimmedCompany = publishCompany.trim();
     const trimmedSalary = publishSalary.trim();
     const publishLocation = selectedPublishLocations.join('、');
@@ -1214,6 +1273,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     try {
       const saved = await updateJobDescriptionResource(jobDescription.id, {
         status: 'ready_to_publish',
+        hiringTarget,
         salaryRange: publishSalary,
         workLocations: selectedPublishLocations,
         content: formToJd(form),
@@ -1248,10 +1308,58 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         }),
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : '创建发布任务失败');
+      const message = e instanceof Error ? e.message : '创建发布任务失败';
+      try {
+        const latest = await fetchJobDescription(jobDescription.id);
+        setJobDescription(latest);
+        setForm(jdToForm(latest.content));
+        setStatus(latest.status);
+        setHiringTargetInput(hiringTargetInputValue(latest.hiringTarget));
+      } catch {
+        // Keep the actionable publish error when refreshing the latest JD also fails.
+      }
+      setError(message);
     } finally {
       setIsPublishing(false);
     }
+  }
+
+  async function handleLifecycleUpdate(payload: JobDescriptionLifecycleRequest) {
+    if (!jobDescription) return;
+    setLifecycleAction(payload.action);
+    setError('');
+    try {
+      const updated = await updateJobDescriptionLifecycle(jobDescription.id, payload);
+      setJobDescription(updated);
+      setStatus(updated.status);
+      setHiringTargetInput(hiringTargetInputValue(updated.hiringTarget));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '更新招聘状态失败');
+    } finally {
+      setLifecycleAction(null);
+    }
+  }
+
+  async function handleSetHiringTarget() {
+    const hiringTarget = parseHiringTarget(hiringTargetInput);
+    if (hiringTarget === null) {
+      setError('招聘人数需为 1 到 999 的整数。');
+      return;
+    }
+    await handleLifecycleUpdate({ action: 'set_hiring_target', hiringTarget });
+  }
+
+  async function handleReopen() {
+    if (!jobDescription) return;
+    const hiringTarget = parseHiringTarget(hiringTargetInput);
+    if (hiringTarget === null || hiringTarget <= jobDescription.onboardedCount) {
+      setError('重新开放前，招聘人数必须大于已入职人数。');
+      return;
+    }
+    await handleLifecycleUpdate({
+      action: 'reopen',
+      ...(hiringTarget === jobDescription.hiringTarget ? {} : { hiringTarget }),
+    });
   }
 
   async function handleStartScreening() {
@@ -1290,9 +1398,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   }
 
   const context = jobDescription?.generationMeta?.context ?? null;
-  const canScreenCandidates = status === 'published' || status === 'ready_to_publish';
-  const isPublished = status === 'published';
-  const isEditable = !isPublished;
+  const canStartCandidateScreening = status === 'published' || status === 'ready_to_publish';
+  const canViewCandidates =
+    canStartCandidateScreening || status === 'filled' || status === 'offline';
+  const isEditable = isEditableJobDescriptionStatus(status);
   const screeningSummary = jobDescription
     ? getScreeningSummary(jobDescription)
     : defaultScreeningSummary;
@@ -1300,6 +1409,26 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const latestCreateRun = createRuns[0] ?? null;
   const canPublishWithCompanyProfile = Boolean(
     companyProfile?.name.trim() && companyProfile.locations.length > 0,
+  );
+  const parsedHiringTarget = parseHiringTarget(hiringTargetInput);
+  const isHiringTargetValid = parsedHiringTarget !== null;
+  const isPublishHiringTargetValid = Boolean(
+    parsedHiringTarget !== null &&
+    jobDescription &&
+    parsedHiringTarget > jobDescription.onboardedCount,
+  );
+  const isUpdatingLifecycle = lifecycleAction !== null;
+  const canEditHiringTarget =
+    isEditable || status === 'published' || status === 'filled' || status === 'offline';
+  const hasRecruitingCapacity = Boolean(
+    jobDescription &&
+    jobDescription.hiringTarget !== null &&
+    jobDescription.hiringTarget > jobDescription.onboardedCount,
+  );
+  const canReopen = Boolean(
+    parsedHiringTarget !== null &&
+    jobDescription &&
+    parsedHiringTarget > jobDescription.onboardedCount,
   );
 
   function togglePublishLocation(label: string) {
@@ -1355,7 +1484,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 className="gap-2"
                 color="primary"
                 disableRipple
-                isDisabled={isPublishing}
+                isDisabled={isPublishing || !isPublishHiringTargetValid}
                 type="button"
                 onClick={() => void handlePublish()}
               >
@@ -1364,31 +1493,61 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               </Button>
             </>
           ) : null}
-          {canScreenCandidates ? (
-            <>
-              <Button
-                className="gap-2"
-                color={isEditable ? 'default' : 'primary'}
-                disableRipple
-                isDisabled={isScreening}
-                type="button"
-                variant={isEditable ? 'bordered' : 'solid'}
-                onClick={() => void handleStartScreening()}
-              >
-                <ListFilter className="h-4 w-4" aria-hidden />
-                {isScreening ? '启动中' : screeningActionLabel}
-              </Button>
-              <Link
-                className="border-input bg-background text-foreground hover:bg-muted inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors"
-                href={withReturnTarget(
-                  `/jd-generator/${jobDescription.id}/candidates`,
-                  detailReturnTarget,
-                )}
-              >
-                <ListFilter className="h-4 w-4" aria-hidden />
-                已筛选候选人
-              </Link>
-            </>
+          {status === 'published' || status === 'filled' ? (
+            <Button
+              className="gap-2"
+              disableRipple
+              isDisabled={isUpdatingLifecycle}
+              type="button"
+              variant="bordered"
+              onClick={() => void handleLifecycleUpdate({ action: 'take_offline' })}
+            >
+              {lifecycleAction === 'take_offline' ? '处理中' : '系统内停止招聘'}
+            </Button>
+          ) : null}
+          {status === 'filled' || status === 'offline' ? (
+            <Button
+              className="gap-2"
+              color="primary"
+              disableRipple
+              isDisabled={isUpdatingLifecycle || !canReopen}
+              type="button"
+              onClick={() => void handleReopen()}
+            >
+              {lifecycleAction === 'reopen'
+                ? '处理中'
+                : hasRecruitingCapacity
+                  ? '系统内重新开放招聘'
+                  : jobDescription.hiringTarget === null
+                    ? '设置人数并在系统内重新开放'
+                    : '提高人数并在系统内重新开放'}
+            </Button>
+          ) : null}
+          {canStartCandidateScreening ? (
+            <Button
+              className="gap-2"
+              color={isEditable ? 'default' : 'primary'}
+              disableRipple
+              isDisabled={isScreening}
+              type="button"
+              variant={isEditable ? 'bordered' : 'solid'}
+              onClick={() => void handleStartScreening()}
+            >
+              <ListFilter className="h-4 w-4" aria-hidden />
+              {isScreening ? '启动中' : screeningActionLabel}
+            </Button>
+          ) : null}
+          {canViewCandidates ? (
+            <Link
+              className="border-input bg-background text-foreground hover:bg-muted inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors"
+              href={withReturnTarget(
+                `/jd-generator/${jobDescription.id}/candidates`,
+                detailReturnTarget,
+              )}
+            >
+              <ListFilter className="h-4 w-4" aria-hidden />
+              已筛选候选人
+            </Link>
           ) : null}
         </div>
       </div>
@@ -1493,19 +1652,28 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               <select
                 aria-label="发布状态"
                 className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
-                disabled={!isEditable}
+                disabled
                 value={status}
-                onChange={(event) =>
-                  isEditable ? setStatus(event.target.value as JDStatus) : undefined
-                }
               >
                 {JD_STATUSES.map((item) => (
                   <option key={item} value={item}>
-                    {item}
+                    {statusMeta[item].label}
                   </option>
                 ))}
               </select>
             </label>
+
+            <div className="border-border bg-muted/30 rounded-md border px-3 py-3">
+              <div className="text-muted-foreground text-xs">招聘进度</div>
+              <div className="text-foreground mt-1 text-sm font-medium tabular-nums">
+                {formatHiringProgress(jobDescription)}
+              </div>
+            </div>
+            {status === 'published' || status === 'filled' || status === 'offline' ? (
+              <p className="text-muted-foreground text-xs leading-5">
+                停止或重新开放仅更新本系统状态；外部招聘平台职位需单独操作。
+              </p>
+            ) : null}
 
             {latestCreateRun ? (
               <div className="border-border space-y-2 border-t pt-3">
@@ -1588,6 +1756,66 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 value={publishPlatforms}
                 onChange={setPublishPlatforms}
               />
+              <label className="block space-y-2">
+                <FieldLabel>计划招聘人数</FieldLabel>
+                <input
+                  aria-describedby={
+                    canEditHiringTarget &&
+                    (!isHiringTargetValid || (isEditable && !isPublishHiringTargetValid))
+                      ? 'hiring-target-error'
+                      : undefined
+                  }
+                  aria-invalid={
+                    canEditHiringTarget &&
+                    (!isHiringTargetValid || (isEditable && !isPublishHiringTargetValid))
+                  }
+                  aria-label="招聘人数"
+                  className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm tabular-nums"
+                  inputMode="numeric"
+                  max={999}
+                  min={1}
+                  readOnly={!canEditHiringTarget || isUpdatingLifecycle}
+                  step={1}
+                  type="number"
+                  value={hiringTargetInput}
+                  onChange={(event) =>
+                    canEditHiringTarget ? setHiringTargetInput(event.target.value) : undefined
+                  }
+                />
+              </label>
+              {canEditHiringTarget && !isHiringTargetValid ? (
+                <p id="hiring-target-error" className="text-destructive text-xs">
+                  招聘人数需为 1 到 999 的整数。
+                </p>
+              ) : null}
+              {isEditable && isHiringTargetValid && !isPublishHiringTargetValid ? (
+                <p id="hiring-target-error" className="text-destructive text-xs">
+                  计划招聘人数必须大于已入职人数（{jobDescription.onboardedCount} 人）。
+                </p>
+              ) : null}
+              {status === 'published' ? (
+                <Button
+                  className="w-full"
+                  color="primary"
+                  disableRipple
+                  isDisabled={isUpdatingLifecycle || !isHiringTargetValid}
+                  size="sm"
+                  type="button"
+                  variant="bordered"
+                  onClick={() => void handleSetHiringTarget()}
+                >
+                  {lifecycleAction === 'set_hiring_target'
+                    ? '保存中'
+                    : jobDescription.hiringTarget === null
+                      ? '设置招聘人数'
+                      : '保存招聘人数'}
+                </Button>
+              ) : null}
+              {(status === 'filled' || status === 'offline') && !canReopen ? (
+                <p className="text-muted-foreground text-xs">
+                  重新开放前，招聘人数必须大于已入职人数。
+                </p>
+              ) : null}
               <label className="block space-y-2">
                 <FieldLabel>公司名称</FieldLabel>
                 <input
@@ -1701,7 +1929,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
               ) : null}
             </div>
 
-            {canScreenCandidates ? (
+            {canStartCandidateScreening ? (
               <div className="border-border space-y-3 border-t pt-3">
                 <div className="flex items-center gap-2">
                   <ListFilter className="text-muted-foreground h-4 w-4" aria-hidden />

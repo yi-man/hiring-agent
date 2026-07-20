@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
 import { createAndStartJobDescriptionRegenerateRun } from '@/lib/jd/regenerate-run-service';
 import { getJobDescriptionById } from '@/lib/jd/job-description-repo';
-import { parseRegenerateJobDescriptionPayload } from '@/lib/jd/api';
+import { isEditableJobDescriptionStatus, parseRegenerateJobDescriptionPayload } from '@/lib/jd/api';
 import {
   failStaleJobDescriptionRegenerateRuns,
   listJobDescriptionRegenerateRuns,
@@ -72,8 +72,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!current) {
       return NextResponse.json({ error: 'job description not found' }, { status: 404 });
     }
-    if (current.status === 'published') {
-      return conflict('published job descriptions cannot be modified');
+    if (!isEditableJobDescriptionStatus(current.status)) {
+      return conflict(`${current.status} job descriptions cannot be modified`);
     }
 
     const parsed = parseRegenerateJobDescriptionPayload(

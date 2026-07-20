@@ -9,6 +9,8 @@ const sampleJobDescription: JobDescriptionDto = {
   positionDescription: '负责增长业务体验建设',
   salaryRange: null,
   workLocations: [],
+  hiringTarget: 1,
+  onboardedCount: 0,
   tone: 'tech',
   status: 'ready_to_publish',
   content: {

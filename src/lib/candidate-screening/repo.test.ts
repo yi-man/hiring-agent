@@ -1,6 +1,9 @@
 /** @jest-environment node */
 
 import {
+  CandidateActionInProgressError,
+  STALE_CANDIDATE_ACTION_ERROR_MESSAGE,
+  STALE_CANDIDATE_ACTION_TIMEOUT_MS,
   claimCandidateActionLog,
   claimRetryableCollectActionLog,
   createCandidateActionLog,
@@ -17,6 +20,7 @@ import {
   listCandidateScreeningResults,
   replaceCandidateResumeChunks,
   searchCandidateResumeChunks,
+  updateCandidateActionLog,
   updateCandidateInterviewProgress,
   updateCandidateScreeningRun,
   upsertCandidateScreeningResult,
@@ -651,7 +655,7 @@ describe('candidate screening repository', () => {
         scoreDetail: { total: 92 },
         finalScore: 92,
         rank: 1,
-        decisionAction: 'chat',
+        decisionAction: 'skip',
         decisionPriority: 'high',
         decisionReason: 'Strong backend match',
         actionPlan: null,
@@ -708,12 +712,12 @@ describe('candidate screening repository', () => {
         scoreDetail: { total: 55 },
         finalScore: 55,
         rank: 2,
-        decisionAction: 'skip',
+        decisionAction: 'chat',
         decisionPriority: 'low',
         decisionReason: 'Too junior',
         actionPlan: null,
-        actionStatus: 'skipped',
-        interviewStage: 'rejected',
+        actionStatus: 'planned',
+        interviewStage: 'onboarded',
         notes: null,
         createdAt,
         updatedAt,
@@ -1629,6 +1633,115 @@ describe('candidate screening repository', () => {
     expect(call.data).not.toHaveProperty('notes');
   });
 
+  it('falls back to scoring-only fields when a concurrent update reaches a final outcome', async () => {
+    const offered = mockScreeningResult({
+      interviewStage: 'offer',
+      actionStatus: 'success',
+      notes: '等待确认入职',
+    });
+    const onboarded = mockScreeningResult({
+      interviewStage: 'onboarded',
+      actionStatus: 'success',
+      notes: '已确认入职',
+    });
+    prismaMock.candidateScreeningResult.findFirst
+      .mockResolvedValueOnce(offered)
+      .mockResolvedValueOnce(onboarded)
+      .mockResolvedValueOnce({ ...onboarded, finalScore: 88 });
+    prismaMock.candidateScreeningResult.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    await upsertCandidateScreeningResult({
+      userId: 'u1',
+      runId: 'run-2',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      source: 'vector_recall',
+      tags: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      scoreDetail: { skill: 28, domain: 20, ability: 20, risk: 0, llmBonus: 20, total: 88 },
+      finalScore: 88,
+      rank: 2,
+      decisionAction: 'chat',
+      decisionPriority: 'medium',
+      decisionReason: 'Still fits',
+      actionPlan: {
+        action: 'chat',
+        priority: 'medium',
+        message: '继续沟通',
+        reason: 'Still fits',
+      },
+      actionStatus: 'planned',
+      interviewStage: 'to_contact',
+      notes: null,
+    });
+
+    expect(prismaMock.candidateScreeningResult.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: offered.id, userId: 'u1', interviewStage: 'offer' },
+      data: expect.objectContaining({ interviewStage: 'to_contact', actionStatus: 'planned' }),
+    });
+    const fallback = prismaMock.candidateScreeningResult.updateMany.mock.calls[1]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(fallback.data).toEqual(expect.objectContaining({ finalScore: 88 }));
+    expect(fallback.data).not.toHaveProperty('actionPlan');
+    expect(fallback.data).not.toHaveProperty('actionStatus');
+    expect(fallback.data).not.toHaveProperty('interviewStage');
+    expect(fallback.data).not.toHaveProperty('notes');
+  });
+
+  it('does not overwrite a final hiring outcome during a screening refresh', async () => {
+    const existingResult = mockScreeningResult({
+      interviewStage: 'onboarded',
+      actionStatus: 'success',
+      notes: '已于 7 月入职',
+    });
+    prismaMock.candidateScreeningResult.findFirst
+      .mockResolvedValueOnce(existingResult)
+      .mockResolvedValueOnce(existingResult);
+    prismaMock.candidateScreeningResult.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    await upsertCandidateScreeningResult({
+      userId: 'u1',
+      runId: 'run-2',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      source: 'vector_recall',
+      tags: {
+        skills: ['React'],
+        domainKnowledge: [],
+        generalAbility: [],
+        risk: [],
+        activity: [],
+        custom: [],
+      },
+      scoreDetail: { skill: 28, domain: 20, ability: 20, risk: 0, llmBonus: 20, total: 88 },
+      finalScore: 88,
+      rank: 2,
+      decisionAction: 'chat',
+      decisionPriority: 'medium',
+      decisionReason: 'Still fits',
+      actionStatus: 'planned',
+      interviewStage: 'to_contact',
+      notes: null,
+    });
+
+    const call = prismaMock.candidateScreeningResult.updateMany.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(call.data).not.toHaveProperty('actionPlan');
+    expect(call.data).not.toHaveProperty('actionStatus');
+    expect(call.data).not.toHaveProperty('interviewStage');
+    expect(call.data).not.toHaveProperty('notes');
+  });
+
   it('keeps run immutable when refreshing an existing screening result', async () => {
     const existingResult = {
       id: 'result-1',
@@ -1821,9 +1934,8 @@ describe('candidate screening repository', () => {
     expect(prismaMock.candidateScreeningResult.upsert).not.toHaveBeenCalled();
   });
 
-  it('updates interview progress only in user and JD scope', async () => {
-    prismaMock.candidateScreeningResult.updateMany.mockResolvedValueOnce({ count: 1 });
-    prismaMock.candidateScreeningResult.findFirst.mockResolvedValueOnce({
+  it('updates interview progress inside a JD-scoped transaction', async () => {
+    const updated = {
       id: 'result-1',
       userId: 'u1',
       runId: 'run-1',
@@ -1844,24 +1956,399 @@ describe('candidate screening repository', () => {
       notes: 'Reached out',
       createdAt,
       updatedAt,
+    };
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'to_contact' }])
+        .mockResolvedValueOnce([{ id: 'jd-1', status: 'published', hiringTarget: 2 }]),
+      candidateActionLog: { findFirst: jest.fn() },
+      candidateScreeningResult: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValueOnce(updated),
+        count: jest.fn(),
+      },
+      jobDescription: { updateMany: jest.fn() },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    const result = await updateCandidateInterviewProgress({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      interviewStage: 'contacted',
+      expectedInterviewStage: 'to_contact',
+      notes: 'Reached out',
     });
+
+    expect(tx.candidateScreeningResult.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        id: 'result-1',
+        interviewStage: 'to_contact',
+      },
+      data: { interviewStage: 'contacted', notes: 'Reached out' },
+    });
+    expect(tx.candidateScreeningResult.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+    });
+    expect(tx.candidateScreeningResult.count).not.toHaveBeenCalled();
+    expect(tx.jobDescription.updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ interviewStage: 'contacted' }));
+
+    const resultLockSql = tx.$queryRaw.mock.calls[0]?.[0] as { strings?: readonly string[] };
+    const jobLockSql = tx.$queryRaw.mock.calls[1]?.[0] as { strings?: readonly string[] };
+    expect(resultLockSql.strings?.join(' ')).toContain('candidate_screening_results');
+    expect(resultLockSql.strings?.join(' ')).toContain('FOR UPDATE');
+    expect(jobLockSql.strings?.join(' ')).toContain('job_descriptions');
+    expect(jobLockSql.strings?.join(' ')).toContain('FOR UPDATE');
+  });
+
+  it('marks a published JD filled when the onboarded count reaches its hiring target', async () => {
+    const onboardedResult = mockScreeningResult({ interviewStage: 'onboarded' });
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'offer' }])
+        .mockResolvedValueOnce([{ id: 'jd-1', status: 'published', hiringTarget: 2 }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+        findFirst: jest.fn().mockResolvedValueOnce(null),
+      },
+      candidateScreeningResult: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValueOnce(onboardedResult),
+        count: jest.fn().mockResolvedValueOnce(2),
+      },
+      jobDescription: { updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }) },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
 
     await updateCandidateInterviewProgress({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
       candidateId: 'candidate-1',
-      interviewStage: 'contacted',
-      notes: 'Reached out',
+      interviewStage: 'onboarded',
+      expectedInterviewStage: 'offer',
     });
 
-    expect(prismaMock.candidateScreeningResult.updateMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
-      data: { interviewStage: 'contacted', notes: 'Reached out' },
+    expect(tx.candidateScreeningResult.count).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        interviewStage: 'onboarded',
+      },
     });
-    expect(prismaMock.candidateScreeningResult.findFirst).toHaveBeenCalledWith({
-      where: { userId: 'u1', jobDescriptionId: 'jd-1', candidateId: 'candidate-1' },
+    expect(tx.jobDescription.updateMany).toHaveBeenCalledWith({
+      where: { id: 'jd-1', userId: 'u1', status: 'published' },
+      data: { status: 'filled', activePublishBatchId: null },
     });
   });
+
+  it.each(['ready_to_publish', 'publishing', 'offline', 'publish_failed'] as const)(
+    'marks a %s JD filled when onboarding reaches its hiring target',
+    async (status) => {
+      const tx = {
+        $queryRaw: jest
+          .fn()
+          .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'offer' }])
+          .mockResolvedValueOnce([{ id: 'jd-1', status, hiringTarget: 2 }]),
+        candidateActionLog: {
+          updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+          findFirst: jest.fn().mockResolvedValueOnce(null),
+        },
+        candidateScreeningResult: {
+          updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+          findFirst: jest
+            .fn()
+            .mockResolvedValueOnce(mockScreeningResult({ interviewStage: 'onboarded' })),
+          count: jest.fn().mockResolvedValueOnce(2),
+        },
+        jobDescription: { updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }) },
+      };
+      prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+        fn(tx),
+      );
+
+      await updateCandidateInterviewProgress({
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        interviewStage: 'onboarded',
+        expectedInterviewStage: 'offer',
+      });
+
+      expect(tx.jobDescription.updateMany).toHaveBeenCalledWith({
+        where: { id: 'jd-1', userId: 'u1', status },
+        data: { status: 'filled', activePublishBatchId: null },
+      });
+    },
+  );
+
+  it.each([
+    ['has no hiring target', { status: 'published', hiringTarget: null }],
+    ['is archived', { status: 'archived', hiringTarget: 1 }],
+  ])('does not auto-fill a JD that %s', async (_label, job) => {
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'offer' }])
+        .mockResolvedValueOnce([{ id: 'jd-1', ...job }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+        findFirst: jest.fn().mockResolvedValueOnce(null),
+      },
+      candidateScreeningResult: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(mockScreeningResult({ interviewStage: 'onboarded' })),
+        count: jest.fn(),
+      },
+      jobDescription: { updateMany: jest.fn() },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    await updateCandidateInterviewProgress({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      interviewStage: 'onboarded',
+      expectedInterviewStage: 'offer',
+    });
+
+    expect(tx.candidateScreeningResult.count).not.toHaveBeenCalled();
+    expect(tx.jobDescription.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps a published JD open while the onboarded count is below target', async () => {
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'offer' }])
+        .mockResolvedValueOnce([{ id: 'jd-1', status: 'published', hiringTarget: 2 }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+        findFirst: jest.fn().mockResolvedValueOnce(null),
+      },
+      candidateScreeningResult: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(mockScreeningResult({ interviewStage: 'onboarded' })),
+        count: jest.fn().mockResolvedValueOnce(1),
+      },
+      jobDescription: { updateMany: jest.fn() },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    await updateCandidateInterviewProgress({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      interviewStage: 'onboarded',
+      expectedInterviewStage: 'offer',
+    });
+
+    expect(tx.candidateScreeningResult.count).toHaveBeenCalledTimes(1);
+    expect(tx.jobDescription.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen a filled JD when an onboarding result is corrected', async () => {
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'onboarded' }])
+        .mockResolvedValueOnce([{ id: 'jd-1', status: 'filled', hiringTarget: 1 }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+        findFirst: jest.fn().mockResolvedValueOnce(null),
+      },
+      candidateScreeningResult: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(mockScreeningResult({ interviewStage: 'not_joined' })),
+        count: jest.fn(),
+      },
+      jobDescription: { updateMany: jest.fn() },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    await updateCandidateInterviewProgress({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      interviewStage: 'not_joined',
+      expectedInterviewStage: 'onboarded',
+    });
+
+    expect(tx.candidateScreeningResult.count).not.toHaveBeenCalled();
+    expect(tx.jobDescription.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects a final hiring outcome while an external action is running', async () => {
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'offer' }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+        findFirst: jest.fn().mockResolvedValueOnce({ id: 'action-1' }),
+      },
+      candidateScreeningResult: {
+        updateMany: jest.fn(),
+        findFirst: jest.fn(),
+        count: jest.fn(),
+      },
+      jobDescription: { updateMany: jest.fn() },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    await expect(
+      updateCandidateInterviewProgress({
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        interviewStage: 'onboarded',
+        expectedInterviewStage: 'offer',
+      }),
+    ).rejects.toBeInstanceOf(CandidateActionInProgressError);
+
+    expect(tx.candidateActionLog.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        screeningResultId: 'result-1',
+        status: 'running',
+      },
+      select: { id: true },
+    });
+    expect(tx.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        screeningResultId: 'result-1',
+        status: 'running',
+        updatedAt: { lt: expect.any(Date) },
+      },
+      data: {
+        status: 'failed',
+        errorMessage: STALE_CANDIDATE_ACTION_ERROR_MESSAGE,
+      },
+    });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.candidateScreeningResult.updateMany).not.toHaveBeenCalled();
+    expect(tx.jobDescription.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('recovers a stale running external action before applying a final hiring outcome', async () => {
+    const now = new Date('2026-07-20T12:00:00.000Z');
+    jest.useFakeTimers().setSystemTime(now);
+    const updated = mockScreeningResult({ interviewStage: 'onboarded' });
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'offer' }])
+        .mockResolvedValueOnce([{ id: 'jd-1', status: 'published', hiringTarget: 2 }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValueOnce(null),
+      },
+      candidateScreeningResult: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValueOnce(updated),
+        count: jest.fn().mockResolvedValueOnce(1),
+      },
+      jobDescription: { updateMany: jest.fn() },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    try {
+      await expect(
+        updateCandidateInterviewProgress({
+          userId: 'u1',
+          jobDescriptionId: 'jd-1',
+          candidateId: 'candidate-1',
+          interviewStage: 'onboarded',
+          expectedInterviewStage: 'offer',
+        }),
+      ).resolves.toEqual(expect.objectContaining({ interviewStage: 'onboarded' }));
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(tx.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        screeningResultId: 'result-1',
+        status: 'running',
+        updatedAt: {
+          lt: new Date(now.getTime() - STALE_CANDIDATE_ACTION_TIMEOUT_MS),
+        },
+      },
+      data: {
+        status: 'failed',
+        errorMessage: STALE_CANDIDATE_ACTION_ERROR_MESSAGE,
+      },
+    });
+    expect(tx.candidateActionLog.findFirst).toHaveBeenCalledTimes(1);
+    expect(tx.candidateScreeningResult.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['success', 'failed'] as const)(
+    'allows a final hiring outcome after an external action is %s',
+    async (actionStatus) => {
+      const updated = mockScreeningResult({ interviewStage: 'onboarded' });
+      const tx = {
+        $queryRaw: jest
+          .fn()
+          .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'offer' }])
+          .mockResolvedValueOnce([{ id: 'jd-1', status: 'published', hiringTarget: 2 }]),
+        candidateActionLog: {
+          updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+          findFirst: jest.fn(({ where }: { where: { status: string } }) =>
+            where.status === actionStatus ? { id: 'action-1' } : null,
+          ),
+        },
+        candidateScreeningResult: {
+          updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+          findFirst: jest.fn().mockResolvedValueOnce(updated),
+          count: jest.fn().mockResolvedValueOnce(1),
+        },
+        jobDescription: { updateMany: jest.fn() },
+      };
+      prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+        fn(tx),
+      );
+
+      const result = await updateCandidateInterviewProgress({
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        interviewStage: 'onboarded',
+        expectedInterviewStage: 'offer',
+      });
+
+      expect(result).toEqual(expect.objectContaining({ interviewStage: 'onboarded' }));
+      expect(tx.candidateActionLog.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ status: 'running' }) }),
+      );
+      expect(tx.candidateScreeningResult.updateMany).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('creates action logs with idempotency key', async () => {
     prismaMock.candidateActionLog.upsert.mockResolvedValueOnce({
@@ -1914,9 +2401,66 @@ describe('candidate screening repository', () => {
     });
   });
 
-  it('claims a planned action log atomically before execution', async () => {
+  it('updates an action log only from the expected status', async () => {
+    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      updateCandidateActionLog({
+        userId: 'u1',
+        id: 'action-1',
+        expectedStatus: 'planned',
+        status: 'skipped',
+        errorMessage: 'candidate interview stage changed before automatic reply',
+      }),
+    ).resolves.toBeNull();
+
+    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: { id: 'action-1', userId: 'u1', status: 'planned' },
+      data: {
+        status: 'skipped',
+        errorMessage: 'candidate interview stage changed before automatic reply',
+      },
+    });
+    expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('returns the updated action log after an expected-status transition succeeds', async () => {
     prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 1 });
     prismaMock.candidateActionLog.findFirst.mockResolvedValueOnce({
+      id: 'action-1',
+      userId: 'u1',
+      runId: 'run-1',
+      screeningResultId: 'result-1',
+      candidateId: 'candidate-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      mode: 'execution',
+      action: 'chat',
+      message: 'Hi',
+      status: 'skipped',
+      idempotencyKey: 'idem-1',
+      browserTrace: null,
+      errorMessage: 'candidate interview stage changed before automatic reply',
+      createdAt,
+      updatedAt,
+    });
+
+    const updated = await updateCandidateActionLog({
+      userId: 'u1',
+      id: 'action-1',
+      expectedStatus: 'planned',
+      status: 'skipped',
+      errorMessage: 'candidate interview stage changed before automatic reply',
+    });
+
+    expect(prismaMock.candidateActionLog.findFirst).toHaveBeenCalledWith({
+      where: { id: 'action-1', userId: 'u1' },
+    });
+    expect(updated?.status).toBe('skipped');
+  });
+
+  it('claims a planned action log atomically before execution', async () => {
+    const claimed = {
       id: 'action-1',
       userId: 'u1',
       runId: 'run-1',
@@ -1933,32 +2477,94 @@ describe('candidate screening repository', () => {
       errorMessage: null,
       createdAt,
       updatedAt,
+    };
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'to_contact' }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValueOnce(claimed),
+      },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    const result = await claimCandidateActionLog({
+      userId: 'u1',
+      id: 'action-1',
+      expectedInterviewStage: 'to_contact',
     });
 
-    const result = await claimCandidateActionLog({ userId: 'u1', id: 'action-1' });
-
-    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
-      where: { id: 'action-1', userId: 'u1', status: 'planned' },
+    expect(tx.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'action-1',
+        userId: 'u1',
+        screeningResultId: 'result-1',
+        status: 'planned',
+      },
       data: { status: 'running', browserTrace: expect.anything(), errorMessage: null },
     });
-    expect(prismaMock.candidateActionLog.findFirst).toHaveBeenCalledWith({
+    expect(tx.candidateActionLog.findFirst).toHaveBeenCalledWith({
       where: { id: 'action-1', userId: 'u1' },
     });
     expect(result?.status).toBe('running');
+
+    const lockSql = tx.$queryRaw.mock.calls[0]?.[0] as { strings?: readonly string[] };
+    expect(lockSql.strings?.join(' ')).toContain('candidate_screening_results');
+    expect(lockSql.strings?.join(' ')).toContain('FOR UPDATE OF result');
   });
 
   it('returns null when a planned action log cannot be claimed', async () => {
-    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 0 });
+    const tx = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'to_contact' }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 0 }),
+        findFirst: jest.fn(),
+      },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
 
-    const result = await claimCandidateActionLog({ userId: 'u1', id: 'action-1' });
+    const result = await claimCandidateActionLog({
+      userId: 'u1',
+      id: 'action-1',
+      expectedInterviewStage: 'to_contact',
+    });
 
     expect(result).toBeNull();
-    expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
+    expect(tx.candidateActionLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('returns null when a final outcome wins the race before an action claim', async () => {
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'onboarded' }]),
+      candidateActionLog: {
+        updateMany: jest.fn(),
+        findFirst: jest.fn(),
+      },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    const result = await claimCandidateActionLog({
+      userId: 'u1',
+      id: 'action-1',
+      expectedInterviewStage: 'offer',
+    });
+
+    expect(result).toBeNull();
+    expect(tx.candidateActionLog.updateMany).not.toHaveBeenCalled();
+    expect(tx.candidateActionLog.findFirst).not.toHaveBeenCalled();
   });
 
   it('claims only a failed collect action when resuming post-contact collection', async () => {
-    prismaMock.candidateActionLog.updateMany.mockResolvedValueOnce({ count: 1 });
-    prismaMock.candidateActionLog.findFirst.mockResolvedValueOnce({
+    const claimed = {
       id: 'action-collect-1',
       userId: 'u1',
       runId: 'run-1',
@@ -1975,14 +2581,29 @@ describe('candidate screening repository', () => {
       errorMessage: null,
       createdAt,
       updatedAt,
+    };
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValueOnce([{ id: 'result-1', interviewStage: 'contacted' }]),
+      candidateActionLog: {
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findFirst: jest.fn().mockResolvedValueOnce(claimed),
+      },
+    };
+    prismaMock.$transaction.mockImplementationOnce(async (fn: (client: typeof tx) => unknown) =>
+      fn(tx),
+    );
+
+    const result = await claimRetryableCollectActionLog({
+      userId: 'u1',
+      id: 'action-collect-1',
+      expectedInterviewStage: 'contacted',
     });
 
-    const result = await claimRetryableCollectActionLog({ userId: 'u1', id: 'action-collect-1' });
-
-    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
+    expect(tx.candidateActionLog.updateMany).toHaveBeenCalledWith({
       where: {
         id: 'action-collect-1',
         userId: 'u1',
+        screeningResultId: 'result-1',
         action: 'collect',
         status: 'failed',
       },

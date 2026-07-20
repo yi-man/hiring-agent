@@ -90,6 +90,7 @@ jest.mock('@/lib/candidate-screening/service', () => ({
 }));
 
 jest.mock('@/lib/candidate-screening/repo', () => ({
+  CandidateActionInProgressError: class CandidateActionInProgressError extends Error {},
   listCandidateScreeningRuns: (...args: unknown[]) => listCandidateScreeningRunsMock(...args),
   getCandidateScreeningRun: (...args: unknown[]) => getCandidateScreeningRunMock(...args),
   listCandidateScreeningRunEvents: (...args: unknown[]) =>
@@ -1190,8 +1191,59 @@ describe('candidate screening API routes', () => {
       jobDescriptionId: 'jd-1',
       candidateId: 'cand-1',
       interviewStage: 'contacted',
+      expectedInterviewStage: sampleCandidateDetail.interviewStage,
       notes: 'Invitation sent',
     });
+  });
+
+  it('returns a conflict when candidate progress changes during an update', async () => {
+    const offeredCandidate = { ...sampleCandidateDetail, interviewStage: 'offer' as const };
+    getCandidateScreeningDetailMock
+      .mockResolvedValueOnce(offeredCandidate)
+      .mockResolvedValueOnce({ ...offeredCandidate, interviewStage: 'onboarded' });
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+    updateCandidateInterviewProgressMock.mockResolvedValueOnce(null);
+
+    const response = await updateJdCandidate(
+      jsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', {
+        interviewStage: 'onboarded',
+      }),
+      { params: params({ id: 'jd-1', candidateId: 'cand-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('候选人进度已变化，请刷新后重试');
+    expect(updateCandidateInterviewProgressMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+      interviewStage: 'onboarded',
+      expectedInterviewStage: 'offer',
+    });
+  });
+
+  it('returns a conflict when a running external action blocks a final hiring outcome', async () => {
+    const offeredCandidate = { ...sampleCandidateDetail, interviewStage: 'offer' as const };
+    const { CandidateActionInProgressError } = jest.requireMock(
+      '@/lib/candidate-screening/repo',
+    ) as { CandidateActionInProgressError: new () => Error };
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(offeredCandidate);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+    updateCandidateInterviewProgressMock.mockRejectedValueOnce(
+      new CandidateActionInProgressError(),
+    );
+
+    const response = await updateJdCandidate(
+      jsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', {
+        interviewStage: 'onboarded',
+      }),
+      { params: params({ id: 'jd-1', candidateId: 'cand-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('候选人外发动作正在执行，请等待完成后重试');
   });
 
   it('rejects an invalid interview stage jump', async () => {

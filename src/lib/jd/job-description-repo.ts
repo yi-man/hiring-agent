@@ -1,9 +1,11 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { getJobDescriptionPublishConflict } from '@/lib/jd-publishing/publish-eligibility';
 import type {
   EvaluationResult,
   JD,
   JDAgentResponse,
+  JobDescriptionLifecycleRequest,
   JDStatus,
   JDTone,
   JobDescriptionDto,
@@ -17,6 +19,8 @@ type JobDescriptionRecord = {
   positionDescription: string;
   salaryRange: string | null;
   workLocations: unknown | null;
+  hiringTarget: number | null;
+  activePublishBatchId: string | null;
   tone: string;
   status: string;
   content: unknown;
@@ -24,7 +28,21 @@ type JobDescriptionRecord = {
   generationMeta: unknown | null;
   createdAt: Date;
   updatedAt: Date;
+  _count?: { candidateScreeningResults: number };
 };
+
+type JobDescriptionDbClient = Pick<
+  Prisma.TransactionClient,
+  'jobDescription' | 'jobDescriptionPublishRun'
+>;
+
+const onboardedCountInclude = {
+  _count: {
+    select: {
+      candidateScreeningResults: { where: { interviewStage: 'onboarded' } },
+    },
+  },
+} satisfies Prisma.JobDescriptionInclude;
 
 type CreateJobDescriptionParams = {
   userId: string;
@@ -33,6 +51,7 @@ type CreateJobDescriptionParams = {
   positionDescription: string;
   salaryRange?: string | null;
   workLocations?: string[] | null;
+  hiringTarget?: number | null;
   tone: JDTone;
   status?: JDStatus;
   content: JD;
@@ -48,6 +67,7 @@ export type UpdateJobDescriptionParams = {
   positionDescription?: string;
   salaryRange?: string | null;
   workLocations?: string[];
+  hiringTarget?: number;
   tone?: JDTone;
   status?: JDStatus;
   content?: JD;
@@ -80,6 +100,8 @@ function mapRow(row: JobDescriptionRecord): JobDescriptionDto {
     positionDescription: row.positionDescription,
     salaryRange: row.salaryRange,
     workLocations: mapWorkLocations(row.workLocations),
+    hiringTarget: row.hiringTarget ?? null,
+    onboardedCount: row._count?.candidateScreeningResults ?? 0,
     tone: row.tone as JDTone,
     status: row.status as JDStatus,
     content: row.content as JD,
@@ -104,6 +126,7 @@ export async function createJobDescription(
         params.workLocations === undefined || params.workLocations === null
           ? Prisma.JsonNull
           : toJson(params.workLocations),
+      hiringTarget: params.hiringTarget ?? null,
       tone: params.tone,
       status: params.status ?? 'created',
       content: toJson(params.content),
@@ -125,6 +148,7 @@ export async function listJobDescriptionsPaginated(params: {
     orderBy: { updatedAt: 'desc' },
     skip: params.offset,
     take: params.limit,
+    include: onboardedCountInclude,
   });
   return rows.map(mapRow);
 }
@@ -139,10 +163,27 @@ export async function getJobDescriptionById(
   userId: string,
   id: string,
 ): Promise<JobDescriptionDto | null> {
-  const row = await prisma.jobDescription.findFirst({
-    where: { id, userId },
-  });
+  return getJobDescriptionByIdWithClient(prisma, userId, id);
+}
+
+async function getJobDescriptionByIdWithClient(
+  client: JobDescriptionDbClient,
+  userId: string,
+  id: string,
+): Promise<JobDescriptionDto | null> {
+  const row = await getJobDescriptionRecordWithClient(client, userId, id);
   return row ? mapRow(row) : null;
+}
+
+async function getJobDescriptionRecordWithClient(
+  client: JobDescriptionDbClient,
+  userId: string,
+  id: string,
+): Promise<JobDescriptionRecord | null> {
+  return client.jobDescription.findFirst({
+    where: { id, userId },
+    include: onboardedCountInclude,
+  });
 }
 
 function buildUpdateData(
@@ -156,6 +197,7 @@ function buildUpdateData(
   }
   if (params.salaryRange !== undefined) data.salaryRange = params.salaryRange;
   if (params.workLocations !== undefined) data.workLocations = toJson(params.workLocations);
+  if (params.hiringTarget !== undefined) data.hiringTarget = params.hiringTarget;
   if (params.tone !== undefined) data.tone = params.tone;
   if (params.status !== undefined) data.status = params.status;
   if (params.content !== undefined) data.content = toJson(params.content);
@@ -183,11 +225,267 @@ export async function updateMutableJobDescription(
   params: UpdateJobDescriptionParams,
 ): Promise<JobDescriptionDto | null> {
   const result = await prisma.jobDescription.updateMany({
-    where: { id: params.id, userId: params.userId, status: { not: 'published' } },
+    where: {
+      id: params.id,
+      userId: params.userId,
+      status: { in: ['created', 'ready_to_publish', 'publish_failed'] },
+    },
     data: buildUpdateData(params),
   });
   if (result.count === 0) {
     return null;
   }
   return getJobDescriptionById(params.userId, params.id);
+}
+
+export type UpdateJobDescriptionLifecycleParams = {
+  userId: string;
+  id: string;
+  expectedStatus: JDStatus;
+  status: JDStatus;
+  hiringTarget?: number;
+  activePublishBatchId?: string | null;
+};
+
+async function updateJobDescriptionLifecycleWithClient(
+  client: JobDescriptionDbClient,
+  params: UpdateJobDescriptionLifecycleParams,
+): Promise<JobDescriptionDto | null> {
+  const data: Prisma.JobDescriptionUpdateManyMutationInput = { status: params.status };
+  if (params.hiringTarget !== undefined) {
+    data.hiringTarget = params.hiringTarget;
+  }
+  if (params.activePublishBatchId !== undefined) {
+    data.activePublishBatchId = params.activePublishBatchId;
+  }
+  const result = await client.jobDescription.updateMany({
+    where: { id: params.id, userId: params.userId, status: params.expectedStatus },
+    data,
+  });
+  if (result.count === 0) {
+    return null;
+  }
+  return getJobDescriptionByIdWithClient(client, params.userId, params.id);
+}
+
+export async function updateJobDescriptionLifecycle(
+  params: UpdateJobDescriptionLifecycleParams,
+): Promise<JobDescriptionDto | null> {
+  return updateJobDescriptionLifecycleWithClient(prisma, params);
+}
+
+export type ClaimJobDescriptionForPublishingResult =
+  | { ok: true; jobDescription: JobDescriptionDto }
+  | {
+      ok: false;
+      reason: 'not_found' | 'conflict' | 'concurrent_update';
+      conflict?: string;
+      jobDescription?: JobDescriptionDto;
+    };
+
+export async function claimJobDescriptionForPublishing(params: {
+  userId: string;
+  id: string;
+  batchId: string;
+}): Promise<ClaimJobDescriptionForPublishingResult> {
+  return prisma.$transaction(async (tx): Promise<ClaimJobDescriptionForPublishingResult> => {
+    await tx.$queryRaw`SELECT "id" FROM "job_descriptions" WHERE "id" = ${params.id} AND "user_id" = ${params.userId} FOR UPDATE`;
+    const record = await getJobDescriptionRecordWithClient(tx, params.userId, params.id);
+    if (!record) return { ok: false, reason: 'not_found' };
+
+    const current = mapRow(record);
+    const conflict = getJobDescriptionPublishConflict(current);
+    if (conflict) {
+      if (conflict !== 'hiring target has already been reached') {
+        return { ok: false, reason: 'conflict', conflict, jobDescription: current };
+      }
+
+      const filled = await updateJobDescriptionLifecycleWithClient(tx, {
+        userId: params.userId,
+        id: params.id,
+        expectedStatus: current.status,
+        status: 'filled',
+        activePublishBatchId: null,
+      });
+      if (!filled) return { ok: false, reason: 'concurrent_update' };
+      return { ok: false, reason: 'conflict', conflict, jobDescription: filled };
+    }
+
+    const claimed = await updateJobDescriptionLifecycleWithClient(tx, {
+      userId: params.userId,
+      id: params.id,
+      expectedStatus: current.status,
+      status: 'publishing',
+      activePublishBatchId: params.batchId,
+    });
+    return claimed
+      ? { ok: true, jobDescription: claimed }
+      : { ok: false, reason: 'concurrent_update' };
+  });
+}
+
+export type ApplyJobDescriptionLifecycleResult =
+  | { ok: true; changed: boolean; jobDescription: JobDescriptionDto }
+  | {
+      ok: false;
+      reason:
+        | 'not_found'
+        | 'invalid_transition'
+        | 'hiring_target_required'
+        | 'hiring_target_reached'
+        | 'concurrent_update';
+    };
+
+export async function applyJobDescriptionLifecycle(params: {
+  userId: string;
+  id: string;
+  request: JobDescriptionLifecycleRequest;
+}): Promise<ApplyJobDescriptionLifecycleResult> {
+  return prisma.$transaction(async (tx): Promise<ApplyJobDescriptionLifecycleResult> => {
+    await tx.$queryRaw`SELECT "id" FROM "job_descriptions" WHERE "id" = ${params.id} AND "user_id" = ${params.userId} FOR UPDATE`;
+    const record = await getJobDescriptionRecordWithClient(tx, params.userId, params.id);
+    if (!record) {
+      return { ok: false, reason: 'not_found' };
+    }
+    const current = mapRow(record);
+
+    let status = current.status;
+    let hiringTarget: number | undefined;
+    let activePublishBatchId: string | null | undefined;
+
+    if (params.request.action === 'take_offline') {
+      activePublishBatchId = null;
+      if (current.status === 'offline' && record.activePublishBatchId === null) {
+        return { ok: true, changed: false, jobDescription: current };
+      }
+      if (
+        current.status !== 'published' &&
+        current.status !== 'filled' &&
+        current.status !== 'offline'
+      ) {
+        return { ok: false, reason: 'invalid_transition' };
+      }
+      status = 'offline';
+    } else if (params.request.action === 'set_hiring_target') {
+      if (!['published', 'filled', 'offline'].includes(current.status)) {
+        return { ok: false, reason: 'invalid_transition' };
+      }
+      hiringTarget = params.request.hiringTarget;
+      if (current.status === 'published' && current.onboardedCount >= hiringTarget) {
+        status = 'filled';
+        activePublishBatchId = null;
+      }
+    } else {
+      activePublishBatchId = null;
+      if (!['published', 'filled', 'offline'].includes(current.status)) {
+        return { ok: false, reason: 'invalid_transition' };
+      }
+      const nextHiringTarget = params.request.hiringTarget ?? current.hiringTarget;
+      if (nextHiringTarget === null) {
+        return { ok: false, reason: 'hiring_target_required' };
+      }
+      if (current.onboardedCount >= nextHiringTarget) {
+        return { ok: false, reason: 'hiring_target_reached' };
+      }
+      if (
+        current.status === 'published' &&
+        nextHiringTarget === current.hiringTarget &&
+        record.activePublishBatchId === null
+      ) {
+        return { ok: true, changed: false, jobDescription: current };
+      }
+      status = 'published';
+      hiringTarget = nextHiringTarget;
+    }
+
+    const updated = await updateJobDescriptionLifecycleWithClient(tx, {
+      userId: params.userId,
+      id: params.id,
+      expectedStatus: current.status,
+      status,
+      ...(hiringTarget === undefined ? {} : { hiringTarget }),
+      ...(activePublishBatchId === undefined ? {} : { activePublishBatchId }),
+    });
+    if (!updated) {
+      return { ok: false, reason: 'concurrent_update' };
+    }
+    return { ok: true, changed: true, jobDescription: updated };
+  });
+}
+
+export async function reconcileJobDescriptionPublishResult(params: {
+  userId: string;
+  id: string;
+  batchId: string;
+  mode: 'direct' | 'batch';
+  result: 'success' | 'failed';
+}): Promise<JobDescriptionDto | null> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "job_descriptions" WHERE "id" = ${params.id} AND "user_id" = ${params.userId} FOR UPDATE`;
+    const record = await getJobDescriptionRecordWithClient(tx, params.userId, params.id);
+    if (!record) return null;
+    const current = mapRow(record);
+
+    if (record.activePublishBatchId !== params.batchId) return current;
+
+    if (
+      current.status === 'filled' ||
+      current.status === 'offline' ||
+      current.status === 'archived'
+    ) {
+      return (
+        (await updateJobDescriptionLifecycleWithClient(tx, {
+          userId: params.userId,
+          id: params.id,
+          expectedStatus: current.status,
+          status: current.status,
+          activePublishBatchId: null,
+        })) ?? current
+      );
+    }
+
+    let result = params.result;
+    if (params.mode === 'batch') {
+      const runs = await tx.jobDescriptionPublishRun.findMany({
+        where: {
+          userId: params.userId,
+          jobDescriptionId: params.id,
+          batchId: params.batchId,
+        },
+        select: { status: true },
+      });
+      if (runs.some((run) => run.status === 'success')) {
+        result = 'success';
+      } else if (runs.some((run) => run.status === 'pending' || run.status === 'running')) {
+        if (current.status === 'publishing') return current;
+        return (
+          (await updateJobDescriptionLifecycleWithClient(tx, {
+            userId: params.userId,
+            id: params.id,
+            expectedStatus: current.status,
+            status: 'publishing',
+            activePublishBatchId: params.batchId,
+          })) ?? current
+        );
+      } else if (runs.length > 0) {
+        result = 'failed';
+      }
+    }
+
+    const status: JDStatus =
+      result === 'failed'
+        ? 'publish_failed'
+        : current.hiringTarget !== null && current.onboardedCount >= current.hiringTarget
+          ? 'filled'
+          : 'published';
+
+    const updated = await updateJobDescriptionLifecycleWithClient(tx, {
+      userId: params.userId,
+      id: params.id,
+      expectedStatus: current.status,
+      status,
+      activePublishBatchId: null,
+    });
+    return updated ?? getJobDescriptionByIdWithClient(tx, params.userId, params.id);
+  });
 }

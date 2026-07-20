@@ -1,6 +1,7 @@
 import type {
   CreateJobDescriptionRequest,
   JDStatus,
+  JobDescriptionLifecycleRequest,
   JobDescriptionDto,
   RegenerateJobDescriptionRequest,
   UpdateJobDescriptionRequest,
@@ -148,6 +149,22 @@ export async function updateJobDescriptionResource(
   const data = await readJson<{ jobDescription?: JobDescriptionDto }>(response);
   if (!response.ok || !data.jobDescription) {
     throw new Error(data.error || '保存 JD 失败');
+  }
+  return data.jobDescription;
+}
+
+export async function updateJobDescriptionLifecycle(
+  id: string,
+  payload: JobDescriptionLifecycleRequest,
+): Promise<JobDescriptionDto> {
+  const response = await fetch(`/api/jd/${id}/lifecycle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson<{ jobDescription?: JobDescriptionDto }>(response);
+  if (!response.ok || !data.jobDescription) {
+    throw new Error(data.error || '更新 JD 招聘状态失败');
   }
   return data.jobDescription;
 }

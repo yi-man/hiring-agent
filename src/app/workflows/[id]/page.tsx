@@ -13,6 +13,7 @@ import {
 import { SignInButton } from '@/components/auth/sign-in-button';
 import { MermaidDiagram } from '@/components/workflows/mermaid-diagram';
 import { getServerAuthSession } from '@/lib/auth/session';
+import { getRecruitmentPlatformLabel } from '@/lib/recruitment-platforms';
 import { getPublishedWorkflowDetail } from '@/lib/workflows/published-workflows';
 import type { PublishedWorkflowSummary } from '@/lib/workflows/published-workflows';
 import { buildWorkflowFlow, type WorkflowFlow } from '@/lib/workflows/flow';
@@ -42,14 +43,50 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-function readNumberMeta(workflow: PublishedWorkflowSummary, key: string): number | null {
-  const value = workflow.meta?.[key];
-  return typeof value === 'number' ? value : null;
+function formatSuccessRate(workflow: PublishedWorkflowSummary): string {
+  const rate = workflow.successRate;
+  return rate === null ? '暂无' : `${Math.round(rate * 100)}%`;
 }
 
-function formatSuccessRate(workflow: PublishedWorkflowSummary): string {
-  const rate = readNumberMeta(workflow, 'success_rate');
-  return rate === null ? '暂无' : `${Math.round(rate * 100)}%`;
+type WorkflowStatus = 'active' | 'pending' | 'invalid' | 'historic';
+
+const WORKFLOW_STATUS_PRESENTATION: Record<WorkflowStatus, { label: string; className: string }> = {
+  active: {
+    label: '使用中',
+    className:
+      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200',
+  },
+  pending: {
+    label: '待验证',
+    className:
+      'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200',
+  },
+  invalid: {
+    label: '已失效',
+    className:
+      'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200',
+  },
+  historic: {
+    label: '旧版本',
+    className: 'border-border bg-muted text-muted-foreground',
+  },
+};
+
+function getWorkflowStatus(workflow: PublishedWorkflowSummary): WorkflowStatus {
+  if (!workflow.isActive) return 'historic';
+  if (workflow.successRate === null) return 'pending';
+  return workflow.successRate === 0 ? 'invalid' : 'active';
+}
+
+function WorkflowStatusBadge({ workflow }: { workflow: PublishedWorkflowSummary }) {
+  const presentation = WORKFLOW_STATUS_PRESENTATION[getWorkflowStatus(workflow)];
+  return (
+    <span
+      className={`rounded-full border px-2 py-0.5 text-xs font-medium ${presentation.className}`}
+    >
+      {presentation.label}
+    </span>
+  );
 }
 
 function JsonBlock({ value }: { value: unknown }) {
@@ -207,15 +244,7 @@ function VersionHistory({
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-semibold">v{version.version}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs ${
-                      version.isActive
-                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200'
-                        : 'bg-muted text-muted-foreground'
-                    }`}
-                  >
-                    {version.isActive ? '使用中' : '旧版本'}
-                  </span>
+                  <WorkflowStatusBadge workflow={version} />
                 </div>
                 <div className="text-muted-foreground mt-1 text-xs">
                   {version.stepCount} steps · {formatDate(version.updatedAt)}
@@ -261,7 +290,7 @@ export default async function WorkflowDetailPage({
 
   const { workflow, versions } = detail;
   const flow = buildWorkflowFlow(workflow.steps);
-  const usageCount = readNumberMeta(workflow, 'usage_count');
+  const platformLabel = getRecruitmentPlatformLabel(workflow.platform);
   const resolvedSearchParams = toUrlSearchParams((await searchParams) ?? {});
   const optionalReturnTarget = getOptionalReturnTarget(resolvedSearchParams);
   const returnTarget = getReturnTarget(resolvedSearchParams, {
@@ -287,16 +316,12 @@ export default async function WorkflowDetailPage({
                 <GitBranch className="h-4 w-4" aria-hidden="true" />
               </span>
               <h1 className="text-foreground text-2xl font-semibold tracking-normal">
-                {workflow.name}
+                {workflow.name} · {platformLabel}
               </h1>
               <span className="border-border text-muted-foreground rounded-full border px-2 py-0.5 text-xs font-medium">
                 v{workflow.version}
               </span>
-              {workflow.isActive ? (
-                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-                  使用中
-                </span>
-              ) : null}
+              {workflow.isActive ? <WorkflowStatusBadge workflow={workflow} /> : null}
             </div>
             <p className="text-muted-foreground max-w-3xl text-sm leading-6">
               {workflow.description}
@@ -310,7 +335,11 @@ export default async function WorkflowDetailPage({
               className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
               aria-label="Workflow 指标"
             >
-              <WorkflowMetric icon={GitBranch} label="平台" value={workflow.platform} />
+              <WorkflowMetric
+                icon={GitBranch}
+                label="平台"
+                value={`${platformLabel}（${workflow.platform}）`}
+              />
               <WorkflowMetric icon={Network} label="步骤数" value={`${workflow.stepCount} steps`} />
               <WorkflowMetric
                 icon={CheckCircle2}
@@ -320,7 +349,7 @@ export default async function WorkflowDetailPage({
               <WorkflowMetric
                 icon={CircleDot}
                 label="使用次数"
-                value={usageCount === null ? '暂无' : `${usageCount} 次`}
+                value={`${workflow.usageCount} 次`}
               />
             </section>
 

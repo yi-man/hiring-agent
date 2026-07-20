@@ -254,6 +254,7 @@ describe('JD resource routes', () => {
     getJobDescriptionByIdMock.mockResolvedValueOnce({
       id: 'jd-1',
       status: 'created',
+      hiringTarget: null,
       content: sampleJd,
     });
     updateMutableJobDescriptionMock.mockResolvedValueOnce({
@@ -266,6 +267,7 @@ describe('JD resource routes', () => {
       body: JSON.stringify({
         content: { ...sampleJd, summary: '手动调整后的 JD' },
         status: 'ready_to_publish',
+        hiringTarget: 2,
       }),
     });
 
@@ -279,10 +281,78 @@ describe('JD resource routes', () => {
         userId: 'u1',
         id: 'jd-1',
         status: 'ready_to_publish',
+        hiringTarget: 2,
         content: { ...sampleJd, summary: '手动调整后的 JD' },
       }),
     );
   });
+
+  it('requires a hiring target before marking a JD ready to publish', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'created',
+      hiringTarget: null,
+      content: sampleJd,
+    });
+
+    const response = await patchJd(
+      new Request('http://localhost/api/jd/jd-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'ready_to_publish' }),
+      }),
+      { params: Promise.resolve({ id: 'jd-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('hiringTarget is required before ready_to_publish');
+    expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects publication lifecycle statuses through the generic PATCH route', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'created',
+      hiringTarget: null,
+      content: sampleJd,
+    });
+
+    const response = await patchJd(
+      new Request('http://localhost/api/jd/jd-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'published', hiringTarget: 1 }),
+      }),
+      { params: Promise.resolve({ id: 'jd-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('status can only be set to ready_to_publish');
+    expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['publishing', 'archived'] as const)(
+    'rejects generic PATCH updates for %s JDs',
+    async (status) => {
+      getJobDescriptionByIdMock.mockResolvedValueOnce({ id: 'jd-1', status, content: sampleJd });
+
+      const response = await patchJd(
+        new Request('http://localhost/api/jd/jd-1', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: sampleJd }),
+        }),
+        { params: Promise.resolve({ id: 'jd-1' }) },
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toBe(`${status} job descriptions cannot be modified`);
+      expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects PATCH updates for published JDs', async () => {
     getJobDescriptionByIdMock.mockResolvedValueOnce({
@@ -304,6 +374,28 @@ describe('JD resource routes', () => {
     expect(response.status).toBe(409);
     expect(body.error).toBe('published job descriptions cannot be modified');
     expect(updateJobDescriptionMock).not.toHaveBeenCalled();
+    expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['filled', 'offline'] as const)('rejects PATCH updates for %s JDs', async (status) => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status,
+      content: sampleJd,
+    });
+    const request = new Request('http://localhost/api/jd/jd-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { ...sampleJd, summary: '不应允许修改' },
+      }),
+    });
+
+    const response = await patchJd(request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe(`${status} job descriptions cannot be modified`);
     expect(updateMutableJobDescriptionMock).not.toHaveBeenCalled();
   });
 

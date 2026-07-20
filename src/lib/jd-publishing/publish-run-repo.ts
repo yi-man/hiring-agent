@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { reconcileJobDescriptionPublishResult } from '@/lib/jd/job-description-repo';
 
 export type JobDescriptionPublishRunStatus = 'pending' | 'running' | 'success' | 'failed';
 export type JobDescriptionPublishRunStage = 'queued' | 'publishing' | 'completed';
@@ -9,6 +10,7 @@ type PublishRunRecord = {
   id: string;
   userId: string;
   jobDescriptionId: string;
+  batchId: string;
   platform: string;
   status: string;
   currentStage: string | null;
@@ -36,6 +38,7 @@ export type JobDescriptionPublishRunDto = {
   id: string;
   userId: string;
   jobDescriptionId: string;
+  batchId: string;
   platform: string;
   status: JobDescriptionPublishRunStatus;
   currentStage: JobDescriptionPublishRunStage | null;
@@ -62,6 +65,7 @@ export type JobDescriptionPublishRunEventDto = {
 export type CreatePublishRunParams = {
   userId: string;
   jobDescriptionId: string;
+  batchId: string;
   platform: string;
 };
 
@@ -115,6 +119,7 @@ function mapRun(row: PublishRunRecord): JobDescriptionPublishRunDto {
     id: row.id,
     userId: row.userId,
     jobDescriptionId: row.jobDescriptionId,
+    batchId: row.batchId,
     platform: row.platform,
     status: normalizeStatus(row.status),
     currentStage: normalizeStage(row.currentStage),
@@ -148,6 +153,7 @@ export async function createPublishRun(
     data: {
       userId: params.userId,
       jobDescriptionId: params.jobDescriptionId,
+      batchId: params.batchId,
       platform: params.platform,
       status: 'pending',
       currentStage: 'queued',
@@ -213,4 +219,55 @@ export async function listPublishRunEvents(params: {
     take: Math.max(1, Math.min(500, Math.trunc(params.limit ?? 200))),
   });
   return rows.map(mapEvent);
+}
+
+type PublishBatchReconcileParams = Parameters<typeof reconcileJobDescriptionPublishResult>[0];
+
+type PublishBatchReconcileRetryOptions = {
+  maxAttempts?: number;
+  wait?: (delayMs: number) => Promise<void>;
+};
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+export async function reconcilePublishBatchWithRetry(
+  params: PublishBatchReconcileParams,
+  options: PublishBatchReconcileRetryOptions = {},
+): ReturnType<typeof reconcileJobDescriptionPublishResult> {
+  const maxAttempts = Math.max(1, Math.min(5, Math.trunc(options.maxAttempts ?? 3)));
+  const waitForRetry = options.wait ?? wait;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await reconcileJobDescriptionPublishResult(params);
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) break;
+      await waitForRetry(25 * 2 ** (attempt - 1));
+    }
+  }
+
+  throw lastError;
+}
+
+export async function reconcileTerminalPublishRunWithRetry(
+  run: JobDescriptionPublishRunDto,
+  options?: PublishBatchReconcileRetryOptions,
+): Promise<boolean> {
+  if (run.status !== 'success' && run.status !== 'failed') return false;
+
+  await reconcilePublishBatchWithRetry(
+    {
+      userId: run.userId,
+      id: run.jobDescriptionId,
+      batchId: run.batchId,
+      mode: 'batch',
+      result: run.status,
+    },
+    options,
+  );
+  return true;
 }

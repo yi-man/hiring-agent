@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getPublishRun, listPublishRunEvents } from '@/lib/jd-publishing/publish-run-repo';
+import {
+  getPublishRun,
+  listPublishRunEvents,
+  reconcileTerminalPublishRunWithRetry,
+} from '@/lib/jd-publishing/publish-run-repo';
 
 function serverErrorResponse(error: unknown) {
   if (
@@ -25,6 +29,12 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
     const run = await getPublishRun({ userId: auth.user.id, runId });
     if (!run) {
       return NextResponse.json({ error: 'publish run not found' }, { status: 404 });
+    }
+
+    if (run.status === 'success' || run.status === 'failed') {
+      await reconcileTerminalPublishRunWithRetry(run, { maxAttempts: 2 }).catch((error) => {
+        console.error('Failed to self-heal JD status from terminal publish run', { runId, error });
+      });
     }
 
     const events = await listPublishRunEvents({

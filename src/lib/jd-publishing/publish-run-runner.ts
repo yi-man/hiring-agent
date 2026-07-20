@@ -1,11 +1,11 @@
 import type { JobDescriptionDto } from '@/types';
-import { updateJobDescription } from '@/lib/jd/job-description-repo';
 import type { PublishJobDescriptionSettings } from './types';
 import { formatPublishAutomationErrorText } from './format-error';
 import { publishJobDescriptionToBossLike } from './service';
 import {
   updatePublishRun,
   createPublishRunEvent,
+  reconcilePublishBatchWithRetry,
   type JobDescriptionPublishRunDto,
 } from './publish-run-repo';
 
@@ -18,6 +18,7 @@ export async function runPublishRun(params: {
   const runId = run.id;
   const userId = run.userId;
   const jobDescriptionId = jobDescription.id;
+  let settledResult: Awaited<ReturnType<typeof publishJobDescriptionToBossLike>>;
 
   try {
     await updatePublishRun({
@@ -26,12 +27,6 @@ export async function runPublishRun(params: {
       status: 'running',
       currentStage: 'publishing',
       startedAt: new Date(),
-    });
-
-    await updateJobDescription({
-      userId,
-      id: jobDescriptionId,
-      status: 'publishing',
     });
 
     await createPublishRunEvent({
@@ -48,43 +43,25 @@ export async function runPublishRun(params: {
       },
     });
 
-    const result = await publishJobDescriptionToBossLike({
+    settledResult = await publishJobDescriptionToBossLike({
       jobDescription,
       settings,
     });
 
     const failureRaw =
-      result.status === 'failed' ? (result.trace.steps.at(-1)?.result.error ?? '未知错误') : null;
+      settledResult.status === 'failed'
+        ? (settledResult.trace.steps.at(-1)?.result.error ?? '未知错误')
+        : null;
     const failureFriendly = failureRaw ? formatPublishAutomationErrorText(failureRaw) : null;
-    const nextJdStatus = result.status === 'success' ? 'published' : 'publish_failed';
-
     await updatePublishRun({
       userId,
       runId,
-      status: result.status === 'success' ? 'success' : 'failed',
+      status: settledResult.status === 'success' ? 'success' : 'failed',
       currentStage: 'completed',
       finishedAt: new Date(),
-      publishTaskId: result.taskId,
-      skillId: result.skillId,
+      publishTaskId: settledResult.taskId,
+      skillId: settledResult.skillId,
       ...(failureFriendly ? { errorMessage: failureFriendly } : {}),
-    });
-
-    await updateJobDescription({
-      userId,
-      id: jobDescriptionId,
-      status: nextJdStatus,
-    });
-
-    await createPublishRunEvent({
-      userId,
-      runId,
-      stage: 'completed',
-      level: result.status === 'success' ? 'success' : 'error',
-      message: result.status === 'success' ? '发布成功' : '发布失败',
-      detail:
-        result.status === 'failed'
-          ? { error: failureFriendly, technical: failureRaw }
-          : { taskId: result.taskId, stepCount: result.trace.steps.length },
     });
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : '发布过程异常';
@@ -98,11 +75,15 @@ export async function runPublishRun(params: {
       finishedAt: new Date(),
     }).catch(() => {});
 
-    await updateJobDescription({
+    await reconcilePublishBatchWithRetry({
       userId,
       id: jobDescriptionId,
-      status: 'publish_failed',
-    }).catch(() => {});
+      batchId: run.batchId,
+      mode: 'batch',
+      result: 'failed',
+    }).catch((reconcileError) => {
+      console.error('Failed to reconcile failed JD publish batch', { runId, reconcileError });
+    });
 
     await createPublishRunEvent({
       userId,
@@ -112,5 +93,35 @@ export async function runPublishRun(params: {
       message: '发布失败',
       detail: { error: message, technical: rawMessage },
     }).catch(() => {});
+    return;
   }
+
+  const failureRaw =
+    settledResult.status === 'failed'
+      ? (settledResult.trace.steps.at(-1)?.result.error ?? '未知错误')
+      : null;
+  const failureFriendly = failureRaw ? formatPublishAutomationErrorText(failureRaw) : null;
+  await reconcilePublishBatchWithRetry({
+    userId,
+    id: jobDescriptionId,
+    batchId: run.batchId,
+    mode: 'batch',
+    result: settledResult.status === 'success' ? 'success' : 'failed',
+  }).catch((error) => {
+    console.error('Failed to reconcile JD publish batch', { runId, error });
+  });
+
+  await createPublishRunEvent({
+    userId,
+    runId,
+    stage: 'completed',
+    level: settledResult.status === 'success' ? 'success' : 'error',
+    message: settledResult.status === 'success' ? '发布成功' : '发布失败',
+    detail:
+      settledResult.status === 'failed'
+        ? { error: failureFriendly, technical: failureRaw }
+        : { taskId: settledResult.taskId, stepCount: settledResult.trace.steps.length },
+  }).catch((error) => {
+    console.error('Failed to record JD publish completion event', { runId, error });
+  });
 }

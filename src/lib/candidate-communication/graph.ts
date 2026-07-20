@@ -2,8 +2,14 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { addHours } from 'date-fns';
 import { createCandidateSourceAdapter } from '@/lib/candidate-screening/adapters/factory';
 import type { CandidateSourceAdapter } from '@/lib/candidate-screening/adapters/types';
+import { isFinalHiringOutcomeStage } from '@/lib/candidate-screening/constants';
 import { evaluateCandidateForJd } from '@/lib/candidate-screening/evaluation';
 import { buildScreeningPlanFromJd } from '@/lib/candidate-screening/planner';
+import {
+  claimCandidateActionLog,
+  createCandidateActionLog,
+  updateCandidateActionLog,
+} from '@/lib/candidate-screening/repo';
 import type { CandidateActionPlan } from '@/lib/candidate-screening/types';
 import { JD_STATUSES, type JD, type JDStatus, type JDTone, type JobDescriptionDto } from '@/types';
 import { decideCandidateCommunication, type RunCandidateCommunicationLLM } from './decision';
@@ -42,6 +48,9 @@ export type CandidateCommunicationGraphDependencyOverrides = {
   evaluateCandidate?: EvaluateCandidate;
   buildPlan?: BuildScreeningPlan;
   strictResumeEvaluation?: boolean;
+  createActionLog?: typeof createCandidateActionLog;
+  claimActionLog?: typeof claimCandidateActionLog;
+  updateActionLog?: typeof updateCandidateActionLog;
 };
 
 type CandidateCommunicationGraphDependencies =
@@ -86,8 +95,18 @@ function withDefaultDependencies(
     evaluateCandidate: dependencies.evaluateCandidate ?? evaluateCandidateForJd,
     buildPlan: dependencies.buildPlan ?? buildScreeningPlanFromJd,
     strictResumeEvaluation: dependencies.strictResumeEvaluation ?? false,
+    createActionLog: dependencies.createActionLog ?? createCandidateActionLog,
+    claimActionLog: dependencies.claimActionLog ?? claimCandidateActionLog,
+    updateActionLog: dependencies.updateActionLog ?? updateCandidateActionLog,
   };
 }
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const CANDIDATE_REPLY_STAGE_CHANGED_ERROR =
+  'candidate interview stage changed before automatic reply';
 
 function readStringField(value: unknown, key: string): string | null {
   if (!value || typeof value !== 'object' || !(key in value)) return null;
@@ -155,6 +174,10 @@ function resolveJobDescriptionForEvaluation(
         ? jobDescription.salaryRange.trim()
         : null,
     workLocations: readStringList(jobDescription.workLocations),
+    hiringTarget:
+      typeof jobDescription.hiringTarget === 'number' ? jobDescription.hiringTarget : null,
+    onboardedCount:
+      typeof jobDescription.onboardedCount === 'number' ? jobDescription.onboardedCount : 0,
     tone: isJdTone(jobDescription.tone) ? jobDescription.tone : 'tech',
     status: isJdStatus(jobDescription.status) ? jobDescription.status : 'created',
     content: jobDescription.content,
@@ -443,34 +466,89 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
   ): Promise<CandidateCommunicationGraphUpdate> {
     const subject = requireLoadedSubject(state);
     const conversation = requireConversation(state);
+    const incomingMessage = requireIncomingMessage(state);
     const decision = requireDecision(state);
 
     if (!decision.shouldReply || !decision.reply) {
       return { outgoingMessage: null };
     }
+    if (
+      subject.screeningResult &&
+      isFinalHiringOutcomeStage(subject.screeningResult.interviewStage)
+    ) {
+      return { outgoingMessage: null };
+    }
 
-    let outgoingMessage = await dependencies.repo.createMessage({
-      conversationId: conversation.id,
-      userId: state.userId,
-      jobDescriptionId: state.payload.jobDescriptionId,
-      candidateId: state.payload.candidateId,
-      platform: state.payload.platform,
-      role: 'agent',
-      content: decision.reply,
-      deliveryStatus: state.payload.executeReply ? 'planned' : 'sent',
-      occurredAt: new Date(),
-    });
-
-    if (state.payload.executeReply) {
-      const adapter = await dependencies.createAdapter(state.payload.platform, {
+    let claimedActionLog: Awaited<ReturnType<typeof claimCandidateActionLog>> = null;
+    if (state.payload.executeReply && subject.screeningResult) {
+      const actionLog = await dependencies.createActionLog({
         userId: state.userId,
+        runId: subject.screeningResult.runId,
+        screeningResultId: subject.screeningResult.id,
+        candidateId: state.payload.candidateId,
+        jobDescriptionId: state.payload.jobDescriptionId,
+        platform: state.payload.platform,
+        mode: 'execution',
+        action: 'chat',
+        message: decision.reply,
+        status: 'planned',
+        idempotencyKey: `candidate-communication:${incomingMessage.id}`,
       });
-      try {
+      claimedActionLog = await dependencies.claimActionLog({
+        userId: state.userId,
+        id: actionLog.id,
+        expectedInterviewStage: subject.screeningResult.interviewStage,
+      });
+      if (!claimedActionLog) {
+        await dependencies.updateActionLog({
+          userId: state.userId,
+          id: actionLog.id,
+          expectedStatus: 'planned',
+          status: 'skipped',
+          errorMessage: CANDIDATE_REPLY_STAGE_CHANGED_ERROR,
+        });
+        return { outgoingMessage: null };
+      }
+    }
+
+    let outgoingMessage: CandidateConversationMessageDto;
+    let adapter: CandidateSourceAdapter | null = null;
+    let actionLogFinalized = false;
+    try {
+      outgoingMessage = await dependencies.repo.createMessage({
+        conversationId: conversation.id,
+        userId: state.userId,
+        jobDescriptionId: state.payload.jobDescriptionId,
+        candidateId: state.payload.candidateId,
+        platform: state.payload.platform,
+        role: 'agent',
+        content: decision.reply,
+        deliveryStatus: state.payload.executeReply ? 'planned' : 'sent',
+        occurredAt: new Date(),
+      });
+
+      if (state.payload.executeReply) {
+        adapter = await dependencies.createAdapter(state.payload.platform, {
+          userId: state.userId,
+        });
         const executionResult = await sendReply({
           adapter,
           candidate: subject.candidate,
           decision,
         });
+        if (claimedActionLog) {
+          await dependencies.updateActionLog({
+            userId: state.userId,
+            id: claimedActionLog.id,
+            expectedStatus: 'running',
+            status: executionResult.success ? 'success' : 'failed',
+            browserTrace: executionResult.browserTrace ?? null,
+            errorMessage: executionResult.success
+              ? null
+              : (executionResult.error ?? 'candidate reply execution failed'),
+          });
+          actionLogFinalized = true;
+        }
         outgoingMessage =
           (await dependencies.repo.updateMessageDelivery({
             userId: state.userId,
@@ -481,10 +559,21 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
               ? null
               : (executionResult.error ?? 'candidate reply execution failed'),
           })) ?? outgoingMessage;
-      } finally {
-        if (dependencies.closeAdapterAfterReply) {
-          await adapter.close();
-        }
+      }
+    } catch (error) {
+      if (claimedActionLog && !actionLogFinalized) {
+        await dependencies.updateActionLog({
+          userId: state.userId,
+          id: claimedActionLog.id,
+          expectedStatus: 'running',
+          status: 'failed',
+          errorMessage: getErrorMessage(error),
+        });
+      }
+      throw error;
+    } finally {
+      if (adapter && dependencies.closeAdapterAfterReply) {
+        await adapter.close();
       }
     }
 

@@ -46,6 +46,8 @@ const sampleJobDescription: JobDescriptionDto = {
   positionDescription: '负责招聘产品前端体验',
   salaryRange: null,
   workLocations: [],
+  hiringTarget: 1,
+  onboardedCount: 0,
   tone: 'tech',
   status: 'ready_to_publish',
   content: sampleJd,

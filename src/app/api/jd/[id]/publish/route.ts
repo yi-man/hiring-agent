@@ -1,12 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getJobDescriptionById, updateJobDescription } from '@/lib/jd/job-description-repo';
+import { claimJobDescriptionForPublishing } from '@/lib/jd/job-description-repo';
 import { parsePublishJobDescriptionPayload } from '@/lib/jd-publishing/publish-payload';
 import { listPublishTasksForJobDescription } from '@/lib/jd-publishing/publish-repo';
+import { reconcilePublishBatchWithRetry } from '@/lib/jd-publishing/publish-run-repo';
 import { publishJobDescriptionToBossLike } from '@/lib/jd-publishing/service';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
+}
+
+function conflict(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
 }
 
 function serverErrorResponse(error: unknown) {
@@ -34,38 +40,45 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return badRequest(parsed.error);
     }
 
-    const jobDescription = await getJobDescriptionById(auth.user.id, id);
-    if (!jobDescription) {
-      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
-    }
-
-    await updateJobDescription({
+    const batchId = randomUUID();
+    const claim = await claimJobDescriptionForPublishing({
       userId: auth.user.id,
       id,
-      status: 'publishing',
+      batchId,
     });
+    if (!claim.ok && claim.reason === 'not_found') {
+      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+    }
+    if (!claim.ok && claim.reason === 'conflict') {
+      return conflict(claim.conflict ?? 'job description cannot be published');
+    }
+    if (!claim.ok) return conflict('job description status changed, please retry');
+    const claimed = claim.jobDescription;
 
     let task;
     try {
       task = await publishJobDescriptionToBossLike({
-        jobDescription,
+        jobDescription: claimed,
         settings: parsed.value,
       });
     } catch (error) {
-      const updated = await updateJobDescription({
+      const updated = await reconcilePublishBatchWithRetry({
         userId: auth.user.id,
         id,
-        status: 'publish_failed',
+        batchId,
+        mode: 'direct',
+        result: 'failed',
       });
       const message = error instanceof Error ? error.message : 'Unknown server error';
       return NextResponse.json({ error: message, jobDescription: updated }, { status: 500 });
     }
 
-    const nextStatus = task.status === 'success' ? 'published' : 'publish_failed';
-    const updated = await updateJobDescription({
+    const updated = await reconcilePublishBatchWithRetry({
       userId: auth.user.id,
       id,
-      status: nextStatus,
+      batchId,
+      mode: 'direct',
+      result: task.status === 'success' ? 'success' : 'failed',
     });
 
     const body = {

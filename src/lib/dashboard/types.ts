@@ -32,6 +32,7 @@ export type DashboardCandidateStats = {
   interviewingCandidates: number;
   highPriorityCandidates: number;
   followUpCandidates: number;
+  onboardedCount: number;
 };
 
 export type DashboardPublishTaskSummary = {
@@ -63,6 +64,7 @@ export type DashboardJobDto = {
   position: string;
   title: string;
   status: JDStatus;
+  hiringTarget: number | null;
   salaryRange: string | null;
   workLocations: string[];
   updatedAt: string;
@@ -92,6 +94,7 @@ export type DashboardJobSource = Pick<
   | 'department'
   | 'position'
   | 'status'
+  | 'hiringTarget'
   | 'salaryRange'
   | 'workLocations'
   | 'updatedAt'

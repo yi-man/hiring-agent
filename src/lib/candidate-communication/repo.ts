@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import type { CandidateInterviewStage } from '@/lib/candidate-screening/types';
 import type {
   CandidateCommunicationAction,
   CandidateCommunicationStage,
@@ -22,6 +23,8 @@ export type CandidateCommunicationSubject = {
     positionDescription: string;
     salaryRange?: string | null;
     workLocations?: unknown | null;
+    hiringTarget?: number | null;
+    onboardedCount?: number;
     tone: string;
     status: string;
     content: unknown;
@@ -41,7 +44,10 @@ export type CandidateCommunicationSubject = {
     rawText: string;
   } | null;
   screeningResult: {
+    id: string;
+    runId: string;
     finalScore: number;
+    interviewStage: CandidateInterviewStage;
   } | null;
 };
 
@@ -588,6 +594,9 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
           department: true,
           position: true,
           positionDescription: true,
+          salaryRange: true,
+          workLocations: true,
+          hiringTarget: true,
           tone: true,
           status: true,
           content: true,
@@ -595,6 +604,11 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
           generationMeta: true,
           createdAt: true,
           updatedAt: true,
+          _count: {
+            select: {
+              candidateScreeningResults: { where: { interviewStage: 'onboarded' } },
+            },
+          },
         },
       }),
       prisma.candidate.findFirst({
@@ -618,11 +632,26 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
           candidateId: params.candidateId,
         },
         orderBy: { updatedAt: 'desc' },
-        select: { finalScore: true },
+        select: { id: true, runId: true, finalScore: true, interviewStage: true },
       }),
     ]);
 
-    return { jobDescription, candidate, latestResume, screeningResult };
+    return {
+      jobDescription: jobDescription
+        ? {
+            ...jobDescription,
+            onboardedCount: jobDescription._count.candidateScreeningResults,
+          }
+        : null,
+      candidate,
+      latestResume,
+      screeningResult: screeningResult
+        ? {
+            ...screeningResult,
+            interviewStage: screeningResult.interviewStage as CandidateInterviewStage,
+          }
+        : null,
+    };
   },
 
   async findOrCreateConversation(params) {

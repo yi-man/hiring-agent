@@ -1,4 +1,5 @@
 import type { CandidateInterviewFeedbackDto } from './repo';
+import { CANDIDATE_INTERVIEW_STAGE_LABELS } from './constants';
 import type { CandidateInterviewFeedbackStage, CandidateInterviewStage } from './types';
 
 const baseTransitions: Record<CandidateInterviewStage, readonly CandidateInterviewStage[]> = {
@@ -11,24 +12,11 @@ const baseTransitions: Record<CandidateInterviewStage, readonly CandidateIntervi
   phone_screen: ['interviewing', 'rejected', 'withdrawn'],
   interviewing: ['interview_completed', 'rejected', 'withdrawn'],
   interview_completed: ['offer', 'rejected', 'withdrawn'],
-  offer: ['withdrawn'],
+  offer: ['onboarded', 'not_joined', 'withdrawn'],
+  onboarded: ['not_joined'],
+  not_joined: ['onboarded'],
   rejected: [],
   withdrawn: [],
-};
-
-const stageLabels: Record<CandidateInterviewStage, string> = {
-  sourced: '已发现',
-  screened: '已筛选',
-  to_contact: '待联系',
-  collected: '已收藏',
-  contacted: '已联系',
-  replied: '已回复',
-  phone_screen: '电话沟通',
-  interviewing: '面试中',
-  interview_completed: '面试完成',
-  offer: 'Offer 阶段',
-  rejected: '已淘汰',
-  withdrawn: '已退出',
 };
 
 const formalInterviewStages = ['first_interview', 'second_interview', 'final_interview'] as const;
@@ -79,7 +67,7 @@ export function validateCandidateInterviewStageTransition(
   if (!baseTransitions[current].includes(next)) {
     return {
       ok: false,
-      error: `不能从“${stageLabels[current]}”直接推进到“${stageLabels[next]}”`,
+      error: `不能从“${CANDIDATE_INTERVIEW_STAGE_LABELS[current]}”直接推进到“${CANDIDATE_INTERVIEW_STAGE_LABELS[next]}”`,
     };
   }
   if (current === 'phone_screen' && next === 'interviewing') {
@@ -124,6 +112,6 @@ export function validateCandidateInterviewFeedbackStage(
 
   return {
     ok: false,
-    error: `候选人当前处于“${stageLabels[current]}”，不能新增${feedbackStageLabels[stage]}评价`,
+    error: `候选人当前处于“${CANDIDATE_INTERVIEW_STAGE_LABELS[current]}”，不能新增${feedbackStageLabels[stage]}评价`,
   };
 }

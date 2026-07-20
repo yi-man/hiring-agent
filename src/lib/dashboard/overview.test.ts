@@ -47,6 +47,7 @@ function dashboardJobRow(overrides: Record<string, unknown>) {
     salaryRange: '30-50K',
     workLocations: ['上海'],
     status: 'published',
+    hiringTarget: 3,
     content: {
       title: 'AI 应用工程师',
       summary: '负责 AI 招聘产品',
@@ -67,6 +68,7 @@ const dashboardJobSelect = {
   salaryRange: true,
   workLocations: true,
   status: true,
+  hiringTarget: true,
   content: true,
   updatedAt: true,
 };
@@ -250,14 +252,47 @@ describe('dashboard overview helpers', () => {
         decisionPriority: 'low',
         interviewStage: 'rejected',
       },
+      {
+        jobDescriptionId: 'jd-1',
+        decisionAction: 'skip',
+        decisionPriority: 'low',
+        interviewStage: 'offer',
+      },
     ]);
 
     expect(stats.get('jd-1')).toEqual({
-      totalCandidates: 3,
-      activeCandidates: 2,
-      interviewingCandidates: 1,
+      totalCandidates: 4,
+      activeCandidates: 3,
+      interviewingCandidates: 2,
       highPriorityCandidates: 1,
       followUpCandidates: 2,
+      onboardedCount: 0,
+    });
+  });
+
+  it('counts onboarded candidates as completed instead of active', () => {
+    const stats = aggregateCandidateStats([
+      {
+        jobDescriptionId: 'jd-1',
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        interviewStage: 'onboarded',
+      },
+      {
+        jobDescriptionId: 'jd-1',
+        decisionAction: 'chat',
+        decisionPriority: 'medium',
+        interviewStage: 'not_joined',
+      },
+    ]);
+
+    expect(stats.get('jd-1')).toEqual({
+      totalCandidates: 2,
+      activeCandidates: 0,
+      interviewingCandidates: 0,
+      highPriorityCandidates: 1,
+      followUpCandidates: 0,
+      onboardedCount: 1,
     });
   });
 });
@@ -314,6 +349,7 @@ describe('getDashboardOverview', () => {
     expect(overview.jobs[0]).toEqual(
       expect.objectContaining({
         id: 'jd-1',
+        hiringTarget: 3,
         platform: expect.objectContaining({ platform: 'boss-like', label: 'BOSS-like' }),
         candidateStats: expect.objectContaining({ totalCandidates: 1, activeCandidates: 1 }),
       }),
@@ -352,6 +388,39 @@ describe('getDashboardOverview', () => {
       where: { userId: 'u1', jobDescriptionId: { in: ['jd-1'] } },
       _count: { _all: true },
     });
+  });
+
+  it('returns onboarded progress for each dashboard job', async () => {
+    prismaMock.jobDescription.groupBy.mockResolvedValueOnce([
+      { status: 'filled', _count: { _all: 1 } },
+    ]);
+    prismaMock.jobDescription.findMany.mockResolvedValueOnce([
+      dashboardJobRow({ id: 'jd-1', status: 'filled', hiringTarget: 2 }),
+    ]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([]);
+    prismaMock.candidateScreeningResult.groupBy.mockResolvedValueOnce([
+      {
+        jobDescriptionId: 'jd-1',
+        decisionAction: 'chat',
+        decisionPriority: 'high',
+        interviewStage: 'onboarded',
+        _count: { _all: 2 },
+      },
+    ]);
+
+    const overview = await getDashboardOverview({
+      userId: 'u1',
+      filters: { status: 'filled', limit: 25 },
+    });
+
+    expect(overview.jobs[0]).toEqual(
+      expect.objectContaining({
+        status: 'filled',
+        hiringTarget: 2,
+        candidateStats: expect.objectContaining({ onboardedCount: 2, activeCandidates: 0 }),
+      }),
+    );
+    expect(overview.statusCounts).toContainEqual({ status: 'filled', label: '已招满', count: 1 });
   });
 
   it('uses grouped candidate counts so large active groups are not capped', async () => {

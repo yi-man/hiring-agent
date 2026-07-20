@@ -3,21 +3,10 @@ import type {
   CandidateInterviewFeedbackStage,
   CandidateInterviewStage,
 } from '@/lib/candidate-screening/types';
+import { CANDIDATE_INTERVIEW_STAGE_LABELS } from '@/lib/candidate-screening/constants';
 
-export const interviewStageLabels: Record<CandidateInterviewStage, string> = {
-  sourced: '已发现',
-  screened: '已筛选',
-  to_contact: '待联系',
-  collected: '已收藏',
-  contacted: '已联系',
-  replied: '已回复',
-  phone_screen: '电话沟通',
-  interviewing: '面试中',
-  interview_completed: '面试完成',
-  offer: 'Offer 阶段',
-  rejected: '已淘汰',
-  withdrawn: '已退出',
-};
+export const interviewStageLabels: Record<CandidateInterviewStage, string> =
+  CANDIDATE_INTERVIEW_STAGE_LABELS;
 
 export const feedbackStageLabels: Record<CandidateInterviewFeedbackStage, string> = {
   phone_screen: '电话沟通',

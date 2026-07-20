@@ -39,9 +39,34 @@ export const CANDIDATE_SCREENING_INTERVIEW_STAGES = [
   'interviewing',
   'interview_completed',
   'offer',
+  'onboarded',
+  'not_joined',
   'rejected',
   'withdrawn',
 ] as const satisfies readonly CandidateInterviewStage[];
+
+export const CANDIDATE_INTERVIEW_STAGE_LABELS: Record<CandidateInterviewStage, string> = {
+  sourced: '已发现',
+  screened: '已筛选',
+  to_contact: '待联系',
+  collected: '已收藏',
+  contacted: '已联系',
+  replied: '已回复',
+  phone_screen: '电话沟通',
+  interviewing: '面试中',
+  interview_completed: '面试完成',
+  offer: 'Offer 阶段',
+  onboarded: '已入职',
+  not_joined: '未入职',
+  rejected: '已淘汰',
+  withdrawn: '已退出',
+};
+
+export function isFinalHiringOutcomeStage(
+  stage: string,
+): stage is Extract<CandidateInterviewStage, 'onboarded' | 'not_joined'> {
+  return stage === 'onboarded' || stage === 'not_joined';
+}
 
 export const CANDIDATE_INTERVIEW_FEEDBACK_STAGES = [
   'phone_screen',

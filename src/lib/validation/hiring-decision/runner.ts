@@ -26,6 +26,8 @@ function buildInput(sample: HiringDecisionGoldenSample) {
     positionDescription: `${sample.input.job.description}，${sample.input.job.requiredYears} 年经验`,
     salaryRange: null,
     workLocations: [],
+    hiringTarget: null,
+    onboardedCount: 0,
     tone: 'tech',
     status: 'published',
     content,

@@ -53,6 +53,8 @@ const sampleJobDescription: JobDescriptionDto = {
   workLocations: ['上海张江', '远程'],
   tone: 'tech',
   status: 'created',
+  hiringTarget: null,
+  onboardedCount: 0,
   content: {
     title: '前端工程师',
     summary: '负责增长业务体验建设',
@@ -91,6 +93,8 @@ const sampleJobDescription: JobDescriptionDto = {
 const screenedJobDescription: JobDescriptionDto = {
   ...sampleJobDescription,
   status: 'published',
+  hiringTarget: 3,
+  onboardedCount: 2,
   screeningSummary: {
     status: 'screened',
     totalCandidateCount: 3,
@@ -168,7 +172,7 @@ describe('JD pages', () => {
     });
   });
 
-  it('renders the JD list with default published status filter and screening summary', async () => {
+  it('renders the JD list with all statuses by default and a Chinese status filter', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
@@ -196,10 +200,18 @@ describe('JD pages', () => {
     render(<JDListView />);
 
     expect(await screen.findAllByText('前端工程师')).toHaveLength(2);
-    expect(global.fetch).toHaveBeenCalledWith('/api/jd?status=published');
-    expect(screen.getAllByText('published').length).toBeGreaterThan(0);
+    expect(global.fetch).toHaveBeenCalledWith('/api/jd');
+    expect(screen.getAllByText('招聘中').length).toBeGreaterThan(0);
     expect(screen.getByText('已筛选')).toBeInTheDocument();
     expect(screen.getByText('合格 2 / 全部 3')).toBeInTheDocument();
+    expect(screen.getByText('已入职 2 / 目标 3')).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText('JD 状态筛选')).getAllByRole('option')[0],
+    ).toHaveTextContent('全部状态');
+    expect(screen.getByRole('option', { name: '全部状态' })).toHaveValue('all');
+    expect(screen.getByRole('option', { name: '招聘中' })).toHaveValue('published');
+    expect(screen.getByRole('option', { name: '已招满' })).toHaveValue('filled');
+    expect(screen.getByRole('option', { name: '已停止招聘（系统内）' })).toHaveValue('offline');
     expect(screen.getByRole('link', { name: '新建 JD' })).toHaveAttribute(
       'href',
       '/jd-generator/new',
@@ -231,6 +243,36 @@ describe('JD pages', () => {
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith('/api/jd?status=created');
     });
+  });
+
+  it.each([
+    ['filled', '已招满'],
+    ['offline', '已停止招聘（系统内）'],
+  ] as const)('keeps detail and candidate links for %s JD rows', async (status, label) => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescriptions: [{ ...screenedJobDescription, status }],
+          total: 1,
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      });
+
+    render(<JDListView />);
+
+    const row = (await screen.findByLabelText('JD 操作')).closest('article');
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText(label)).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByRole('link', { name: '详情' })).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByRole('link', { name: '候选人' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/jd-generator/jd-1/candidates'),
+    );
   });
 
   it('creates a JD from selected department and position', async () => {
@@ -524,7 +566,11 @@ describe('JD pages', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          jobDescription: { ...sampleJobDescription, status: 'ready_to_publish' },
+          jobDescription: {
+            ...sampleJobDescription,
+            status: 'ready_to_publish',
+            hiringTarget: 4,
+          },
         }),
       })
       .mockResolvedValueOnce({
@@ -536,10 +582,26 @@ describe('JD pages', () => {
 
     expect(await screen.findByDisplayValue('深海数据')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: '远程' })).toBeChecked();
+    expect(screen.getByLabelText('招聘人数')).toHaveValue(null);
+    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('招聘人数'), { target: { value: '4' } });
     fireEvent.change(screen.getByLabelText('发布薪资范围'), { target: { value: '30-50K' } });
     fireEvent.click(screen.getByRole('button', { name: '发布' }));
 
     await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({
+            status: 'ready_to_publish',
+            hiringTarget: 4,
+            salaryRange: '30-50K',
+            workLocations: ['上海张江', '远程'],
+            content: sampleJobDescription.content,
+          }),
+        }),
+      );
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/jd/publish-runs',
         expect.objectContaining({
@@ -563,6 +625,397 @@ describe('JD pages', () => {
     });
   });
 
+  it('validates the hiring target before publishing', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: sampleJobDescription }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tasks: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ runs: [] }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    const hiringTarget = await screen.findByLabelText('招聘人数');
+    expect(hiringTarget).toHaveValue(null);
+    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+    fireEvent.change(hiringTarget, { target: { value: '1000' } });
+
+    expect(screen.getByText('招聘人数需为 1 到 999 的整数。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+    expect(
+      (global.fetch as jest.Mock).mock.calls.some(
+        ([url, options]) => url === '/api/jd/jd-1' && options?.method === 'PATCH',
+      ),
+    ).toBe(false);
+  });
+
+  it('requires the publish target to exceed the current onboarded count', async () => {
+    const historicalDraft = {
+      ...sampleJobDescription,
+      status: 'ready_to_publish' as const,
+      onboardedCount: 2,
+    };
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: historicalDraft }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    const hiringTarget = await screen.findByLabelText('招聘人数');
+    fireEvent.change(hiringTarget, { target: { value: '2' } });
+
+    expect(screen.getByText('计划招聘人数必须大于已入职人数（2 人）。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+    expect(hiringTarget).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('refreshes the JD after a publish conflict changes its status to filled', async () => {
+    const readyJob = {
+      ...sampleJobDescription,
+      status: 'ready_to_publish' as const,
+      hiringTarget: null,
+      onboardedCount: 0,
+    };
+    const savedJob = { ...readyJob, hiringTarget: 2 };
+    const filledJob = {
+      ...savedJob,
+      status: 'filled' as const,
+      onboardedCount: 2,
+    };
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobDescription: readyJob }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobDescription: savedJob }) })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'hiring target has already been reached' }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobDescription: filledJob }) });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    fireEvent.change(await screen.findByLabelText('招聘人数'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+
+    expect(await screen.findByText('已入职 2 / 目标 2')).toBeInTheDocument();
+    expect(screen.getAllByText('已招满').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: '发布' })).not.toBeInTheDocument();
+  });
+
+  it('lets a published historical JD set a missing hiring target', async () => {
+    const historicalJob = {
+      ...screenedJobDescription,
+      hiringTarget: null,
+      onboardedCount: 1,
+    };
+    const updatedJob = { ...historicalJob, hiringTarget: 3 };
+    (global.fetch as jest.Mock).mockImplementation(
+      async (url: string, options?: { method?: string }) => {
+        if (url === '/api/jd/jd-1/lifecycle' && options?.method === 'POST') {
+          return { ok: true, json: async () => ({ jobDescription: updatedJob }) };
+        }
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: historicalJob }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      },
+    );
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    expect(await screen.findByText('已入职 1 / 目标未设置')).toBeInTheDocument();
+    expect(screen.getByLabelText('招聘人数')).toHaveValue(null);
+    fireEvent.change(screen.getByLabelText('招聘人数'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: '设置招聘人数' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/lifecycle',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'set_hiring_target', hiringTarget: 3 }),
+        }),
+      );
+    });
+    expect(await screen.findByText('已入职 1 / 目标 3')).toBeInTheDocument();
+  });
+
+  it('lets a published JD adjust its configured hiring target', async () => {
+    const updatedJob = { ...screenedJobDescription, hiringTarget: 4 };
+    (global.fetch as jest.Mock).mockImplementation(
+      async (url: string, options?: { method?: string }) => {
+        if (url === '/api/jd/jd-1/lifecycle' && options?.method === 'POST') {
+          return { ok: true, json: async () => ({ jobDescription: updatedJob }) };
+        }
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: screenedJobDescription }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      },
+    );
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    const hiringTarget = await screen.findByLabelText('招聘人数');
+    expect(hiringTarget).toHaveValue(3);
+    expect(hiringTarget).not.toHaveAttribute('readonly');
+    fireEvent.change(hiringTarget, { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存招聘人数' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/lifecycle',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'set_hiring_target', hiringTarget: 4 }),
+        }),
+      );
+    });
+  });
+
+  it('takes a published JD offline', async () => {
+    const updatedJob = { ...screenedJobDescription, status: 'offline' as const };
+    (global.fetch as jest.Mock).mockImplementation(
+      async (url: string, options?: { method?: string }) => {
+        if (url === '/api/jd/jd-1/lifecycle' && options?.method === 'POST') {
+          return { ok: true, json: async () => ({ jobDescription: updatedJob }) };
+        }
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: screenedJobDescription }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      },
+    );
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '系统内停止招聘' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/lifecycle',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'take_offline' }),
+        }),
+      );
+    });
+    expect(await screen.findByText('已停止招聘（系统内）')).toBeInTheDocument();
+  });
+
+  it('only changes the active lifecycle action label while an update is pending', async () => {
+    let resolveLifecycle:
+      | ((response: { ok: boolean; json: () => Promise<unknown> }) => void)
+      | null = null;
+    const lifecycleResponse = new Promise<{ ok: boolean; json: () => Promise<unknown> }>(
+      (resolve) => {
+        resolveLifecycle = resolve;
+      },
+    );
+    (global.fetch as jest.Mock).mockImplementation(
+      async (url: string, options?: { method?: string }) => {
+        if (url === '/api/jd/jd-1/lifecycle' && options?.method === 'POST') {
+          return lifecycleResponse;
+        }
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: screenedJobDescription }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      },
+    );
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '系统内停止招聘' }));
+
+    expect(await screen.findByRole('button', { name: '处理中' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '保存招聘人数' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '保存中' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('招聘人数')).toHaveAttribute('readonly');
+
+    resolveLifecycle?.({
+      ok: true,
+      json: async () => ({
+        jobDescription: { ...screenedJobDescription, status: 'offline' },
+      }),
+    });
+    expect(await screen.findByText('已停止招聘（系统内）')).toBeInTheDocument();
+  });
+
+  it('requires a filled JD to raise its target before reopening recruitment', async () => {
+    const filledJob = {
+      ...screenedJobDescription,
+      status: 'filled' as const,
+      hiringTarget: 2,
+      onboardedCount: 2,
+    };
+    const reopenedJob = { ...filledJob, status: 'published' as const, hiringTarget: 3 };
+    (global.fetch as jest.Mock).mockImplementation(
+      async (url: string, options?: { method?: string }) => {
+        if (url === '/api/jd/jd-1/lifecycle' && options?.method === 'POST') {
+          return { ok: true, json: async () => ({ jobDescription: reopenedJob }) };
+        }
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: filledJob }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      },
+    );
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    expect((await screen.findAllByText('已招满')).length).toBeGreaterThan(0);
+    expect(screen.getByText('已入职 2 / 目标 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '提高人数并在系统内重新开放' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '系统内停止招聘' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '已筛选候选人' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '继续筛选' })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('招聘人数'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: '提高人数并在系统内重新开放' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/lifecycle',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'reopen', hiringTarget: 3 }),
+        }),
+      );
+    });
+  });
+
+  it('reopens an offline JD when it still has hiring capacity', async () => {
+    const offlineJob = {
+      ...screenedJobDescription,
+      status: 'offline' as const,
+      hiringTarget: 3,
+      onboardedCount: 1,
+    };
+    const reopenedJob = { ...offlineJob, status: 'published' as const };
+    (global.fetch as jest.Mock).mockImplementation(
+      async (url: string, options?: { method?: string }) => {
+        if (url === '/api/jd/jd-1/lifecycle' && options?.method === 'POST') {
+          return { ok: true, json: async () => ({ jobDescription: reopenedJob }) };
+        }
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: offlineJob }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      },
+    );
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    const reopenButton = await screen.findByRole('button', { name: '系统内重新开放招聘' });
+    expect(screen.getByRole('link', { name: '已筛选候选人' })).toBeInTheDocument();
+    fireEvent.click(reopenButton);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/lifecycle',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'reopen' }),
+        }),
+      );
+    });
+  });
+
+  it.each(['publishing', 'archived'] as const)(
+    'does not show a publish action for %s JD details',
+    async (nonEditableStatus) => {
+      const nonEditableJob = { ...sampleJobDescription, status: nonEditableStatus };
+      (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: nonEditableJob }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      });
+
+      render(<JDDetailView jobDescriptionId="jd-1" />);
+
+      expect(await screen.findByLabelText('岗位摘要')).toHaveAttribute('readonly');
+      expect(screen.queryByRole('button', { name: '发布' })).not.toBeInTheDocument();
+      expect(screen.getByLabelText('发布状态')).toBeDisabled();
+      expect(screen.getByLabelText('招聘人数')).toHaveValue(null);
+      expect(screen.getByLabelText('招聘人数')).toHaveAttribute('readonly');
+    },
+  );
+
   it('keeps the generic publish action enabled for ready-to-publish JD detail', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
@@ -573,6 +1026,7 @@ describe('JD pages', () => {
             salaryRange: null,
             workLocations: [],
             status: 'ready_to_publish',
+            hiringTarget: 1,
           },
         }),
       })
@@ -601,6 +1055,7 @@ describe('JD pages', () => {
 
     const publishButton = await screen.findByRole('button', { name: '发布' });
     expect(publishButton).toBeEnabled();
+    expect(screen.getByLabelText('发布状态')).toBeDisabled();
   });
 
   it('renders published JD detail as read-only with primary actions at the top', async () => {

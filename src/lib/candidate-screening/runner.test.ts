@@ -120,6 +120,8 @@ const jobDescription: JobDescriptionDto = {
   positionDescription: 'Build hiring workflows',
   salaryRange: null,
   workLocations: [],
+  hiringTarget: null,
+  onboardedCount: 0,
   tone: 'formal',
   status: 'created',
   content: {
@@ -977,10 +979,18 @@ describe('candidate screening runner', () => {
     );
     expect(workflow.collectCandidate).not.toHaveBeenCalled();
     expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
-      expect.objectContaining({ id: chatLog.id, status: 'success' }),
+      expect.objectContaining({
+        id: chatLog.id,
+        expectedStatus: 'running',
+        status: 'success',
+      }),
     );
     expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
-      expect.objectContaining({ id: collectLog.id, status: 'success' }),
+      expect.objectContaining({
+        id: collectLog.id,
+        expectedStatus: 'planned',
+        status: 'success',
+      }),
     );
     expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
       expect.objectContaining({ actionStatus: 'success', interviewStage: 'collected' }),
@@ -1059,7 +1069,11 @@ describe('candidate screening runner', () => {
 
     expect(workflow.contactAndCollectCandidate).toHaveBeenCalledTimes(1);
     expect(workflow.collectCandidate).toHaveBeenCalledTimes(1);
-    expect(retryableClaim).toHaveBeenCalledWith({ userId: 'user-1', id: collectLog.id });
+    expect(retryableClaim).toHaveBeenCalledWith({
+      userId: 'user-1',
+      id: collectLog.id,
+      expectedInterviewStage: 'to_contact',
+    });
   });
 
   it('advances a dry-run through planning, live search, ingest, vector recall, evaluation, ranking, and action planning', async () => {
@@ -1468,6 +1482,7 @@ describe('candidate screening runner', () => {
     expect(dependencies.repo.claimActionLog).toHaveBeenCalledWith({
       userId: 'user-1',
       id: 'action-log-1',
+      expectedInterviewStage: 'to_contact',
     });
     expect(adapter.loginIfNeeded).toHaveBeenCalledTimes(1);
     expect(workflow.contactAndCollectCandidate).toHaveBeenCalledWith(
@@ -3247,11 +3262,16 @@ describe('candidate screening runner', () => {
     expect(adapter.chatCandidate).toHaveBeenCalledTimes(1);
     expect(adapter.collectCandidate).toHaveBeenCalledTimes(1);
     expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
-      expect.objectContaining({ id: chatLog.id, status: 'success' }),
+      expect.objectContaining({
+        id: chatLog.id,
+        expectedStatus: 'running',
+        status: 'success',
+      }),
     );
     expect(dependencies.repo.updateActionLog).toHaveBeenCalledWith(
       expect.objectContaining({
         id: collectLog.id,
+        expectedStatus: 'planned',
         status: 'failed',
         errorMessage: 'collect failed',
       }),
@@ -3300,6 +3320,64 @@ describe('candidate screening runner', () => {
         currentWorkflowStep: null,
       }),
     );
+  });
+
+  it('does not execute a stale planned action after the candidate reaches a final outcome', async () => {
+    const adapter = makeAdapter({
+      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+      collectCandidate: jest.fn().mockResolvedValue({ success: true }),
+    });
+    const dependencies = makeDependencies(adapter);
+    const plannedResult = makeResult({
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+      interviewStage: 'to_contact',
+    });
+    const finalDetail = makeDetail({
+      ...plannedResult,
+      interviewStage: 'onboarded',
+      actionLogs: [makePlannedActionLog(plannedResult, chatDecision)],
+    });
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(finalDetail);
+
+    await executeScreeningRunActions({
+      runId: 'run-1',
+      userId: 'user-1',
+      request: executeRequest,
+      dependencies,
+    });
+
+    expect(dependencies.repo.claimActionLog).not.toHaveBeenCalled();
+    expect(dependencies.createAdapter).not.toHaveBeenCalled();
+    expect(adapter.chatCandidate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a manual stale action after the candidate reaches a final outcome', async () => {
+    const dependencies = makeDependencies();
+    const plannedResult = makeResult({
+      actionPlan: chatDecision,
+      actionStatus: 'planned',
+      interviewStage: 'onboarded',
+    });
+    dependencies.repo.getDetail = jest.fn().mockResolvedValue(
+      makeDetail({
+        ...plannedResult,
+        actionLogs: [makePlannedActionLog(plannedResult, chatDecision)],
+      }),
+    );
+
+    await expect(
+      executeSingleCandidateAction({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        dependencies,
+      }),
+    ).rejects.toThrow('candidate hiring outcome is already final');
+    expect(dependencies.repo.claimActionLog).not.toHaveBeenCalled();
+    expect(dependencies.createAdapter).not.toHaveBeenCalled();
   });
 
   it('executes planned actions only through executeScreeningRunActions and updates contacted state after successful chat action', async () => {
@@ -3364,6 +3442,7 @@ describe('candidate screening runner', () => {
     expect(dependencies.repo.claimActionLog).toHaveBeenCalledWith({
       userId: 'user-1',
       id: 'action-log-1',
+      expectedInterviewStage: 'to_contact',
     });
     const claimOrder = (dependencies.repo.claimActionLog as jest.Mock).mock.invocationCallOrder[0];
     expect(claimOrder).toBeLessThan(
@@ -3493,7 +3572,7 @@ describe('candidate screening runner', () => {
     expect(adapter.collectCandidate).not.toHaveBeenCalled();
   });
 
-  it('skips execution when the planned action log cannot be atomically claimed', async () => {
+  it('does not execute when a final outcome wins after detail read but before claim', async () => {
     const adapter = makeAdapter({
       chatCandidate: jest.fn().mockResolvedValue({ success: true }),
     });
@@ -3522,6 +3601,7 @@ describe('candidate screening runner', () => {
     expect(dependencies.repo.claimActionLog).toHaveBeenCalledWith({
       userId: 'user-1',
       id: 'action-log-1',
+      expectedInterviewStage: 'to_contact',
     });
     expect(dependencies.createAdapter).not.toHaveBeenCalled();
     expect(adapter.loginIfNeeded).not.toHaveBeenCalled();

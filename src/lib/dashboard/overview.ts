@@ -29,8 +29,9 @@ const statusLabels: Record<JDStatus, string> = {
   ready_to_publish: '待发布',
   publishing: '发布中',
   published: '招聘中',
+  filled: '已招满',
   publish_failed: '发布异常',
-  offline: '已下线',
+  offline: '已停止招聘（系统内）',
   archived: '已归档',
 };
 
@@ -56,6 +57,7 @@ type DashboardJobRow = {
   salaryRange: string | null;
   workLocations: unknown | null;
   status: string;
+  hiringTarget: number | null;
   content: unknown;
   updatedAt: Date | string;
 };
@@ -94,6 +96,7 @@ const dashboardJobSelect = {
   salaryRange: true,
   workLocations: true,
   status: true,
+  hiringTarget: true,
   content: true,
   updatedAt: true,
 } as const;
@@ -184,6 +187,7 @@ function mapJobSource(row: DashboardJobRow): DashboardJobSource {
     department: row.department,
     position: row.position,
     status: row.status as JDStatus,
+    hiringTarget: row.hiringTarget,
     salaryRange: row.salaryRange,
     workLocations: toStringArray(row.workLocations),
     updatedAt: iso(row.updatedAt),
@@ -227,9 +231,11 @@ export function parseDashboardFilters(searchParams: URLSearchParams): DashboardF
 
 export function isActiveDashboardCandidate(signal: DashboardCandidateSignal): boolean {
   return (
-    signal.decisionAction !== 'skip' &&
     signal.interviewStage !== 'rejected' &&
-    signal.interviewStage !== 'withdrawn'
+    signal.interviewStage !== 'withdrawn' &&
+    signal.interviewStage !== 'onboarded' &&
+    signal.interviewStage !== 'not_joined' &&
+    (signal.decisionAction !== 'skip' || isInterviewingDashboardCandidate(signal))
   );
 }
 
@@ -249,6 +255,7 @@ function emptyStats(): DashboardCandidateStats {
     interviewingCandidates: 0,
     highPriorityCandidates: 0,
     followUpCandidates: 0,
+    onboardedCount: 0,
   };
 }
 
@@ -293,6 +300,7 @@ export function aggregateCandidateStats(
         (isActive && (signal.decisionAction === 'chat' || signal.decisionAction === 'collect')
           ? 1
           : 0),
+      onboardedCount: current.onboardedCount + (signal.interviewStage === 'onboarded' ? 1 : 0),
     });
   }
 
@@ -327,6 +335,7 @@ function aggregateCandidateCountStats(
         (isActive && (signal.decisionAction === 'chat' || signal.decisionAction === 'collect')
           ? count
           : 0),
+      onboardedCount: current.onboardedCount + (signal.interviewStage === 'onboarded' ? count : 0),
     });
   }
 
@@ -510,6 +519,7 @@ export async function getDashboardOverview(params: {
       position: source.position,
       title: readDashboardJobTitle(source),
       status: source.status,
+      hiringTarget: source.hiringTarget,
       salaryRange: source.salaryRange,
       workLocations: source.workLocations,
       updatedAt: source.updatedAt,

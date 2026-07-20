@@ -4,6 +4,7 @@ import {
   isJDStatus,
   isJDTone,
   parseCreateJobDescriptionPayload,
+  parseJobDescriptionLifecyclePayload,
   parseRegenerateJobDescriptionPayload,
   parseUpdateJobDescriptionPayload,
 } from '@/lib/jd/api';
@@ -23,6 +24,7 @@ describe('JD API helpers', () => {
     expect(isJDTone('tech')).toBe(true);
     expect(isJDTone('casual')).toBe(false);
     expect(isJDStatus('published')).toBe(true);
+    expect(isJDStatus('filled')).toBe(true);
     expect(isJDStatus('draft')).toBe(false);
   });
 
@@ -79,6 +81,10 @@ describe('JD API helpers', () => {
       ok: false,
       error: 'status is invalid',
     });
+    expect(parseUpdateJobDescriptionPayload({ status: 'published' })).toEqual({
+      ok: false,
+      error: 'status can only be set to ready_to_publish',
+    });
     expect(parseUpdateJobDescriptionPayload({ content: { title: 'broken' } })).toEqual({
       ok: false,
       error: 'content is invalid',
@@ -86,6 +92,14 @@ describe('JD API helpers', () => {
     expect(parseUpdateJobDescriptionPayload({ position: ' ', tone: 'tech' })).toEqual({
       ok: false,
       error: 'position must not be empty',
+    });
+    expect(parseUpdateJobDescriptionPayload({ hiringTarget: 0 })).toEqual({
+      ok: false,
+      error: 'hiringTarget must be an integer between 1 and 999',
+    });
+    expect(parseUpdateJobDescriptionPayload({ hiringTarget: 1.5 })).toEqual({
+      ok: false,
+      error: 'hiringTarget must be an integer between 1 and 999',
     });
     expect(
       parseUpdateJobDescriptionPayload({
@@ -98,6 +112,43 @@ describe('JD API helpers', () => {
         status: 'ready_to_publish',
         content: sampleJd,
       },
+    });
+    expect(parseUpdateJobDescriptionPayload({ hiringTarget: 12 })).toEqual({
+      ok: true,
+      value: { hiringTarget: 12 },
+    });
+  });
+
+  it('parses lifecycle actions and validates hiring targets', () => {
+    expect(parseJobDescriptionLifecyclePayload({ action: 'take_offline' })).toEqual({
+      ok: true,
+      value: { action: 'take_offline' },
+    });
+    expect(parseJobDescriptionLifecyclePayload({ action: 'reopen' })).toEqual({
+      ok: true,
+      value: { action: 'reopen' },
+    });
+    expect(parseJobDescriptionLifecyclePayload({ action: 'reopen', hiringTarget: 5 })).toEqual({
+      ok: true,
+      value: { action: 'reopen', hiringTarget: 5 },
+    });
+    expect(
+      parseJobDescriptionLifecyclePayload({ action: 'set_hiring_target', hiringTarget: 3 }),
+    ).toEqual({
+      ok: true,
+      value: { action: 'set_hiring_target', hiringTarget: 3 },
+    });
+    expect(parseJobDescriptionLifecyclePayload({ action: 'set_hiring_target' })).toEqual({
+      ok: false,
+      error: 'hiringTarget must be an integer between 1 and 999',
+    });
+    expect(parseJobDescriptionLifecyclePayload({ action: 'reopen', hiringTarget: 1000 })).toEqual({
+      ok: false,
+      error: 'hiringTarget must be an integer between 1 and 999',
+    });
+    expect(parseJobDescriptionLifecyclePayload({ action: 'archive' })).toEqual({
+      ok: false,
+      error: 'action is invalid',
     });
   });
 

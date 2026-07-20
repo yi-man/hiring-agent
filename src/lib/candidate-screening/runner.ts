@@ -16,6 +16,7 @@ import {
   CANDIDATE_SCREENING_CALIBRATION_VERSION,
   CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
   CANDIDATE_SCREENING_SCORING_VERSION,
+  isFinalHiringOutcomeStage,
   MAX_SCREENING_EVALUATION_CANDIDATES,
   MAX_VECTOR_RECALL_CANDIDATES,
 } from './constants';
@@ -997,6 +998,11 @@ async function createPlannedActions(params: {
       continue;
     }
 
+    const existingResult = existingResults.get(rankedCandidate.candidateId);
+    if (existingResult && isFinalHiringOutcomeStage(existingResult.interviewStage)) {
+      continue;
+    }
+
     const evaluatedActionPlan = createActionPlan({
       action: evaluation.decision,
       candidateName: context.displayName,
@@ -1016,7 +1022,6 @@ async function createPlannedActions(params: {
       actionPlan.action === 'skip' && (params.request.mode === 'execution' || skipAlreadyContacted)
         ? 'skipped'
         : 'planned';
-    const existingResult = existingResults.get(rankedCandidate.candidateId);
     incrementDecisionStats(params.stats, actionPlan.action);
 
     const result = await params.dependencies.repo.upsertResult({
@@ -1964,6 +1969,7 @@ async function persistExecutionResult(params: {
   await params.dependencies.repo.updateActionLog({
     userId: params.userId,
     id: params.actionLog.id,
+    expectedStatus: 'running',
     status: 'success',
     browserTrace: params.executionResult.browserTrace ?? null,
     errorMessage: null,
@@ -2025,6 +2031,7 @@ async function markExecutionFailed(params: {
   await params.dependencies.repo.updateActionLog({
     userId: params.userId,
     id: params.actionLog.id,
+    expectedStatus: 'running',
     status: 'failed',
     browserTrace: params.browserTrace ?? null,
     errorMessage: params.errorMessage,
@@ -2090,6 +2097,7 @@ async function persistContactAndCollectExecutionResult(params: {
     await params.dependencies.repo.updateActionLog({
       userId: params.userId,
       id: params.collectActionLog.id,
+      expectedStatus: 'planned',
       status: 'skipped',
       browserTrace: params.executionResult.browserTrace ?? null,
       errorMessage: 'contact was not sent',
@@ -2112,6 +2120,7 @@ async function persistContactAndCollectExecutionResult(params: {
     await params.dependencies.repo.updateActionLog({
       userId: params.userId,
       id: params.collectActionLog.id,
+      expectedStatus: 'planned',
       status: 'success',
       browserTrace: params.executionResult.browserTrace ?? null,
       errorMessage: null,
@@ -2142,6 +2151,7 @@ async function persistContactAndCollectExecutionResult(params: {
   await params.dependencies.repo.updateActionLog({
     userId: params.userId,
     id: params.collectActionLog.id,
+    expectedStatus: 'planned',
     status: 'failed',
     browserTrace: params.executionResult.browserTrace ?? null,
     errorMessage: params.executionResult.error ?? 'collect execution failed',
@@ -2181,6 +2191,7 @@ async function persistCollectRetryExecutionResult(params: {
     await params.dependencies.repo.updateActionLog({
       userId: params.userId,
       id: params.collectActionLog.id,
+      expectedStatus: 'running',
       status: 'success',
       browserTrace: params.executionResult.browserTrace ?? null,
       errorMessage: null,
@@ -2211,6 +2222,7 @@ async function persistCollectRetryExecutionResult(params: {
   await params.dependencies.repo.updateActionLog({
     userId: params.userId,
     id: params.collectActionLog.id,
+    expectedStatus: 'running',
     status: 'failed',
     browserTrace: params.executionResult.browserTrace ?? null,
     errorMessage: params.executionResult.error ?? 'collect execution failed',
@@ -2266,7 +2278,7 @@ async function executePlannedActionsForRun(params: {
   });
 
   for (const result of results) {
-    if (!result.actionPlan) {
+    if (!result.actionPlan || isFinalHiringOutcomeStage(result.interviewStage)) {
       continue;
     }
 
@@ -2290,6 +2302,7 @@ async function executePlannedActionsForRun(params: {
       candidateId: result.candidateId,
     });
     if (!detail) continue;
+    if (isFinalHiringOutcomeStage(detail.interviewStage)) continue;
 
     const pairedCollectActionLog =
       result.actionPlan.action === 'chat'
@@ -2316,6 +2329,7 @@ async function executePlannedActionsForRun(params: {
       const claimedCollectLog = await params.dependencies.repo.claimRetryableCollectActionLog({
         userId: params.userId,
         id: collectActionLog.id,
+        expectedInterviewStage: detail.interviewStage,
       });
       if (!claimedCollectLog) continue;
 
@@ -2353,6 +2367,7 @@ async function executePlannedActionsForRun(params: {
     const claimedActionLog = await params.dependencies.repo.claimActionLog({
       userId: params.userId,
       id: actionLog.id,
+      expectedInterviewStage: detail.interviewStage,
     });
     if (!claimedActionLog) continue;
 
@@ -2654,6 +2669,9 @@ export async function executeSingleCandidateAction(params: {
   if (!detail) {
     throw new Error('candidate screening detail not found');
   }
+  if (isFinalHiringOutcomeStage(detail.interviewStage)) {
+    throw new Error('candidate hiring outcome is already final');
+  }
 
   const actionPlan = detail.actionPlan;
   if (!actionPlan || actionPlan.action !== 'chat') {
@@ -2668,6 +2686,7 @@ export async function executeSingleCandidateAction(params: {
   const claimedActionLog = await dependencies.repo.claimActionLog({
     userId: params.userId,
     id: actionLog.id,
+    expectedInterviewStage: detail.interviewStage,
   });
   if (!claimedActionLog) {
     throw new Error('candidate planned chat action is already running or finished');
