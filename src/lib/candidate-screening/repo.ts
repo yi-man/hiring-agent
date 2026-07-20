@@ -3,7 +3,10 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { vectorToPgLiteral } from '@/lib/rag/knowledge-repo';
 import type { JDStatus } from '@/types';
-import { isFinalHiringOutcomeStage } from './constants';
+import {
+  isCandidateOutreachAllowedJobStatus,
+  isTerminalCandidateInterviewStage,
+} from './constants';
 import type {
   CandidateActionPlan,
   CandidateActionStatus,
@@ -358,6 +361,7 @@ export type CandidateScreeningResultListItem = CandidateScreeningResultDto & {
 
 export type CandidateScreeningDetailDto = CandidateScreeningResultListItem & {
   actionLogs: CandidateActionLogDto[];
+  latestPlannedChatRunId: string | null;
 };
 
 export type CandidateTrackingJobDescriptionDto = {
@@ -933,9 +937,12 @@ function mapListItem(row: CandidateWithRelationsRecord): CandidateScreeningResul
 }
 
 function mapDetail(row: CandidateWithRelationsRecord): CandidateScreeningDetailDto {
+  const actionLogs = (row.actionLogs ?? []).map(mapActionLog);
   return {
     ...mapListItem(row),
-    actionLogs: (row.actionLogs ?? []).map(mapActionLog),
+    actionLogs,
+    latestPlannedChatRunId:
+      actionLogs.find((log) => log.action === 'chat' && log.status === 'planned')?.runId ?? null,
   };
 }
 
@@ -1443,17 +1450,17 @@ export async function upsertCandidateScreeningResult(
     params.actionStatus !== undefined ||
     params.interviewStage !== undefined ||
     params.notes !== undefined;
-  const existingIsFinal = isFinalHiringOutcomeStage(existing.interviewStage);
+  const existingIsTerminal = isTerminalCandidateInterviewStage(existing.interviewStage);
 
   const updated = await prisma.candidateScreeningResult.updateMany({
     where: {
       id: existing.id,
       userId: params.userId,
-      ...(!existingIsFinal && updatesCandidateProgress
+      ...(!existingIsTerminal && updatesCandidateProgress
         ? { interviewStage: existing.interviewStage }
         : {}),
     },
-    data: existingIsFinal ? scoringUpdateData : updateData,
+    data: existingIsTerminal ? scoringUpdateData : updateData,
   });
   if (updated.count === 0) {
     const latest = await prisma.candidateScreeningResult.findFirst({
@@ -1687,10 +1694,35 @@ export async function updateCandidateInterviewProgress(
     return row ? mapScreeningResult(row) : null;
   }
 
-  return prisma.$transaction(async (tx) => {
-    const [lockedResult] = await tx.$queryRaw<
-      Array<{ id: string; interviewStage: string }>
-    >(Prisma.sql`
+  return prisma.$transaction((tx) =>
+    updateCandidateInterviewProgressInTransaction(tx, {
+      ...params,
+      interviewStage: nextInterviewStage,
+    }),
+  );
+}
+
+export async function updateCandidateInterviewProgressInTransaction(
+  tx: Prisma.TransactionClient,
+  params: UpdateCandidateProgressRepoParams & {
+    interviewStage: CandidateInterviewStage;
+    ownsCandidateCommunicationClaim?: boolean;
+  },
+): Promise<CandidateScreeningResultDto | null> {
+  const nextInterviewStage = params.interviewStage;
+  const data: Prisma.CandidateScreeningResultUpdateManyMutationInput = {
+    interviewStage: nextInterviewStage,
+  };
+  if (params.notes !== undefined) data.notes = params.notes;
+  const scopedWhere = {
+    userId: params.userId,
+    jobDescriptionId: params.jobDescriptionId,
+    candidateId: params.candidateId,
+  };
+
+  const [lockedResult] = await tx.$queryRaw<
+    Array<{ id: string; interviewStage: string }>
+  >(Prisma.sql`
       SELECT id, interview_stage AS "interviewStage"
       FROM public.candidate_screening_results
       WHERE user_id = ${params.userId}
@@ -1698,20 +1730,124 @@ export async function updateCandidateInterviewProgress(
         AND candidate_id = ${params.candidateId}
       FOR UPDATE
     `);
-    if (!lockedResult) return null;
-    if (
-      params.expectedInterviewStage !== undefined &&
-      lockedResult.interviewStage !== params.expectedInterviewStage
-    ) {
-      return null;
-    }
+  if (!lockedResult) return null;
+  if (
+    params.expectedInterviewStage !== undefined &&
+    lockedResult.interviewStage !== params.expectedInterviewStage
+  ) {
+    return null;
+  }
 
-    if (isFinalHiringOutcomeStage(nextInterviewStage)) {
+  if (isTerminalCandidateInterviewStage(nextInterviewStage)) {
+    const staleBefore = new Date(Date.now() - STALE_CANDIDATE_ACTION_TIMEOUT_MS);
+    await tx.candidateActionLog.updateMany({
+      where: {
+        userId: params.userId,
+        screeningResultId: lockedResult.id,
+        status: 'running',
+        updatedAt: { lt: staleBefore },
+      },
+      data: {
+        status: 'failed',
+        errorMessage: STALE_CANDIDATE_ACTION_ERROR_MESSAGE,
+      },
+    });
+    const runningAction = await tx.candidateActionLog.findFirst({
+      where: {
+        userId: params.userId,
+        screeningResultId: lockedResult.id,
+        status: 'running',
+      },
+      select: { id: true },
+    });
+    if (runningAction) {
+      throw new CandidateActionInProgressError();
+    }
+  }
+
+  const [jobDescription] = await tx.$queryRaw<
+    Array<{
+      id: string;
+      status: string;
+      hiringTarget: number | null;
+      hasActiveCandidateCommunication: boolean;
+      hasActiveCandidateMessageProcessing: boolean;
+    }>
+  >(Prisma.sql`
+      SELECT
+        job_description.id,
+        job_description.status,
+        job_description.hiring_target AS "hiringTarget",
+        EXISTS (
+          SELECT 1
+          FROM public.candidate_conversation_messages AS candidate_message
+          WHERE candidate_message.user_id = ${params.userId}
+            AND candidate_message.job_description_id = ${params.jobDescriptionId}
+            AND candidate_message.candidate_id = ${params.candidateId}
+            AND candidate_message.role = 'candidate'
+            AND candidate_message.processing_outcome = 'in_flight'
+            AND candidate_message.processed_at IS NULL
+            AND candidate_message.processing_lease_expires_at >
+              (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        ) AS "hasActiveCandidateMessageProcessing",
+        EXISTS (
+          SELECT 1
+          FROM public.candidate_conversation_messages AS incoming_message
+          WHERE incoming_message.user_id = ${params.userId}
+            AND incoming_message.job_description_id = ${params.jobDescriptionId}
+            AND incoming_message.role = 'candidate'
+            AND incoming_message.processing_outcome = 'in_flight'
+            AND incoming_message.processed_at IS NULL
+            AND incoming_message.processing_lease_expires_at >
+              (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        ) AS "hasActiveCandidateCommunication"
+      FROM public.job_descriptions AS job_description
+      WHERE job_description.id = ${params.jobDescriptionId}
+        AND job_description.user_id = ${params.userId}
+      FOR UPDATE
+    `);
+  if (!jobDescription) return null;
+  if (
+    isTerminalCandidateInterviewStage(nextInterviewStage) &&
+    jobDescription.hasActiveCandidateMessageProcessing &&
+    !params.ownsCandidateCommunicationClaim
+  ) {
+    throw new CandidateActionInProgressError();
+  }
+
+  const where: Prisma.CandidateScreeningResultWhereInput = {
+    ...scopedWhere,
+    id: lockedResult.id,
+    interviewStage: lockedResult.interviewStage,
+  };
+  const result = await tx.candidateScreeningResult.updateMany({ where, data });
+  if (result.count === 0) return null;
+
+  if (
+    nextInterviewStage === 'onboarded' &&
+    jobDescription.status !== 'archived' &&
+    jobDescription.hiringTarget !== null
+  ) {
+    const onboardedCount = await tx.candidateScreeningResult.count({
+      where: {
+        userId: params.userId,
+        jobDescriptionId: params.jobDescriptionId,
+        interviewStage: 'onboarded',
+      },
+    });
+    if (onboardedCount >= jobDescription.hiringTarget) {
+      if (
+        jobDescription.status === 'publishing' ||
+        jobDescription.hasActiveCandidateCommunication
+      ) {
+        throw new CandidateActionInProgressError();
+      }
+
       const staleBefore = new Date(Date.now() - STALE_CANDIDATE_ACTION_TIMEOUT_MS);
       await tx.candidateActionLog.updateMany({
         where: {
           userId: params.userId,
-          screeningResultId: lockedResult.id,
+          jobDescriptionId: params.jobDescriptionId,
           status: 'running',
           updatedAt: { lt: staleBefore },
         },
@@ -1720,65 +1856,35 @@ export async function updateCandidateInterviewProgress(
           errorMessage: STALE_CANDIDATE_ACTION_ERROR_MESSAGE,
         },
       });
-      const runningAction = await tx.candidateActionLog.findFirst({
+      const runningJobAction = await tx.candidateActionLog.findFirst({
         where: {
           userId: params.userId,
-          screeningResultId: lockedResult.id,
+          jobDescriptionId: params.jobDescriptionId,
           status: 'running',
         },
         select: { id: true },
       });
-      if (runningAction) {
+      if (runningJobAction) {
         throw new CandidateActionInProgressError();
       }
-    }
 
-    const [jobDescription] = await tx.$queryRaw<
-      Array<{ id: string; status: string; hiringTarget: number | null }>
-    >(Prisma.sql`
-      SELECT id, status, hiring_target AS "hiringTarget"
-      FROM public.job_descriptions
-      WHERE id = ${params.jobDescriptionId}
-        AND user_id = ${params.userId}
-      FOR UPDATE
-    `);
-    if (!jobDescription) return null;
-
-    const where: Prisma.CandidateScreeningResultWhereInput = {
-      ...scopedWhere,
-      id: lockedResult.id,
-      interviewStage: lockedResult.interviewStage,
-    };
-    const result = await tx.candidateScreeningResult.updateMany({ where, data });
-    if (result.count === 0) return null;
-
-    if (
-      nextInterviewStage === 'onboarded' &&
-      jobDescription.status !== 'archived' &&
-      jobDescription.hiringTarget !== null
-    ) {
-      const onboardedCount = await tx.candidateScreeningResult.count({
+      await tx.jobDescription.updateMany({
         where: {
+          id: params.jobDescriptionId,
           userId: params.userId,
-          jobDescriptionId: params.jobDescriptionId,
-          interviewStage: 'onboarded',
+          status: jobDescription.status,
+        },
+        data: {
+          status: 'filled',
+          activePublishBatchId: null,
+          publishLeaseExpiresAt: null,
         },
       });
-      if (onboardedCount >= jobDescription.hiringTarget) {
-        await tx.jobDescription.updateMany({
-          where: {
-            id: params.jobDescriptionId,
-            userId: params.userId,
-            status: jobDescription.status,
-          },
-          data: { status: 'filled', activePublishBatchId: null },
-        });
-      }
     }
+  }
 
-    const row = await tx.candidateScreeningResult.findFirst({ where: scopedWhere });
-    return row ? mapScreeningResult(row) : null;
-  });
+  const row = await tx.candidateScreeningResult.findFirst({ where: scopedWhere });
+  return row ? mapScreeningResult(row) : null;
 }
 
 const interviewFeedbackStageOrder: CandidateInterviewFeedbackStage[] = [
@@ -1943,6 +2049,44 @@ export async function claimRetryableCollectActionLog(params: {
   });
 }
 
+async function lockJobDescriptionForCandidateOutreach(
+  tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
+  params: { userId: string; jobDescriptionId: string },
+): Promise<boolean> {
+  const [lockedJobDescription] = await tx.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+    SELECT status
+    FROM public.job_descriptions
+    WHERE id = ${params.jobDescriptionId}
+      AND user_id = ${params.userId}
+    FOR UPDATE
+  `);
+  return Boolean(
+    lockedJobDescription && isCandidateOutreachAllowedJobStatus(lockedJobDescription.status),
+  );
+}
+
+export async function claimJobDescriptionForCandidateOutreach(params: {
+  userId: string;
+  jobDescriptionId: string;
+  candidateId: string;
+}): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const [lockedResult] = await tx.$queryRaw<Array<{ interviewStage: string }>>(Prisma.sql`
+      SELECT interview_stage AS "interviewStage"
+      FROM public.candidate_screening_results
+      WHERE user_id = ${params.userId}
+        AND job_description_id = ${params.jobDescriptionId}
+        AND candidate_id = ${params.candidateId}
+      FOR UPDATE
+    `);
+    if (lockedResult && isTerminalCandidateInterviewStage(lockedResult.interviewStage)) {
+      return false;
+    }
+
+    return lockJobDescriptionForCandidateOutreach(tx, params);
+  });
+}
+
 async function claimCandidateActionLogFromStatus(params: {
   userId: string;
   id: string;
@@ -1952,9 +2096,12 @@ async function claimCandidateActionLogFromStatus(params: {
 }): Promise<CandidateActionLogDto | null> {
   return prisma.$transaction(async (tx) => {
     const [lockedResult] = await tx.$queryRaw<
-      Array<{ id: string; interviewStage: string }>
+      Array<{ id: string; interviewStage: string; jobDescriptionId: string }>
     >(Prisma.sql`
-      SELECT result.id, result.interview_stage AS "interviewStage"
+      SELECT
+        result.id,
+        result.interview_stage AS "interviewStage",
+        result.job_description_id AS "jobDescriptionId"
       FROM public.candidate_screening_results AS result
       INNER JOIN public.candidate_action_logs AS action_log
         ON action_log.screening_result_id = result.id
@@ -1966,7 +2113,16 @@ async function claimCandidateActionLogFromStatus(params: {
     if (
       !lockedResult ||
       lockedResult.interviewStage !== params.expectedInterviewStage ||
-      isFinalHiringOutcomeStage(lockedResult.interviewStage)
+      isTerminalCandidateInterviewStage(lockedResult.interviewStage)
+    ) {
+      return null;
+    }
+
+    if (
+      !(await lockJobDescriptionForCandidateOutreach(tx, {
+        userId: params.userId,
+        jobDescriptionId: lockedResult.jobDescriptionId,
+      }))
     ) {
       return null;
     }

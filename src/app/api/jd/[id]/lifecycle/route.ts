@@ -17,6 +17,7 @@ function lifecycleFailureResponse(
     invalid_transition: '当前 JD 状态不允许执行此操作',
     hiring_target_required: '重新开放招聘前请先设置招聘人数',
     hiring_target_reached: '招聘人数必须大于已入职人数',
+    operation_in_progress: '招聘外发动作正在执行，请等待完成后重试',
     concurrent_update: 'JD 状态已变化，请刷新后重试',
   } as const;
   return NextResponse.json({ error: messages[result.reason] }, { status: 409 });

@@ -5,6 +5,7 @@ import {
   countJobDescriptions,
   createJobDescription,
   listJobDescriptionsPaginated,
+  reconcileJobDescriptionPublishingForUser,
 } from '@/lib/jd/job-description-repo';
 import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { composeJDJobInput, isJDStatus, parseCreateJobDescriptionPayload } from '@/lib/jd/api';
@@ -49,6 +50,7 @@ export async function GET(request: Request) {
     }
     const status = statusParam && isJDStatus(statusParam) ? statusParam : undefined;
     const offset = (page - 1) * limit;
+    await reconcileJobDescriptionPublishingForUser({ userId: auth.user.id });
     const [jobDescriptions, total] = await Promise.all([
       listJobDescriptionsPaginated({ userId: auth.user.id, limit, offset, status }),
       countJobDescriptions(auth.user.id, status),

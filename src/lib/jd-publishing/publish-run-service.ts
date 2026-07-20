@@ -1,5 +1,6 @@
 import { scheduleBackgroundTask } from '@/lib/jd/background';
 import type { JobDescriptionDto } from '@/types';
+import { runWithJobDescriptionPublishLease } from '@/lib/jd/job-description-repo';
 import {
   createPublishRun,
   createPublishRunEvent,
@@ -57,6 +58,7 @@ export async function initializePublishRun(
     await updatePublishRun({
       userId: params.userId,
       runId: run.id,
+      expectedStatus: 'pending',
       status: 'failed',
       currentStage: 'completed',
       errorMessage: message,
@@ -75,17 +77,19 @@ export async function initializePublishRun(
 export async function failInitializedPublishRun(
   initialized: InitializedPublishRun,
   cause: unknown,
-): Promise<void> {
+): Promise<boolean> {
   const { run } = initialized;
   const message = `同批次存在发布任务初始化失败，本任务未启动：${errorMessage(cause, '未知错误')}`;
-  await updatePublishRun({
+  const failed = await updatePublishRun({
     userId: run.userId,
     runId: run.id,
+    expectedStatus: 'pending',
     status: 'failed',
     currentStage: 'completed',
     errorMessage: message,
     finishedAt: new Date(),
   });
+  if (!failed) return false;
 
   await createPublishRunEvent({
     userId: run.userId,
@@ -95,6 +99,7 @@ export async function failInitializedPublishRun(
     message: '发布任务未启动',
     detail: { error: message },
   }).catch(() => {});
+  return true;
 }
 
 async function executePublishRun(initialized: InitializedPublishRun): Promise<void> {
@@ -102,21 +107,24 @@ async function executePublishRun(initialized: InitializedPublishRun): Promise<vo
   try {
     await runPublishRun({ run, jobDescription, settings });
   } catch (error) {
-    await updatePublishRun({
+    const failed = await updatePublishRun({
       userId: run.userId,
       runId: run.id,
+      expectedStatus: ['pending', 'running'],
       status: 'failed',
       currentStage: 'completed',
       errorMessage: errorMessage(error, '发布任务启动失败'),
       finishedAt: new Date(),
-    }).catch(() => {});
-    await reconcilePublishBatchWithRetry({
-      userId: run.userId,
-      id: run.jobDescriptionId,
-      batchId: run.batchId,
-      mode: 'batch',
-      result: 'failed',
-    }).catch(() => {});
+    }).catch(() => null);
+    if (failed) {
+      await reconcilePublishBatchWithRetry({
+        userId: run.userId,
+        id: run.jobDescriptionId,
+        batchId: run.batchId,
+        mode: 'batch',
+        result: 'failed',
+      }).catch(() => {});
+    }
     throw error;
   }
 }
@@ -126,11 +134,40 @@ export function schedulePublishRuns(initializedRuns: InitializedPublishRun[]): v
 
   scheduleBackgroundTask(
     async () => {
-      const settledRuns = await Promise.allSettled(
-        initializedRuns.map((initialized) => executePublishRun(initialized)),
-      );
-      const failedRun = settledRuns.find((result) => result.status === 'rejected');
-      if (failedRun?.status === 'rejected') throw failedRun.reason;
+      const first = initializedRuns[0];
+      if (!first) return;
+      let operationStarted = false;
+      try {
+        await runWithJobDescriptionPublishLease({
+          userId: first.run.userId,
+          id: first.run.jobDescriptionId,
+          batchId: first.run.batchId,
+          operation: async () => {
+            operationStarted = true;
+            const settledRuns = await Promise.allSettled(
+              initializedRuns.map((initialized) => executePublishRun(initialized)),
+            );
+            const failedRun = settledRuns.find((result) => result.status === 'rejected');
+            if (failedRun?.status === 'rejected') throw failedRun.reason;
+          },
+        });
+      } catch (error) {
+        if (!operationStarted) {
+          const failedRuns = await Promise.allSettled(
+            initializedRuns.map((initialized) => failInitializedPublishRun(initialized, error)),
+          );
+          if (failedRuns.some((result) => result.status === 'fulfilled' && result.value === true)) {
+            await reconcilePublishBatchWithRetry({
+              userId: first.run.userId,
+              id: first.run.jobDescriptionId,
+              batchId: first.run.batchId,
+              mode: 'batch',
+              result: 'failed',
+            }).catch(() => {});
+          }
+        }
+        throw error;
+      }
     },
     (error) => {
       console.error('JD publish batch failed', {

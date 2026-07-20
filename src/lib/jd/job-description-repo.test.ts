@@ -4,7 +4,9 @@ import {
   createJobDescription,
   getJobDescriptionById,
   listJobDescriptionsPaginated,
+  recoverStaleJobDescriptionPublishing,
   reconcileJobDescriptionPublishResult,
+  renewJobDescriptionPublishLease,
   updateJobDescriptionLifecycle,
   updateJobDescription,
   updateMutableJobDescription,
@@ -22,14 +24,34 @@ jest.mock('@/lib/prisma', () => ({
     };
     const jobDescriptionPublishRun = {
       findMany: jest.fn(),
+      updateMany: jest.fn(),
     };
+    const jobDescriptionPublishRunEvent = { createMany: jest.fn() };
+    const jobPublishTask = { findMany: jest.fn(), updateMany: jest.fn() };
+    const candidateActionLog = { findFirst: jest.fn(), updateMany: jest.fn() };
+    const candidateConversationMessage = { findFirst: jest.fn() };
     const $queryRaw = jest.fn();
+    const $executeRaw = jest.fn();
     return {
       jobDescription,
       jobDescriptionPublishRun,
+      jobDescriptionPublishRunEvent,
+      jobPublishTask,
+      candidateActionLog,
+      candidateConversationMessage,
       $queryRaw,
+      $executeRaw,
       $transaction: jest.fn((callback) =>
-        callback({ jobDescription, jobDescriptionPublishRun, $queryRaw }),
+        callback({
+          jobDescription,
+          jobDescriptionPublishRun,
+          jobDescriptionPublishRunEvent,
+          jobPublishTask,
+          candidateActionLog,
+          candidateConversationMessage,
+          $queryRaw,
+          $executeRaw,
+        }),
       ),
     };
   })(),
@@ -38,6 +60,7 @@ jest.mock('@/lib/prisma', () => ({
 const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
   prisma: {
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     $transaction: jest.Mock;
     jobDescription: {
       create: jest.Mock;
@@ -48,7 +71,12 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
     };
     jobDescriptionPublishRun: {
       findMany: jest.Mock;
+      updateMany: jest.Mock;
     };
+    jobDescriptionPublishRunEvent: { createMany: jest.Mock };
+    jobPublishTask: { findMany: jest.Mock; updateMany: jest.Mock };
+    candidateActionLog: { findFirst: jest.Mock; updateMany: jest.Mock };
+    candidateConversationMessage: { findFirst: jest.Mock };
   };
 };
 
@@ -101,13 +129,29 @@ describe('job description repository', () => {
     prismaMock.jobDescription.count.mockReset();
     prismaMock.jobDescription.updateMany.mockReset();
     prismaMock.jobDescriptionPublishRun.findMany.mockReset();
+    prismaMock.jobDescriptionPublishRun.updateMany.mockReset();
+    prismaMock.jobDescriptionPublishRunEvent.createMany.mockReset();
+    prismaMock.jobPublishTask.findMany.mockReset();
+    prismaMock.jobPublishTask.updateMany.mockReset();
+    prismaMock.candidateActionLog.findFirst.mockReset();
+    prismaMock.candidateActionLog.updateMany.mockReset();
+    prismaMock.candidateConversationMessage.findFirst.mockReset();
+    prismaMock.candidateActionLog.findFirst.mockResolvedValue(null);
+    prismaMock.candidateActionLog.updateMany.mockResolvedValue({ count: 0 });
+    prismaMock.candidateConversationMessage.findFirst.mockResolvedValue(null);
     prismaMock.$queryRaw.mockReset();
+    prismaMock.$executeRaw.mockReset();
     prismaMock.$transaction.mockReset();
     prismaMock.$transaction.mockImplementation((callback) =>
       callback({
         jobDescription: prismaMock.jobDescription,
         jobDescriptionPublishRun: prismaMock.jobDescriptionPublishRun,
+        jobDescriptionPublishRunEvent: prismaMock.jobDescriptionPublishRunEvent,
+        jobPublishTask: prismaMock.jobPublishTask,
+        candidateActionLog: prismaMock.candidateActionLog,
+        candidateConversationMessage: prismaMock.candidateConversationMessage,
         $queryRaw: prismaMock.$queryRaw,
+        $executeRaw: prismaMock.$executeRaw,
       }),
     );
   });
@@ -303,9 +347,325 @@ describe('job description repository', () => {
     expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
       where: { id: 'jd-1', userId: 'u1', status: 'ready_to_publish' },
-      data: { status: 'publishing', activePublishBatchId: 'batch-1' },
+      data: {
+        status: 'publishing',
+        activePublishBatchId: 'batch-1',
+        publishLeaseExpiresAt: expect.any(Date),
+      },
     });
     expect(result).toMatchObject({ ok: true, jobDescription: { status: 'publishing' } });
+  });
+
+  it('renews the active publish lease without touching the JD business timestamp', async () => {
+    prismaMock.$executeRaw.mockResolvedValueOnce(1);
+
+    await expect(
+      renewJobDescriptionPublishLease({
+        userId: 'u1',
+        id: 'jd-1',
+        batchId: 'batch-1',
+        now: new Date('2026-07-20T10:00:00.000Z'),
+      }),
+    ).resolves.toBe(true);
+
+    expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires an abandoned publishing claim and fails its non-terminal evidence', async () => {
+    const expiredAt = new Date('2026-07-20T09:59:00.000Z');
+    prismaMock.jobDescription.findFirst
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'publishing',
+        hiringTarget: 2,
+        activePublishBatchId: 'batch-stale',
+        publishLeaseExpiresAt: expiredAt,
+        _count: { candidateScreeningResults: 0 },
+      })
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'publish_failed',
+        hiringTarget: 2,
+        activePublishBatchId: null,
+        publishLeaseExpiresAt: null,
+        _count: { candidateScreeningResults: 0 },
+      });
+    prismaMock.jobDescriptionPublishRun.findMany.mockResolvedValueOnce([
+      { id: 'run-1', userId: 'u1', status: 'pending', updatedAt: expiredAt },
+    ]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([
+      { id: 'task-1', status: 'running', updatedAt: expiredAt },
+    ]);
+    prismaMock.jobDescriptionPublishRun.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobPublishTask.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescriptionPublishRunEvent.createMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescription.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await recoverStaleJobDescriptionPublishing({
+      userId: 'u1',
+      id: 'jd-1',
+      now: new Date('2026-07-20T10:00:00.000Z'),
+    });
+
+    expect(prismaMock.jobDescriptionPublishRun.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-stale',
+        status: { in: ['pending', 'running'] },
+      },
+      data: expect.objectContaining({ status: 'failed', currentStage: 'completed' }),
+    });
+    expect(prismaMock.jobPublishTask.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-stale',
+        status: 'running',
+      },
+      data: expect.objectContaining({ status: 'failed' }),
+    });
+    expect(result).toMatchObject({ status: 'publish_failed' });
+  });
+
+  it('self-heals a publishing JD from a successful task in the active batch', async () => {
+    const leaseExpiresAt = new Date('2026-07-20T10:10:00.000Z');
+    prismaMock.jobDescription.findFirst
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'publishing',
+        hiringTarget: 2,
+        activePublishBatchId: 'batch-1',
+        publishLeaseExpiresAt: leaseExpiresAt,
+        _count: { candidateScreeningResults: 0 },
+      })
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'published',
+        hiringTarget: 2,
+        activePublishBatchId: null,
+        publishLeaseExpiresAt: null,
+        _count: { candidateScreeningResults: 0 },
+      });
+    prismaMock.jobDescriptionPublishRun.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'run-1',
+          userId: 'u1',
+          platform: 'boss',
+          status: 'running',
+          updatedAt: new Date('2026-07-20T09:59:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'run-1',
+          userId: 'u1',
+          platform: 'boss',
+          status: 'success',
+          updatedAt: new Date('2026-07-20T10:00:00.000Z'),
+        },
+      ]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([
+      {
+        id: 'task-1',
+        platform: 'boss',
+        skillId: 'skill-1',
+        status: 'success',
+        errorMessage: null,
+        updatedAt: new Date('2026-07-20T10:00:00.000Z'),
+      },
+    ]);
+    prismaMock.jobDescriptionPublishRun.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescriptionPublishRunEvent.createMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescription.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await recoverStaleJobDescriptionPublishing({
+      userId: 'u1',
+      id: 'jd-1',
+      now: new Date('2026-07-20T10:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({ status: 'published' });
+    expect(prismaMock.jobDescriptionPublishRun.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['run-1'] },
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        status: { in: ['pending', 'running'] },
+      },
+      data: expect.objectContaining({
+        status: 'success',
+        currentStage: 'completed',
+        publishTaskId: 'task-1',
+        skillId: 'skill-1',
+      }),
+    });
+    expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
+      where: { id: 'jd-1', userId: 'u1', status: 'publishing' },
+      data: {
+        status: 'published',
+        activePublishBatchId: null,
+        publishLeaseExpiresAt: null,
+      },
+    });
+  });
+
+  it('keeps a healthy publish lease active while another platform remains non-terminal', async () => {
+    const leaseExpiresAt = new Date('2026-07-20T10:10:00.000Z');
+    prismaMock.jobDescription.findFirst.mockResolvedValueOnce({
+      ...row,
+      status: 'publishing',
+      hiringTarget: 2,
+      activePublishBatchId: 'batch-1',
+      publishLeaseExpiresAt: leaseExpiresAt,
+      _count: { candidateScreeningResults: 0 },
+    });
+    prismaMock.jobDescriptionPublishRun.findMany.mockResolvedValueOnce([
+      {
+        id: 'run-success',
+        userId: 'u1',
+        platform: 'boss-like',
+        status: 'success',
+        updatedAt: new Date('2026-07-20T10:00:00.000Z'),
+      },
+      {
+        id: 'run-running',
+        userId: 'u1',
+        platform: 'zhilian',
+        status: 'running',
+        updatedAt: new Date('2026-07-20T10:00:00.000Z'),
+      },
+    ]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([]);
+
+    const result = await recoverStaleJobDescriptionPublishing({
+      userId: 'u1',
+      id: 'jd-1',
+      now: new Date('2026-07-20T10:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({ status: 'publishing' });
+    expect(prismaMock.jobDescription.updateMany).not.toHaveBeenCalled();
+    expect(prismaMock.jobDescriptionPublishRun.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('expires unfinished platforms but preserves a successful batch result after lease loss', async () => {
+    const expiredAt = new Date('2026-07-20T09:59:00.000Z');
+    prismaMock.jobDescription.findFirst
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'publishing',
+        hiringTarget: 2,
+        activePublishBatchId: 'batch-1',
+        publishLeaseExpiresAt: expiredAt,
+        _count: { candidateScreeningResults: 0 },
+      })
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'published',
+        hiringTarget: 2,
+        activePublishBatchId: null,
+        publishLeaseExpiresAt: null,
+        _count: { candidateScreeningResults: 0 },
+      });
+    prismaMock.jobDescriptionPublishRun.findMany.mockResolvedValueOnce([
+      {
+        id: 'run-success',
+        userId: 'u1',
+        platform: 'boss-like',
+        status: 'success',
+        updatedAt: expiredAt,
+      },
+      {
+        id: 'run-running',
+        userId: 'u1',
+        platform: 'zhilian',
+        status: 'running',
+        updatedAt: expiredAt,
+      },
+    ]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([]);
+    prismaMock.jobDescriptionPublishRun.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescriptionPublishRunEvent.createMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescription.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await recoverStaleJobDescriptionPublishing({
+      userId: 'u1',
+      id: 'jd-1',
+      now: new Date('2026-07-20T10:00:00.000Z'),
+    });
+
+    expect(prismaMock.jobDescriptionPublishRun.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        status: { in: ['pending', 'running'] },
+      },
+      data: expect.objectContaining({ status: 'failed', currentStage: 'completed' }),
+    });
+    expect(result).toMatchObject({ status: 'published' });
+  });
+
+  it('releases an expired zero-run claim and lets the same explicit retry claim a new batch', async () => {
+    const now = new Date('2026-07-20T10:00:00.000Z');
+    prismaMock.jobDescription.findFirst
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'publishing',
+        hiringTarget: 2,
+        activePublishBatchId: 'batch-stale',
+        publishLeaseExpiresAt: new Date('2026-07-20T09:59:00.000Z'),
+        _count: { candidateScreeningResults: 0 },
+      })
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'publish_failed',
+        hiringTarget: 2,
+        activePublishBatchId: null,
+        publishLeaseExpiresAt: null,
+        _count: { candidateScreeningResults: 0 },
+      })
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'publishing',
+        hiringTarget: 2,
+        activePublishBatchId: 'batch-new',
+        publishLeaseExpiresAt: new Date('2026-07-20T10:10:00.000Z'),
+        _count: { candidateScreeningResults: 0 },
+      });
+    prismaMock.jobDescriptionPublishRun.findMany.mockResolvedValueOnce([]);
+    prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([]);
+    prismaMock.jobDescription.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    const result = await claimJobDescriptionForPublishing({
+      userId: 'u1',
+      id: 'jd-1',
+      batchId: 'batch-new',
+      now,
+    });
+
+    expect(result).toMatchObject({ ok: true, jobDescription: { status: 'publishing' } });
+    expect(prismaMock.jobDescription.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'jd-1', userId: 'u1', status: 'publishing' },
+      data: {
+        status: 'publish_failed',
+        activePublishBatchId: null,
+        publishLeaseExpiresAt: null,
+      },
+    });
+    expect(prismaMock.jobDescription.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'jd-1', userId: 'u1', status: 'publish_failed' },
+      data: {
+        status: 'publishing',
+        activePublishBatchId: 'batch-new',
+        publishLeaseExpiresAt: new Date('2026-07-20T10:10:00.000Z'),
+      },
+    });
   });
 
   it('marks a full JD filled instead of claiming it for publishing', async () => {
@@ -332,7 +692,7 @@ describe('job description repository', () => {
 
     expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
       where: { id: 'jd-1', userId: 'u1', status: 'ready_to_publish' },
-      data: { status: 'filled', activePublishBatchId: null },
+      data: { status: 'filled', activePublishBatchId: null, publishLeaseExpiresAt: null },
     });
     expect(result).toMatchObject({
       ok: false,
@@ -368,7 +728,12 @@ describe('job description repository', () => {
     expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
       where: { id: 'jd-1', userId: 'u1', status: 'filled' },
-      data: { status: 'published', hiringTarget: 3, activePublishBatchId: null },
+      data: {
+        status: 'published',
+        hiringTarget: 3,
+        activePublishBatchId: null,
+        publishLeaseExpiresAt: null,
+      },
     });
     expect(result).toMatchObject({
       ok: true,
@@ -403,8 +768,72 @@ describe('job description repository', () => {
 
     expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
       where: { id: 'jd-1', userId: 'u1', status: 'published' },
-      data: { status: 'offline', activePublishBatchId: null },
+      data: { status: 'offline', activePublishBatchId: null, publishLeaseExpiresAt: null },
     });
+  });
+
+  it('does not close a JD while a candidate outreach action is running', async () => {
+    prismaMock.jobDescription.findFirst.mockResolvedValueOnce({
+      ...row,
+      status: 'published',
+      hiringTarget: 2,
+      _count: { candidateScreeningResults: 1 },
+    });
+    prismaMock.candidateActionLog.findFirst.mockResolvedValueOnce({ id: 'action-running' });
+
+    const result = await applyJobDescriptionLifecycle({
+      userId: 'u1',
+      id: 'jd-1',
+      request: { action: 'take_offline' },
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'operation_in_progress' });
+    expect(prismaMock.candidateActionLog.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        status: 'running',
+        updatedAt: { lt: expect.any(Date) },
+      },
+      data: {
+        status: 'failed',
+        errorMessage: expect.any(String),
+      },
+    });
+    expect(prismaMock.jobDescription.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not close a JD while an unscreened candidate message owner is active', async () => {
+    prismaMock.jobDescription.findFirst.mockResolvedValueOnce({
+      ...row,
+      status: 'published',
+      hiringTarget: 2,
+      _count: { candidateScreeningResults: 1 },
+    });
+    prismaMock.candidateConversationMessage.findFirst.mockResolvedValueOnce({
+      id: 'incoming-message-running',
+    });
+
+    const result = await applyJobDescriptionLifecycle({
+      userId: 'u1',
+      id: 'jd-1',
+      request: { action: 'take_offline' },
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'operation_in_progress' });
+    expect(prismaMock.candidateConversationMessage.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        role: 'candidate',
+        processingOutcome: 'in_flight',
+        processedAt: null,
+        processingLeaseExpiresAt: { gt: expect.any(Date) },
+      },
+      select: { id: true },
+    });
+    expect(prismaMock.candidateActionLog.findFirst).not.toHaveBeenCalled();
+    expect(prismaMock.jobDescription.updateMany).not.toHaveBeenCalled();
   });
 
   it('keeps filled and offline JDs closed when only the target changes', async () => {
@@ -536,7 +965,32 @@ describe('job description repository', () => {
     expect(result?.status).toBe('publishing');
   });
 
-  it('publishes a batch as soon as any platform succeeds even if another is pending', async () => {
+  it('keeps a successful multi-platform batch active while another run is pending', async () => {
+    prismaMock.jobDescription.findFirst.mockResolvedValueOnce({
+      ...row,
+      status: 'publishing',
+      hiringTarget: 2,
+      activePublishBatchId: 'batch-1',
+      _count: { candidateScreeningResults: 1 },
+    });
+    prismaMock.jobDescriptionPublishRun.findMany.mockResolvedValueOnce([
+      { status: 'pending' },
+      { status: 'success' },
+    ]);
+
+    const result = await reconcileJobDescriptionPublishResult({
+      userId: 'u1',
+      id: 'jd-1',
+      batchId: 'batch-1',
+      mode: 'batch',
+      result: 'failed',
+    });
+
+    expect(prismaMock.jobDescription.updateMany).not.toHaveBeenCalled();
+    expect(result?.status).toBe('publishing');
+  });
+
+  it('publishes a completed multi-platform batch when at least one platform succeeded', async () => {
     prismaMock.jobDescription.findFirst
       .mockResolvedValueOnce({
         ...row,
@@ -553,7 +1007,7 @@ describe('job description repository', () => {
         _count: { candidateScreeningResults: 1 },
       });
     prismaMock.jobDescriptionPublishRun.findMany.mockResolvedValueOnce([
-      { status: 'pending' },
+      { status: 'failed' },
       { status: 'success' },
     ]);
     prismaMock.jobDescription.updateMany.mockResolvedValueOnce({ count: 1 });
@@ -568,7 +1022,7 @@ describe('job description repository', () => {
 
     expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
       where: { id: 'jd-1', userId: 'u1', status: 'publishing' },
-      data: { status: 'published', activePublishBatchId: null },
+      data: { status: 'published', activePublishBatchId: null, publishLeaseExpiresAt: null },
     });
     expect(result?.status).toBe('published');
   });

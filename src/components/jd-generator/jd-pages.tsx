@@ -255,6 +255,15 @@ function hiringTargetInputValue(hiringTarget: number | null | undefined): string
   return hiringTarget === null || hiringTarget === undefined ? '' : String(hiringTarget);
 }
 
+function hasOpenHiringCapacity(
+  jobDescription: Pick<JobDescriptionDto, 'hiringTarget' | 'onboardedCount'>,
+): boolean {
+  return (
+    jobDescription.hiringTarget !== null &&
+    jobDescription.hiringTarget > jobDescription.onboardedCount
+  );
+}
+
 function isEditableJobDescriptionStatus(status: JDStatus): boolean {
   return status === 'created' || status === 'ready_to_publish' || status === 'publish_failed';
 }
@@ -526,6 +535,7 @@ export function JDListView() {
 
   function renderPublishedActions(item: JobDescriptionDto) {
     const summary = getScreeningSummary(item);
+    const canStartScreening = hasOpenHiringCapacity(item);
     const runHref = summary.latestRunId
       ? withReturnTarget(
           `/jd-generator/${item.id}/screening-runs/${summary.latestRunId}`,
@@ -536,7 +546,24 @@ export function JDListView() {
     return (
       <>
         {renderDetailAction(item)}
-        {summary.status === 'running' && runHref ? (
+        {!canStartScreening ? (
+          item.hiringTarget === null ? (
+            <Button
+              as={Link}
+              className="gap-2"
+              disableRipple
+              href={withReturnTarget(`/jd-generator/${item.id}`, listReturnTarget)}
+              size="sm"
+              variant="bordered"
+            >
+              先设置招聘人数
+            </Button>
+          ) : (
+            <Button disableRipple isDisabled size="sm" type="button" variant="bordered">
+              招聘目标已达成
+            </Button>
+          )
+        ) : summary.status === 'running' && runHref ? (
           <Button
             as={Link}
             className="gap-2"
@@ -1398,9 +1425,16 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   }
 
   const context = jobDescription?.generationMeta?.context ?? null;
-  const canStartCandidateScreening = status === 'published' || status === 'ready_to_publish';
+  const canStartCandidateScreening = Boolean(
+    jobDescription &&
+    (status === 'published' || status === 'ready_to_publish') &&
+    hasOpenHiringCapacity(jobDescription),
+  );
   const canViewCandidates =
-    canStartCandidateScreening || status === 'filled' || status === 'offline';
+    status === 'published' ||
+    status === 'ready_to_publish' ||
+    status === 'filled' ||
+    status === 'offline';
   const isEditable = isEditableJobDescriptionStatus(status);
   const screeningSummary = jobDescription
     ? getScreeningSummary(jobDescription)
@@ -1553,6 +1587,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       </div>
 
       {error ? <ErrorBanner message={error} /> : null}
+      {(status === 'published' || status === 'ready_to_publish') &&
+      jobDescription.hiringTarget === null ? (
+        <ErrorBanner message="请先设置计划招聘人数；设置完成前不能继续筛选候选人，也无法在入职达标时自动标记招满。" />
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,0.72fr)_minmax(340px,0.32fr)]">
         <section className="border-border space-y-4 rounded-lg border p-4">

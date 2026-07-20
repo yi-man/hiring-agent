@@ -68,6 +68,21 @@ export function isFinalHiringOutcomeStage(
   return stage === 'onboarded' || stage === 'not_joined';
 }
 
+export function isTerminalCandidateInterviewStage(
+  stage: string,
+): stage is Extract<
+  CandidateInterviewStage,
+  'onboarded' | 'not_joined' | 'rejected' | 'withdrawn'
+> {
+  return (
+    stage === 'onboarded' || stage === 'not_joined' || stage === 'rejected' || stage === 'withdrawn'
+  );
+}
+
+export function isCandidateOutreachAllowedJobStatus(status: string): boolean {
+  return status === 'ready_to_publish' || status === 'publishing' || status === 'published';
+}
+
 export const CANDIDATE_INTERVIEW_FEEDBACK_STAGES = [
   'phone_screen',
   'first_interview',

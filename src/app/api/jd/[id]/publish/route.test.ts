@@ -8,6 +8,8 @@ import type { JD, JobDescriptionDto } from '@/types';
 
 const requireAuthMock = jest.fn();
 const claimJobDescriptionForPublishingMock = jest.fn();
+const recoverStaleJobDescriptionPublishingMock = jest.fn();
+const runWithJobDescriptionPublishLeaseMock = jest.fn();
 const reconcilePublishBatchWithRetryMock = jest.fn();
 const listPublishTasksForJobDescriptionMock =
   listPublishTasksForJobDescription as jest.MockedFunction<
@@ -37,6 +39,10 @@ jest.mock('@/lib/auth/session', () => ({
 jest.mock('@/lib/jd/job-description-repo', () => ({
   claimJobDescriptionForPublishing: (...args: unknown[]) =>
     claimJobDescriptionForPublishingMock(...args),
+  recoverStaleJobDescriptionPublishing: (...args: unknown[]) =>
+    recoverStaleJobDescriptionPublishingMock(...args),
+  runWithJobDescriptionPublishLease: (...args: unknown[]) =>
+    runWithJobDescriptionPublishLeaseMock(...args),
 }));
 
 jest.mock('@/lib/jd-publishing/publish-run-repo', () => ({
@@ -88,11 +94,17 @@ describe('POST /api/jd/[id]/publish', () => {
   beforeEach(() => {
     requireAuthMock.mockReset();
     claimJobDescriptionForPublishingMock.mockReset();
+    recoverStaleJobDescriptionPublishingMock.mockReset();
+    runWithJobDescriptionPublishLeaseMock.mockReset();
     reconcilePublishBatchWithRetryMock.mockReset();
     listPublishTasksForJobDescriptionMock.mockReset();
     publishJobDescriptionToBossLikeMock.mockReset();
 
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
+    recoverStaleJobDescriptionPublishingMock.mockResolvedValue(sampleJobDescription);
+    runWithJobDescriptionPublishLeaseMock.mockImplementation(
+      ({ operation }: { operation: () => Promise<unknown> }) => operation(),
+    );
     claimJobDescriptionForPublishingMock.mockResolvedValue({
       ok: true,
       jobDescription: { ...sampleJobDescription, status: 'publishing' },
@@ -151,6 +163,10 @@ describe('POST /api/jd/[id]/publish', () => {
       jobDescriptionId: 'jd-1',
       limit: 5,
     });
+    expect(recoverStaleJobDescriptionPublishingMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      id: 'jd-1',
+    });
   });
 
   it('publishes a JD with boss-like settings and marks it published', async () => {
@@ -185,8 +201,15 @@ describe('POST /api/jd/[id]/publish', () => {
           salary: '25-40K',
           location: '上海',
         }),
+        batchId: expect.any(String),
       }),
     );
+    expect(runWithJobDescriptionPublishLeaseMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      id: 'jd-1',
+      batchId: expect.any(String),
+      operation: expect.any(Function),
+    });
     expect(reconcilePublishBatchWithRetryMock).toHaveBeenCalledWith({
       userId: 'u1',
       id: 'jd-1',

@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { updateCandidateInterviewProgressInTransaction } from '@/lib/candidate-screening/repo';
 import type { CandidateInterviewStage } from '@/lib/candidate-screening/types';
 import type {
   CandidateCommunicationAction,
@@ -13,6 +15,12 @@ import type {
 type NullableDate = Date | null;
 
 type JsonRecord = Record<string, unknown>;
+
+export type CandidateMessageProcessingOutcome =
+  | 'in_flight'
+  | 'processed_ackable'
+  | 'delivery_failed'
+  | 'delivery_unknown';
 
 export type CandidateCommunicationSubject = {
   jobDescription: {
@@ -86,6 +94,9 @@ export type CandidateConversationMessageDto = {
   errorMessage: string | null;
   occurredAt: string;
   createdAt: string;
+  processingOutcome?: CandidateMessageProcessingOutcome | null;
+  processedAt?: string | null;
+  isReplay?: boolean;
 };
 
 export type CandidateConversationDecisionDto = {
@@ -105,6 +116,7 @@ export type CandidateConversationDecisionDto = {
   rationale: string;
   llmMeta: JsonRecord | null;
   createdAt: string;
+  finalizedAt?: string | null;
 };
 
 export type CandidateConversationMemoryDto = {
@@ -203,6 +215,65 @@ export type CreateMessageParams = {
   occurredAt: Date;
 };
 
+export type CandidateIncomingMessageProcessingResult =
+  | {
+      status: 'claimed';
+      claimId: string;
+      decision?: CandidateConversationDecisionDto;
+    }
+  | {
+      status: 'resume_finalization';
+      claimId: string;
+      decision: CandidateConversationDecisionDto;
+      outgoingMessage: CandidateConversationMessageDto | null;
+      completionOutcome: Exclude<CandidateMessageProcessingOutcome, 'in_flight'>;
+    }
+  | {
+      status: 'processed';
+      outcome: Exclude<CandidateMessageProcessingOutcome, 'in_flight'>;
+    }
+  | { status: 'in_flight' };
+
+export type ClaimIncomingMessageProcessingParams = {
+  userId: string;
+  messageId: string;
+  now?: Date;
+};
+
+export type CompleteIncomingMessageProcessingParams = {
+  userId: string;
+  messageId: string;
+  claimId: string;
+  outcome: Exclude<CandidateMessageProcessingOutcome, 'in_flight'>;
+  errorMessage?: string | null;
+};
+
+export type RenewIncomingMessageProcessingParams = {
+  userId: string;
+  messageId: string;
+  claimId: string;
+  now?: Date;
+};
+
+export class CandidateExternalMessageIdentityConflictError extends Error {
+  constructor(externalMessageId: string) {
+    super(`external message id belongs to a different message: ${externalMessageId}`);
+    this.name = 'CandidateExternalMessageIdentityConflictError';
+  }
+}
+
+export const CANDIDATE_INCOMING_PROCESSING_LEASE_MS = 10 * 60 * 1000;
+export const CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR =
+  '候选人消息发送结果未知，未自动重发以避免重复，请在平台核对后手动重新沟通。';
+
+export function candidateCommunicationActionIdempotencyKey(inputMessageId: string): string {
+  return `candidate-communication:${inputMessageId}`;
+}
+
+export function candidateCommunicationReplyExternalMessageId(inputMessageId: string): string {
+  return `candidate-communication-reply:${inputMessageId}`;
+}
+
 export type UpdateConversationParams = {
   conversationId: string;
   userId: string;
@@ -235,6 +306,25 @@ export type CreateDecisionParams = {
   actions: CandidateCommunicationAction[];
   rationale: string;
   llmMeta?: JsonRecord | null;
+};
+
+export type UpdateDecisionOutputParams = {
+  userId: string;
+  inputMessageId: string;
+  outputMessageId: string | null;
+};
+
+export type FinalizeCandidateDecisionParams = {
+  userId: string;
+  messageId: string;
+  claimId: string;
+  inputMessageId: string;
+  interviewStage: 'replied' | 'withdrawn';
+  conversation: Omit<UpdateConversationParams, 'messageCount'> & {
+    messageCountIncrement: number;
+  };
+  memory?: CreateMemoryParams | null;
+  now?: Date;
 };
 
 export type UpdateMessageDeliveryParams = {
@@ -273,10 +363,23 @@ export type CandidateConversationRepository = {
     limit: number;
   }): Promise<CandidateConversationMessageDto[]>;
   createMessage(params: CreateMessageParams): Promise<CandidateConversationMessageDto>;
+  claimIncomingMessageProcessing(
+    params: ClaimIncomingMessageProcessingParams,
+  ): Promise<CandidateIncomingMessageProcessingResult>;
+  completeIncomingMessageProcessing(
+    params: CompleteIncomingMessageProcessingParams,
+  ): Promise<boolean>;
+  renewIncomingMessageProcessing(params: RenewIncomingMessageProcessingParams): Promise<boolean>;
   updateMessageDelivery(
     params: UpdateMessageDeliveryParams,
   ): Promise<CandidateConversationMessageDto | null>;
   createDecision(params: CreateDecisionParams): Promise<CandidateConversationDecisionDto>;
+  updateDecisionOutput(
+    params: UpdateDecisionOutputParams,
+  ): Promise<CandidateConversationDecisionDto | null>;
+  finalizeCandidateDecision(
+    params: FinalizeCandidateDecisionParams,
+  ): Promise<CandidateConversationDto | null>;
   updateConversation(params: UpdateConversationParams): Promise<CandidateConversationDto>;
   createMemory(params: CreateMemoryParams): Promise<CandidateConversationMemoryDto>;
   markCandidateReplied(params: {
@@ -317,6 +420,10 @@ function toJson(value: unknown): Prisma.InputJsonValue {
 
 function toNullableJson(value: unknown | null): Prisma.InputJsonValue | typeof Prisma.JsonNull {
   return value === null ? Prisma.JsonNull : toJson(value);
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 function toRecordOrNull(value: unknown | null): JsonRecord | null {
@@ -362,6 +469,40 @@ function readContentTitle(content: unknown): string | null {
   if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
   const title = (content as { title?: unknown }).title;
   return typeof title === 'string' && title.trim() ? title.trim() : null;
+}
+
+async function listCandidateJobDescriptionRelationIds(params: {
+  userId: string;
+  candidateId: string;
+  jobDescriptionIds?: readonly string[];
+}): Promise<Set<string>> {
+  if (params.jobDescriptionIds?.length === 0) return new Set();
+  const jobDescriptionScope = params.jobDescriptionIds
+    ? { jobDescriptionId: { in: [...params.jobDescriptionIds] } }
+    : {};
+  const [screeningResults, conversations] = await Promise.all([
+    prisma.candidateScreeningResult.findMany({
+      where: {
+        userId: params.userId,
+        candidateId: params.candidateId,
+        ...jobDescriptionScope,
+      },
+      select: { jobDescriptionId: true },
+    }),
+    prisma.candidateConversation.findMany({
+      where: {
+        userId: params.userId,
+        candidateId: params.candidateId,
+        ...jobDescriptionScope,
+      },
+      select: { jobDescriptionId: true },
+    }),
+  ]);
+
+  return new Set([
+    ...screeningResults.map(({ jobDescriptionId }) => jobDescriptionId),
+    ...conversations.map(({ jobDescriptionId }) => jobDescriptionId),
+  ]);
 }
 
 function mapConversation(row: {
@@ -419,6 +560,8 @@ function mapMessage(row: {
   errorMessage: string | null;
   occurredAt: Date;
   createdAt: Date;
+  processingOutcome?: string | null;
+  processedAt?: Date | null;
 }): CandidateConversationMessageDto {
   return {
     id: row.id,
@@ -435,6 +578,9 @@ function mapMessage(row: {
     errorMessage: row.errorMessage,
     occurredAt: iso(row.occurredAt),
     createdAt: iso(row.createdAt),
+    processingOutcome:
+      (row.processingOutcome as CandidateMessageProcessingOutcome | null | undefined) ?? null,
+    processedAt: row.processedAt ? iso(row.processedAt) : null,
   };
 }
 
@@ -455,6 +601,7 @@ function mapDecision(row: {
   rationale: string;
   llmMeta: unknown | null;
   createdAt: Date;
+  finalizedAt?: Date | null;
 }): CandidateConversationDecisionDto {
   return {
     id: row.id,
@@ -473,6 +620,7 @@ function mapDecision(row: {
     rationale: row.rationale,
     llmMeta: toRecordOrNull(row.llmMeta),
     createdAt: iso(row.createdAt),
+    finalizedAt: row.finalizedAt ? iso(row.finalizedAt) : null,
   };
 }
 
@@ -583,6 +731,142 @@ export async function getCandidateCommunicationRun(params: {
   return row ? mapCommunicationRun(row) : null;
 }
 
+type LockedCandidateIncomingMessage = {
+  id: string;
+  conversationId: string;
+  platform: string;
+  role: string;
+  processingClaimId: string | null;
+  processingLeaseExpiresAt: Date | null;
+  processingOutcome: string | null;
+  processedAt: Date | null;
+  occurredAt: Date;
+  createdAt: Date;
+};
+
+type CandidateMessageProcessingCheckpoints = {
+  decision: CandidateConversationDecisionDto | null;
+  action: { id: string; status: string; errorMessage: string | null } | null;
+  outgoing: CandidateConversationMessageDto | null;
+  decisionOutputMissing: boolean;
+};
+
+async function getCandidateMessageProcessingCheckpoints(
+  tx: Prisma.TransactionClient,
+  message: LockedCandidateIncomingMessage,
+  userId: string,
+): Promise<CandidateMessageProcessingCheckpoints> {
+  const decisionRow = await tx.candidateConversationDecision.findFirst({
+    where: { userId, inputMessageId: message.id },
+  });
+  const decision = decisionRow ? mapDecision(decisionRow) : null;
+
+  const action = await tx.candidateActionLog.findUnique({
+    where: {
+      userId_idempotencyKey: {
+        userId,
+        idempotencyKey: candidateCommunicationActionIdempotencyKey(message.id),
+      },
+    },
+    select: { id: true, status: true, errorMessage: true },
+  });
+
+  const outgoingRow = decision?.outputMessageId
+    ? await tx.candidateConversationMessage.findFirst({
+        where: {
+          id: decision.outputMessageId,
+          userId,
+          conversationId: message.conversationId,
+          role: 'agent',
+        },
+      })
+    : await tx.candidateConversationMessage.findUnique({
+        where: {
+          userId_platform_externalMessageId: {
+            userId,
+            platform: message.platform,
+            externalMessageId: candidateCommunicationReplyExternalMessageId(message.id),
+          },
+        },
+      });
+  const decisionOutputMissing = Boolean(decision?.outputMessageId && !outgoingRow);
+
+  return {
+    decision,
+    action,
+    outgoing: outgoingRow ? mapMessage(outgoingRow) : null,
+    decisionOutputMissing,
+  };
+}
+
+async function syncCandidateInterviewStageInTransaction(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    jobDescriptionId: string;
+    candidateId: string;
+    interviewStage: 'replied' | 'withdrawn';
+    allowReopenWithdrawn?: boolean;
+    ownsCandidateCommunicationClaim?: boolean;
+  },
+): Promise<void> {
+  const eligibleStages =
+    params.interviewStage === 'replied'
+      ? [
+          'sourced',
+          'screened',
+          'to_contact',
+          'collected',
+          'contacted',
+          ...(params.allowReopenWithdrawn ? ['withdrawn'] : []),
+        ]
+      : [
+          'sourced',
+          'screened',
+          'to_contact',
+          'collected',
+          'contacted',
+          'replied',
+          'phone_screen',
+          'interviewing',
+          'interview_completed',
+          'offer',
+        ];
+
+  if (params.interviewStage === 'withdrawn') {
+    const screeningResult = await tx.candidateScreeningResult.findFirst({
+      where: {
+        userId: params.userId,
+        jobDescriptionId: params.jobDescriptionId,
+        candidateId: params.candidateId,
+        interviewStage: { in: eligibleStages },
+      },
+      select: { interviewStage: true },
+    });
+    if (!screeningResult) return;
+
+    await updateCandidateInterviewProgressInTransaction(tx, {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: params.candidateId,
+      expectedInterviewStage: screeningResult.interviewStage as CandidateInterviewStage,
+      interviewStage: 'withdrawn',
+      ownsCandidateCommunicationClaim: params.ownsCandidateCommunicationClaim,
+    });
+    return;
+  }
+
+  await tx.candidateScreeningResult.updateMany({
+    where: {
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: params.candidateId,
+      interviewStage: { in: eligibleStages },
+    },
+    data: { interviewStage: params.interviewStage },
+  });
+}
+
 export const prismaCandidateConversationRepository: CandidateConversationRepository = {
   async getSubject(params) {
     const [jobDescription, candidate, latestResume, screeningResult] = await Promise.all([
@@ -655,60 +939,460 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
   },
 
   async findOrCreateConversation(params) {
-    const existing = await prisma.candidateConversation.findUnique({
-      where: {
-        userId_jobDescriptionId_candidateId: {
-          userId: params.userId,
-          jobDescriptionId: params.jobDescriptionId,
-          candidateId: params.candidateId,
-        },
-      },
-    });
-    if (existing) return mapConversation(existing);
-
-    const row = await prisma.candidateConversation.create({
-      data: {
+    const where = {
+      userId_jobDescriptionId_candidateId: {
         userId: params.userId,
         jobDescriptionId: params.jobDescriptionId,
         candidateId: params.candidateId,
-        platform: params.platform,
-        stage: 'new',
-        status: 'active',
-        lastActiveAt: params.lastActiveAt,
-        lastCandidateMessageAt: params.lastActiveAt,
       },
-    });
-    return mapConversation(row);
+    };
+    try {
+      const row = await prisma.candidateConversation.upsert({
+        where,
+        create: {
+          userId: params.userId,
+          jobDescriptionId: params.jobDescriptionId,
+          candidateId: params.candidateId,
+          platform: params.platform,
+          stage: 'new',
+          status: 'active',
+          lastActiveAt: params.lastActiveAt,
+          lastCandidateMessageAt: params.lastActiveAt,
+        },
+        update: {},
+      });
+      return mapConversation(row);
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const canonical = await prisma.candidateConversation.findUnique({ where });
+      if (!canonical) throw error;
+      return mapConversation(canonical);
+    }
   },
 
   async listRecentMessages(params) {
     const rows = await prisma.candidateConversationMessage.findMany({
       where: { conversationId: params.conversationId },
-      orderBy: { occurredAt: 'desc' },
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: params.limit,
     });
     return rows.reverse().map(mapMessage);
   },
 
   async createMessage(params) {
-    const row = await prisma.candidateConversationMessage.create({
-      data: {
-        conversationId: params.conversationId,
+    const data = {
+      conversationId: params.conversationId,
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: params.candidateId,
+      platform: params.platform,
+      role: params.role,
+      content: params.content,
+      externalMessageId: params.externalMessageId ?? null,
+      deliveryStatus: params.deliveryStatus,
+      browserTrace:
+        params.browserTrace === undefined ? Prisma.JsonNull : toNullableJson(params.browserTrace),
+      errorMessage: params.errorMessage ?? null,
+      occurredAt: params.occurredAt,
+    };
+    if (params.externalMessageId === undefined || params.externalMessageId === null) {
+      const row = await prisma.candidateConversationMessage.create({ data });
+      return { ...mapMessage(row), isReplay: false };
+    }
+
+    try {
+      const row = await prisma.candidateConversationMessage.create({ data });
+      return { ...mapMessage(row), isReplay: false };
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const row = await prisma.candidateConversationMessage.findUnique({
+        where: {
+          userId_platform_externalMessageId: {
+            userId: params.userId,
+            platform: params.platform,
+            externalMessageId: params.externalMessageId,
+          },
+        },
+      });
+      if (!row) throw error;
+      if (
+        row.conversationId !== params.conversationId ||
+        row.jobDescriptionId !== params.jobDescriptionId ||
+        row.candidateId !== params.candidateId ||
+        row.role !== params.role ||
+        row.content !== params.content
+      ) {
+        throw new CandidateExternalMessageIdentityConflictError(params.externalMessageId);
+      }
+      return { ...mapMessage(row), isReplay: true };
+    }
+  },
+
+  async claimIncomingMessageProcessing(params) {
+    const now = params.now ?? new Date();
+    const claimId = randomUUID();
+    const leaseExpiresAt = new Date(now.getTime() + CANDIDATE_INCOMING_PROCESSING_LEASE_MS);
+
+    return prisma.$transaction(async (tx) => {
+      const [message] = await tx.$queryRaw<LockedCandidateIncomingMessage[]>(Prisma.sql`
+        SELECT
+          id,
+          conversation_id AS "conversationId",
+          platform,
+          role,
+          processing_claim_id AS "processingClaimId",
+          processing_lease_expires_at AS "processingLeaseExpiresAt",
+          processing_outcome AS "processingOutcome",
+          processed_at AS "processedAt",
+          occurred_at AS "occurredAt",
+          created_at AS "createdAt"
+        FROM public.candidate_conversation_messages
+        WHERE id = ${params.messageId}
+          AND user_id = ${params.userId}
+        FOR UPDATE
+      `);
+      if (!message || message.role !== 'candidate') return { status: 'in_flight' as const };
+      if (message.processedAt) {
+        const outcome =
+          message.processingOutcome === 'processed_ackable' ||
+          message.processingOutcome === 'delivery_failed' ||
+          message.processingOutcome === 'delivery_unknown'
+            ? message.processingOutcome
+            : 'delivery_unknown';
+        return { status: 'processed' as const, outcome };
+      }
+      if (
+        message.processingOutcome === 'in_flight' &&
+        message.processingClaimId &&
+        message.processingLeaseExpiresAt &&
+        message.processingLeaseExpiresAt.getTime() > now.getTime()
+      ) {
+        return { status: 'in_flight' as const };
+      }
+
+      const checkpoints = await getCandidateMessageProcessingCheckpoints(
+        tx,
+        message,
+        params.userId,
+      );
+      const markProcessed = async (
+        outcome: Exclude<CandidateMessageProcessingOutcome, 'in_flight'>,
+        errorMessage: string | null = null,
+      ) => {
+        await tx.candidateConversationMessage.updateMany({
+          where: { id: message.id, userId: params.userId },
+          data: {
+            processingClaimId: null,
+            processingLeaseExpiresAt: null,
+            processingOutcome: outcome,
+            processedAt: now,
+            errorMessage,
+          },
+        });
+      };
+      const claimProcessing = async () =>
+        tx.candidateConversationMessage.updateMany({
+          where: { id: message.id, userId: params.userId },
+          data: {
+            processingClaimId: claimId,
+            processingLeaseExpiresAt: leaseExpiresAt,
+            processingOutcome: 'in_flight',
+            processedAt: null,
+            errorMessage: null,
+          },
+        });
+
+      if (checkpoints.decision) {
+        const actionStatus = checkpoints.action?.status ?? null;
+        const outgoingStatus = checkpoints.outgoing?.deliveryStatus ?? null;
+        const deliveryUnknownEvidence =
+          checkpoints.decisionOutputMissing ||
+          checkpoints.action?.errorMessage === CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR ||
+          checkpoints.outgoing?.errorMessage === CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR;
+        const deliveryFailed = actionStatus === 'failed' || outgoingStatus === 'failed';
+        const deliverySucceeded = actionStatus === 'success' || outgoingStatus === 'sent';
+        const deliveryAmbiguous =
+          checkpoints.decisionOutputMissing ||
+          actionStatus === 'planned' ||
+          actionStatus === 'running' ||
+          outgoingStatus === 'planned';
+
+        if (checkpoints.decision.finalizedAt) {
+          if (deliveryAmbiguous) {
+            if (checkpoints.action) {
+              await tx.candidateActionLog.updateMany({
+                where: {
+                  id: checkpoints.action.id,
+                  userId: params.userId,
+                  status: { in: ['planned', 'running'] },
+                },
+                data: {
+                  status: 'failed',
+                  errorMessage: CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
+                },
+              });
+            }
+            if (checkpoints.outgoing?.deliveryStatus === 'planned') {
+              await tx.candidateConversationMessage.updateMany({
+                where: {
+                  id: checkpoints.outgoing.id,
+                  userId: params.userId,
+                  deliveryStatus: 'planned',
+                },
+                data: {
+                  deliveryStatus: 'failed',
+                  errorMessage: CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
+                },
+              });
+            }
+          }
+          const outcome =
+            deliveryUnknownEvidence || deliveryAmbiguous
+              ? 'delivery_unknown'
+              : deliveryFailed
+                ? 'delivery_failed'
+                : 'processed_ackable';
+          await markProcessed(
+            outcome,
+            outcome === 'delivery_unknown'
+              ? CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR
+              : deliveryFailed
+                ? (checkpoints.outgoing?.errorMessage ?? null)
+                : null,
+          );
+          return { status: 'processed' as const, outcome };
+        }
+
+        const canSafelyResumeSend = Boolean(
+          checkpoints.decision.shouldReply &&
+          checkpoints.decision.reply &&
+          !checkpoints.decision.outputMessageId &&
+          !checkpoints.outgoing &&
+          (!checkpoints.action || checkpoints.action.status === 'planned'),
+        );
+        if (canSafelyResumeSend) {
+          const claimed = await claimProcessing();
+          return claimed.count === 1
+            ? {
+                status: 'claimed' as const,
+                claimId,
+                decision: checkpoints.decision,
+              }
+            : { status: 'in_flight' as const };
+        }
+
+        if (deliverySucceeded) {
+          if (checkpoints.action?.status === 'running') {
+            await tx.candidateActionLog.updateMany({
+              where: {
+                id: checkpoints.action.id,
+                userId: params.userId,
+                status: 'running',
+              },
+              data: { status: 'success', errorMessage: null },
+            });
+          }
+          if (checkpoints.outgoing?.deliveryStatus === 'planned') {
+            await tx.candidateConversationMessage.updateMany({
+              where: {
+                id: checkpoints.outgoing.id,
+                userId: params.userId,
+                deliveryStatus: 'planned',
+              },
+              data: { deliveryStatus: 'sent', errorMessage: null },
+            });
+            checkpoints.outgoing = {
+              ...checkpoints.outgoing,
+              deliveryStatus: 'sent',
+              errorMessage: null,
+            };
+          }
+        } else if (deliveryFailed) {
+          if (
+            checkpoints.action &&
+            (checkpoints.action.status === 'planned' || checkpoints.action.status === 'running')
+          ) {
+            await tx.candidateActionLog.updateMany({
+              where: {
+                id: checkpoints.action.id,
+                userId: params.userId,
+                status: { in: ['planned', 'running'] },
+              },
+              data: { status: 'failed' },
+            });
+          }
+          if (checkpoints.outgoing?.deliveryStatus === 'planned') {
+            await tx.candidateConversationMessage.updateMany({
+              where: {
+                id: checkpoints.outgoing.id,
+                userId: params.userId,
+                deliveryStatus: 'planned',
+              },
+              data: { deliveryStatus: 'failed' },
+            });
+            checkpoints.outgoing = {
+              ...checkpoints.outgoing,
+              deliveryStatus: 'failed',
+            };
+          }
+        } else if (deliveryAmbiguous) {
+          if (checkpoints.action) {
+            await tx.candidateActionLog.updateMany({
+              where: {
+                id: checkpoints.action.id,
+                userId: params.userId,
+                status: { in: ['planned', 'running'] },
+              },
+              data: {
+                status: 'failed',
+                errorMessage: CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
+              },
+            });
+          }
+          if (checkpoints.outgoing?.deliveryStatus === 'planned') {
+            await tx.candidateConversationMessage.updateMany({
+              where: {
+                id: checkpoints.outgoing.id,
+                userId: params.userId,
+                deliveryStatus: 'planned',
+              },
+              data: {
+                deliveryStatus: 'failed',
+                errorMessage: CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
+              },
+            });
+            checkpoints.outgoing = {
+              ...checkpoints.outgoing,
+              deliveryStatus: 'failed',
+              errorMessage: CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
+            };
+          }
+        }
+
+        const claimed = await claimProcessing();
+        if (claimed.count !== 1) return { status: 'in_flight' as const };
+        return {
+          status: 'resume_finalization' as const,
+          claimId,
+          decision: checkpoints.decision,
+          outgoingMessage: checkpoints.outgoing,
+          completionOutcome: deliveryUnknownEvidence
+            ? ('delivery_unknown' as const)
+            : deliveryFailed
+              ? ('delivery_failed' as const)
+              : deliverySucceeded
+                ? ('processed_ackable' as const)
+                : deliveryAmbiguous
+                  ? ('delivery_unknown' as const)
+                  : ('processed_ackable' as const),
+        };
+      }
+
+      const hasTerminalCheckpoint = Boolean(
+        (checkpoints.action &&
+          ['success', 'failed', 'skipped'].includes(checkpoints.action.status)) ||
+        (checkpoints.outgoing &&
+          (checkpoints.outgoing.deliveryStatus === 'sent' ||
+            checkpoints.outgoing.deliveryStatus === 'failed')),
+      );
+      const hasAmbiguousDelivery = Boolean(
+        (checkpoints.action &&
+          (checkpoints.action.status === 'planned' || checkpoints.action.status === 'running')) ||
+        checkpoints.outgoing?.deliveryStatus === 'planned',
+      );
+
+      if (hasAmbiguousDelivery && !hasTerminalCheckpoint) {
+        if (checkpoints.action) {
+          await tx.candidateActionLog.updateMany({
+            where: {
+              id: checkpoints.action.id,
+              userId: params.userId,
+              status: { in: ['planned', 'running'] },
+            },
+            data: {
+              status: 'failed',
+              errorMessage: CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
+            },
+          });
+        }
+        if (checkpoints.outgoing?.deliveryStatus === 'planned') {
+          await tx.candidateConversationMessage.updateMany({
+            where: {
+              id: checkpoints.outgoing.id,
+              userId: params.userId,
+              deliveryStatus: 'planned',
+            },
+            data: {
+              deliveryStatus: 'failed',
+              errorMessage: CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
+            },
+          });
+        }
+      }
+
+      if (hasTerminalCheckpoint || hasAmbiguousDelivery) {
+        const outcome =
+          hasAmbiguousDelivery ||
+          checkpoints.action?.errorMessage === CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR ||
+          checkpoints.outgoing?.errorMessage === CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR
+            ? ('delivery_unknown' as const)
+            : checkpoints.action?.status === 'failed' ||
+                checkpoints.outgoing?.deliveryStatus === 'failed'
+              ? ('delivery_failed' as const)
+              : ('delivery_unknown' as const);
+        const errorMessage =
+          outcome === 'delivery_unknown'
+            ? CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR
+            : (checkpoints.outgoing?.errorMessage ?? null);
+        await markProcessed(outcome, errorMessage);
+        return { status: 'processed' as const, outcome };
+      }
+
+      const claimed = await claimProcessing();
+      return claimed.count === 1
+        ? { status: 'claimed' as const, claimId }
+        : { status: 'in_flight' as const };
+    });
+  },
+
+  async completeIncomingMessageProcessing(params) {
+    const now = new Date();
+    const completed = await prisma.candidateConversationMessage.updateMany({
+      where: {
+        id: params.messageId,
         userId: params.userId,
-        jobDescriptionId: params.jobDescriptionId,
-        candidateId: params.candidateId,
-        platform: params.platform,
-        role: params.role,
-        content: params.content,
-        externalMessageId: params.externalMessageId ?? null,
-        deliveryStatus: params.deliveryStatus,
-        browserTrace:
-          params.browserTrace === undefined ? Prisma.JsonNull : toNullableJson(params.browserTrace),
+        processingClaimId: params.claimId,
+        processingLeaseExpiresAt: { gt: now },
+        processingOutcome: 'in_flight',
+        processedAt: null,
+      },
+      data: {
+        processingClaimId: null,
+        processingLeaseExpiresAt: null,
+        processingOutcome: params.outcome,
+        processedAt: now,
         errorMessage: params.errorMessage ?? null,
-        occurredAt: params.occurredAt,
       },
     });
-    return mapMessage(row);
+    return completed.count === 1;
+  },
+
+  async renewIncomingMessageProcessing(params) {
+    const now = params.now ?? new Date();
+    const renewed = await prisma.candidateConversationMessage.updateMany({
+      where: {
+        id: params.messageId,
+        userId: params.userId,
+        processingClaimId: params.claimId,
+        processingLeaseExpiresAt: { gt: now },
+        processingOutcome: 'in_flight',
+        processedAt: null,
+      },
+      data: {
+        processingLeaseExpiresAt: new Date(now.getTime() + CANDIDATE_INCOMING_PROCESSING_LEASE_MS),
+      },
+    });
+    return renewed.count === 1;
   },
 
   async updateMessageDelivery(params) {
@@ -730,25 +1414,238 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
   },
 
   async createDecision(params) {
-    const row = await prisma.candidateConversationDecision.create({
-      data: {
-        conversationId: params.conversationId,
-        userId: params.userId,
-        jobDescriptionId: params.jobDescriptionId,
-        candidateId: params.candidateId,
-        inputMessageId: params.inputMessageId,
-        outputMessageId: params.outputMessageId ?? null,
-        intent: params.intent,
-        intentLevel: params.intentLevel,
-        nextStage: params.nextStage,
-        shouldReply: params.shouldReply,
-        reply: params.reply,
-        actions: toJson(params.actions),
-        rationale: params.rationale,
-        llmMeta: params.llmMeta === undefined ? Prisma.JsonNull : toNullableJson(params.llmMeta),
-      },
+    const data = {
+      conversationId: params.conversationId,
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      candidateId: params.candidateId,
+      inputMessageId: params.inputMessageId,
+      outputMessageId: params.outputMessageId ?? null,
+      intent: params.intent,
+      intentLevel: params.intentLevel,
+      nextStage: params.nextStage,
+      shouldReply: params.shouldReply,
+      reply: params.reply,
+      actions: toJson(params.actions),
+      rationale: params.rationale,
+      llmMeta: params.llmMeta === undefined ? Prisma.JsonNull : toNullableJson(params.llmMeta),
+    };
+    const row = await prisma.candidateConversationDecision.upsert({
+      where: { inputMessageId: params.inputMessageId },
+      create: data,
+      update: {},
     });
+    if (
+      row.conversationId !== params.conversationId ||
+      row.userId !== params.userId ||
+      row.jobDescriptionId !== params.jobDescriptionId ||
+      row.candidateId !== params.candidateId
+    ) {
+      throw new Error(
+        `candidate communication decision identity conflict: ${params.inputMessageId}`,
+      );
+    }
     return mapDecision(row);
+  },
+
+  async updateDecisionOutput(params) {
+    const updated = await prisma.candidateConversationDecision.updateMany({
+      where: {
+        userId: params.userId,
+        inputMessageId: params.inputMessageId,
+        OR: [{ outputMessageId: null }, { outputMessageId: params.outputMessageId }],
+      },
+      data: { outputMessageId: params.outputMessageId },
+    });
+    if (updated.count === 0) return null;
+    const row = await prisma.candidateConversationDecision.findUnique({
+      where: { inputMessageId: params.inputMessageId },
+    });
+    return row ? mapDecision(row) : null;
+  },
+
+  async finalizeCandidateDecision(params) {
+    const now = params.now ?? new Date();
+    return prisma.$transaction(async (tx) => {
+      const [message] = await tx.$queryRaw<
+        Array<{
+          id: string;
+          conversationId: string;
+          processingClaimId: string | null;
+          processingLeaseExpiresAt: Date | null;
+          processingOutcome: string | null;
+          processedAt: Date | null;
+          occurredAt: Date;
+          createdAt: Date;
+        }>
+      >(Prisma.sql`
+        SELECT
+          id,
+          conversation_id AS "conversationId",
+          processing_claim_id AS "processingClaimId",
+          processing_lease_expires_at AS "processingLeaseExpiresAt",
+          processing_outcome AS "processingOutcome",
+          processed_at AS "processedAt",
+          occurred_at AS "occurredAt",
+          created_at AS "createdAt"
+        FROM public.candidate_conversation_messages
+        WHERE id = ${params.messageId}
+          AND user_id = ${params.userId}
+        FOR UPDATE
+      `);
+      if (
+        !message ||
+        message.id !== params.inputMessageId ||
+        message.processingClaimId !== params.claimId ||
+        message.processingOutcome !== 'in_flight' ||
+        message.processedAt ||
+        !message.processingLeaseExpiresAt ||
+        message.processingLeaseExpiresAt.getTime() <= now.getTime()
+      ) {
+        return null;
+      }
+
+      const [decision] = await tx.$queryRaw<Array<{ id: string; finalizedAt: Date | null }>>(
+        Prisma.sql`
+          SELECT id, finalized_at AS "finalizedAt"
+          FROM public.candidate_conversation_decisions
+          WHERE input_message_id = ${params.inputMessageId}
+            AND user_id = ${params.userId}
+          FOR UPDATE
+        `,
+      );
+      if (!decision) return null;
+
+      if (!decision.finalizedAt) {
+        const conversation = params.conversation;
+        const [currentConversation] = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT id
+          FROM public.candidate_conversations
+          WHERE id = ${conversation.conversationId}
+            AND user_id = ${conversation.userId}
+          FOR UPDATE
+        `);
+        if (!currentConversation) return null;
+        const [chronology] = await tx.$queryRaw<
+          Array<{ hasNewerFinalized: boolean; hasOlderRejectedEvidence: boolean }>
+        >(Prisma.sql`
+            SELECT EXISTS (
+              SELECT 1
+              FROM public.candidate_conversation_decisions AS newer_decision
+              INNER JOIN public.candidate_conversation_messages AS newer_message
+                ON newer_message.id = newer_decision.input_message_id
+               AND newer_message.user_id = newer_decision.user_id
+              INNER JOIN public.candidate_conversation_messages AS current_message
+                ON current_message.id = ${message.id}
+               AND current_message.user_id = ${params.userId}
+              WHERE newer_decision.user_id = ${params.userId}
+                AND newer_decision.conversation_id = ${message.conversationId}
+                AND newer_decision.finalized_at IS NOT NULL
+                AND newer_decision.input_message_id <> ${message.id}
+                AND (
+                  newer_message.occurred_at,
+                  newer_message.created_at,
+                  newer_message.id
+                ) > (
+                  current_message.occurred_at,
+                  current_message.created_at,
+                  current_message.id
+                )
+            ) AS "hasNewerFinalized",
+            EXISTS (
+              SELECT 1
+              FROM public.candidate_conversation_decisions AS older_decision
+              INNER JOIN public.candidate_conversation_messages AS older_message
+                ON older_message.id = older_decision.input_message_id
+               AND older_message.user_id = older_decision.user_id
+              INNER JOIN public.candidate_conversation_messages AS current_message
+                ON current_message.id = ${message.id}
+               AND current_message.user_id = ${params.userId}
+              WHERE older_decision.user_id = ${params.userId}
+                AND older_decision.conversation_id = ${message.conversationId}
+                AND older_decision.next_stage = 'rejected'
+                AND older_message.occurred_at = current_message.occurred_at
+                AND (
+                  older_message.occurred_at,
+                  older_message.created_at,
+                  older_message.id
+                ) < (
+                  current_message.occurred_at,
+                  current_message.created_at,
+                  current_message.id
+                )
+            ) AS "hasOlderRejectedEvidence"
+          `);
+        const isLatestInput = !chronology?.hasNewerFinalized;
+        await tx.candidateConversation.update({
+          where: {
+            userId_jobDescriptionId_candidateId: {
+              userId: conversation.userId,
+              jobDescriptionId: conversation.jobDescriptionId,
+              candidateId: conversation.candidateId,
+            },
+          },
+          data: {
+            messageCount: { increment: conversation.messageCountIncrement },
+            ...(isLatestInput
+              ? {
+                  stage: conversation.stage,
+                  status: conversation.status,
+                  intentLevel: conversation.intentLevel,
+                  lastActiveAt: conversation.lastActiveAt,
+                  lastCandidateMessageAt: conversation.lastCandidateMessageAt,
+                  lastAgentMessageAt: conversation.lastAgentMessageAt,
+                  nextFollowUpAt: conversation.nextFollowUpAt,
+                  outcomeResult: conversation.outcomeResult,
+                  outcomeReason: conversation.outcomeReason,
+                }
+              : {}),
+          },
+        });
+
+        if (isLatestInput) {
+          await syncCandidateInterviewStageInTransaction(tx, {
+            userId: params.userId,
+            jobDescriptionId: conversation.jobDescriptionId,
+            candidateId: conversation.candidateId,
+            interviewStage: params.interviewStage,
+            allowReopenWithdrawn: Boolean(chronology?.hasOlderRejectedEvidence),
+            ownsCandidateCommunicationClaim: true,
+          });
+        }
+
+        if (params.memory) {
+          await tx.candidateConversationMemory.create({
+            data: {
+              conversationId: params.memory.conversationId,
+              userId: params.memory.userId,
+              jobDescriptionId: params.memory.jobDescriptionId,
+              candidateId: params.memory.candidateId,
+              outcomeResult: params.memory.outcomeResult,
+              outcomeReason: params.memory.outcomeReason,
+              intent: toJson(params.memory.intent),
+              profileSummary: toJson(params.memory.profileSummary),
+              keyPoints: toJson(params.memory.keyPoints),
+              dropOffReason: params.memory.dropOffReason ?? null,
+              nextFollowUpAt: params.memory.nextFollowUpAt ?? null,
+            },
+          });
+        }
+
+        await tx.candidateConversationDecision.update({
+          where: { id: decision.id },
+          data: { finalizedAt: now },
+        });
+      }
+
+      const row = await tx.candidateConversation.findFirst({
+        where: {
+          id: params.conversation.conversationId,
+          userId: params.userId,
+        },
+      });
+      return row ? mapConversation(row) : null;
+    });
   },
 
   async updateConversation(params) {
@@ -803,30 +1700,7 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
   },
 
   async syncCandidateInterviewStage(params) {
-    const eligibleStages =
-      params.interviewStage === 'replied'
-        ? ['sourced', 'screened', 'to_contact', 'collected', 'contacted']
-        : [
-            'sourced',
-            'screened',
-            'to_contact',
-            'collected',
-            'contacted',
-            'replied',
-            'phone_screen',
-            'interviewing',
-            'interview_completed',
-            'offer',
-          ];
-    await prisma.candidateScreeningResult.updateMany({
-      where: {
-        userId: params.userId,
-        jobDescriptionId: params.jobDescriptionId,
-        candidateId: params.candidateId,
-        interviewStage: { in: eligibleStages },
-      },
-      data: { interviewStage: params.interviewStage },
-    });
+    await prisma.$transaction((tx) => syncCandidateInterviewStageInTransaction(tx, params));
   },
 
   async resolveCandidateForPlatformMessage(params) {
@@ -861,26 +1735,18 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
       },
       take: 200,
     });
-    const matched = candidates.find(
+    const matches = candidates.filter(
       (candidate) =>
         normalizeMatchText(candidate.displayName) === candidateName ||
         normalizeMatchText(candidate.currentCompany) === candidateName,
     );
 
-    return matched ? { candidateId: matched.id } : null;
+    return matches.length === 1 ? { candidateId: matches[0].id } : null;
   },
 
   async resolveJobDescriptionForCandidateMessage(params) {
-    const screeningResult = await prisma.candidateScreeningResult.findFirst({
-      where: { userId: params.userId, candidateId: params.candidateId },
-      orderBy: { updatedAt: 'desc' },
-      select: { jobDescriptionId: true },
-    });
-    if (screeningResult) {
-      return { jobDescriptionId: screeningResult.jobDescriptionId };
-    }
-
     const platformJobTitle = normalizeMatchText(params.platformJobTitle);
+    let fuzzyPlatformTitleMatches: Array<{ id: string }> = [];
     if (platformJobTitle) {
       const jobDescriptions = await prisma.jobDescription.findMany({
         where: { userId: params.userId },
@@ -894,16 +1760,41 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
         orderBy: { updatedAt: 'desc' },
         take: 200,
       });
-      const exactMatch = jobDescriptions.find((jobDescription) => {
+      const exactMatches = jobDescriptions.filter((jobDescription) => {
         const position = normalizeMatchText(jobDescription.position);
         const contentTitle = normalizeMatchText(readContentTitle(jobDescription.content));
         return position === platformJobTitle || contentTitle === platformJobTitle;
       });
-      if (exactMatch) {
-        return { jobDescriptionId: exactMatch.id };
+      if (exactMatches.length === 1) {
+        return { jobDescriptionId: exactMatches[0].id };
+      }
+      if (exactMatches.length > 1) {
+        const exactMatchIds = exactMatches.map(({ id }) => id);
+        const exactMatchIdSet = new Set(exactMatchIds);
+        const relatedJobDescriptionIds = await listCandidateJobDescriptionRelationIds({
+          userId: params.userId,
+          candidateId: params.candidateId,
+          jobDescriptionIds: exactMatchIds,
+        });
+        const fallbackJobDescriptionId =
+          params.fallbackJobDescriptionId && exactMatchIdSet.has(params.fallbackJobDescriptionId)
+            ? params.fallbackJobDescriptionId
+            : null;
+
+        if (
+          fallbackJobDescriptionId &&
+          (relatedJobDescriptionIds.size === 0 ||
+            relatedJobDescriptionIds.has(fallbackJobDescriptionId))
+        ) {
+          return { jobDescriptionId: fallbackJobDescriptionId };
+        }
+        if (relatedJobDescriptionIds.size === 1) {
+          return { jobDescriptionId: [...relatedJobDescriptionIds][0] };
+        }
+        return null;
       }
 
-      const fuzzyMatch = jobDescriptions.find((jobDescription) => {
+      fuzzyPlatformTitleMatches = jobDescriptions.filter((jobDescription) => {
         const position = normalizeMatchText(jobDescription.position);
         const contentTitle = normalizeMatchText(readContentTitle(jobDescription.content));
         return (
@@ -913,9 +1804,6 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
             (contentTitle.includes(platformJobTitle) || platformJobTitle.includes(contentTitle)))
         );
       });
-      if (fuzzyMatch) {
-        return { jobDescriptionId: fuzzyMatch.id };
-      }
     }
 
     if (params.fallbackJobDescriptionId) {
@@ -928,20 +1816,49 @@ export const prismaCandidateConversationRepository: CandidateConversationReposit
       }
     }
 
-    const latestActive = await prisma.jobDescription.findFirst({
-      where: { userId: params.userId, status: { in: ['published', 'ready_to_publish'] } },
-      orderBy: { updatedAt: 'desc' },
-      select: { id: true },
-    });
-    if (latestActive) {
-      return { jobDescriptionId: latestActive.id };
+    if (fuzzyPlatformTitleMatches.length === 1) {
+      return { jobDescriptionId: fuzzyPlatformTitleMatches[0].id };
+    }
+    if (fuzzyPlatformTitleMatches.length > 1) {
+      const relatedJobDescriptionIds = await listCandidateJobDescriptionRelationIds({
+        userId: params.userId,
+        candidateId: params.candidateId,
+        jobDescriptionIds: fuzzyPlatformTitleMatches.map(({ id }) => id),
+      });
+      if (relatedJobDescriptionIds.size === 1) {
+        return { jobDescriptionId: [...relatedJobDescriptionIds][0] };
+      }
+      return null;
     }
 
-    const latestAny = await prisma.jobDescription.findFirst({
-      where: { userId: params.userId },
-      orderBy: { updatedAt: 'desc' },
-      select: { id: true },
+    const relatedJobDescriptionIds = await listCandidateJobDescriptionRelationIds({
+      userId: params.userId,
+      candidateId: params.candidateId,
     });
-    return latestAny ? { jobDescriptionId: latestAny.id } : null;
+    if (relatedJobDescriptionIds.size === 1) {
+      return { jobDescriptionId: [...relatedJobDescriptionIds][0] };
+    }
+    if (relatedJobDescriptionIds.size > 1) {
+      return null;
+    }
+
+    const activeJobDescriptions = await prisma.jobDescription.findMany({
+      where: { userId: params.userId, status: { in: ['published', 'ready_to_publish'] } },
+      select: { id: true },
+      take: 2,
+    });
+    if (activeJobDescriptions.length === 1) {
+      return { jobDescriptionId: activeJobDescriptions[0].id };
+    }
+    if (activeJobDescriptions.length > 1) {
+      return null;
+    }
+
+    const jobDescriptions = await prisma.jobDescription.findMany({
+      where: { userId: params.userId },
+      select: { id: true },
+      take: 2,
+    });
+    return jobDescriptions.length === 1 ? { jobDescriptionId: jobDescriptions[0].id } : null;
   },
 };

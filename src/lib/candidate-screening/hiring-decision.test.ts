@@ -104,6 +104,7 @@ const candidateDetail: CandidateScreeningDetailDto = {
     fetchedAt: now,
     createdAt: now,
   },
+  latestPlannedChatRunId: null,
   actionLogs: [],
 };
 

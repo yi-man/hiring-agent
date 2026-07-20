@@ -86,6 +86,7 @@ describe('POST /api/jd/[id]/lifecycle', () => {
     ['invalid_transition', 409, '当前 JD 状态不允许执行此操作'],
     ['hiring_target_required', 409, '重新开放招聘前请先设置招聘人数'],
     ['hiring_target_reached', 409, '招聘人数必须大于已入职人数'],
+    ['operation_in_progress', 409, '招聘外发动作正在执行，请等待完成后重试'],
     ['concurrent_update', 409, 'JD 状态已变化，请刷新后重试'],
   ] as const)('maps %s failures to HTTP %i', async (reason, expectedStatus, message) => {
     applyLifecycleMock.mockResolvedValueOnce({ ok: false, reason });

@@ -23,6 +23,7 @@ import { fetchJobDescription } from '@/lib/jd/client';
 import {
   CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
   isFinalHiringOutcomeStage,
+  isTerminalCandidateInterviewStage,
 } from '@/lib/candidate-screening/constants';
 import { CANDIDATE_EVALUATION_DIMENSIONS } from '@/lib/candidate-screening/evaluation-dimensions';
 import { getAllowedCandidateInterviewStageTransitions } from '@/lib/candidate-screening/interview-stage';
@@ -323,6 +324,12 @@ export function CandidateInterviewDetail({
   const hasCompleteInterviewEvidence =
     feedbacks.length === CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length;
   const hasFinalHiringOutcome = isFinalHiringOutcomeStage(candidate.interviewStage);
+  const hasTerminalWorkflow = isTerminalCandidateInterviewStage(candidate.interviewStage);
+  const terminalWorkflowMessage = hasFinalHiringOutcome
+    ? '候选人最终结果已记录，无需再生成录用建议。'
+    : candidate.interviewStage === 'rejected'
+      ? '候选人已淘汰，流程已结束，无需再生成录用建议。'
+      : '候选人已退出，流程已结束，无需再生成录用建议。';
   const decisionButtonLabel = hasCompleteInterviewEvidence ? '生成最终录用建议' : '生成阶段性建议';
   const decisionHref = `/jd-generator/${jobDescriptionId}/candidates/${candidateId}/interview/decision`;
 
@@ -522,8 +529,8 @@ export function CandidateInterviewDetail({
                 {pendingStage ? '当前无需评价' : '当前阶段评价已完成'}
               </p>
               <p className="text-muted-foreground mt-1 text-xs">
-                {hasFinalHiringOutcome
-                  ? '候选人最终结果已记录，无需再生成录用建议。'
+                {hasTerminalWorkflow
+                  ? terminalWorkflowMessage
                   : pendingStage
                     ? `候选人当前处于“${interviewStageLabels[candidate.interviewStage]}”，进入对应面试阶段后可继续评价。`
                     : '可以根据完整反馈生成录用建议。'}
@@ -582,7 +589,7 @@ export function CandidateInterviewDetail({
             </CardBody>
           </Card>
 
-          {!hasFinalHiringOutcome ? (
+          {!hasTerminalWorkflow ? (
             <Card className="border-border rounded-lg border shadow-none">
               <CardBody className="space-y-4 p-4">
                 <div className="flex items-center justify-between gap-3">

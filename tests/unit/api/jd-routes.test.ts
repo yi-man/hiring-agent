@@ -11,6 +11,8 @@ const listJobDescriptionsPaginatedMock = jest.fn();
 const countJobDescriptionsMock = jest.fn();
 const createJobDescriptionMock = jest.fn();
 const getJobDescriptionByIdMock = jest.fn();
+const recoverStaleJobDescriptionPublishingMock = jest.fn();
+const reconcileJobDescriptionPublishingForUserMock = jest.fn();
 const updateJobDescriptionMock = jest.fn();
 const updateMutableJobDescriptionMock = jest.fn();
 const listJdScreeningSummariesMock = jest.fn();
@@ -44,6 +46,10 @@ jest.mock('@/lib/jd/job-description-repo', () => ({
   countJobDescriptions: (...args: unknown[]) => countJobDescriptionsMock(...args),
   createJobDescription: (...args: unknown[]) => createJobDescriptionMock(...args),
   getJobDescriptionById: (...args: unknown[]) => getJobDescriptionByIdMock(...args),
+  recoverStaleJobDescriptionPublishing: (...args: unknown[]) =>
+    recoverStaleJobDescriptionPublishingMock(...args),
+  reconcileJobDescriptionPublishingForUser: (...args: unknown[]) =>
+    reconcileJobDescriptionPublishingForUserMock(...args),
   updateJobDescription: (...args: unknown[]) => updateJobDescriptionMock(...args),
   updateMutableJobDescription: (...args: unknown[]) => updateMutableJobDescriptionMock(...args),
 }));
@@ -102,11 +108,14 @@ describe('JD resource routes', () => {
     countJobDescriptionsMock.mockReset();
     createJobDescriptionMock.mockReset();
     getJobDescriptionByIdMock.mockReset();
+    recoverStaleJobDescriptionPublishingMock.mockReset();
+    reconcileJobDescriptionPublishingForUserMock.mockReset();
     updateJobDescriptionMock.mockReset();
     updateMutableJobDescriptionMock.mockReset();
     listJdScreeningSummariesMock.mockReset();
     runJDAgentMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
+    reconcileJobDescriptionPublishingForUserMock.mockResolvedValue(0);
     listJdScreeningSummariesMock.mockResolvedValue({});
     runJDAgentMock.mockResolvedValue(sampleAgentResponse);
   });
@@ -129,6 +138,7 @@ describe('JD resource routes', () => {
       offset: 0,
       status: undefined,
     });
+    expect(reconcileJobDescriptionPublishingForUserMock).toHaveBeenCalledWith({ userId: 'u1' });
   });
 
   it('lists published job descriptions with screening summaries', async () => {
@@ -247,6 +257,29 @@ describe('JD resource routes', () => {
     expect(listJdScreeningSummariesMock).toHaveBeenCalledWith({
       userId: 'u1',
       jobDescriptionIds: ['jd-1'],
+    });
+  });
+
+  it('recovers an expired publishing lease before returning a JD detail', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'publishing',
+      content: sampleJd,
+    });
+    recoverStaleJobDescriptionPublishingMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'publish_failed',
+      content: sampleJd,
+    });
+
+    const response = await getJd({} as Request, { params: Promise.resolve({ id: 'jd-1' }) });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.jobDescription.status).toBe('publish_failed');
+    expect(recoverStaleJobDescriptionPublishingMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      id: 'jd-1',
     });
   });
 

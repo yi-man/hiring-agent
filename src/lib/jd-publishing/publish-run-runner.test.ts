@@ -1,6 +1,7 @@
 /** @jest-environment node */
 
 import type { JobDescriptionDto } from '@/types';
+import { recoverStaleJobDescriptionPublishing } from '@/lib/jd/job-description-repo';
 import { publishJobDescriptionToBossLike } from './service';
 import {
   createPublishRunEvent,
@@ -15,6 +16,10 @@ jest.mock('./service', () => ({
   publishJobDescriptionToBossLike: jest.fn(),
 }));
 
+jest.mock('@/lib/jd/job-description-repo', () => ({
+  recoverStaleJobDescriptionPublishing: jest.fn(),
+}));
+
 jest.mock('./publish-run-repo', () => ({
   updatePublishRun: jest.fn(),
   createPublishRunEvent: jest.fn(),
@@ -24,6 +29,10 @@ jest.mock('./publish-run-repo', () => ({
 const reconcilePublishBatchWithRetryMock = reconcilePublishBatchWithRetry as jest.MockedFunction<
   typeof reconcilePublishBatchWithRetry
 >;
+const recoverStaleJobDescriptionPublishingMock =
+  recoverStaleJobDescriptionPublishing as jest.MockedFunction<
+    typeof recoverStaleJobDescriptionPublishing
+  >;
 const publishMock = publishJobDescriptionToBossLike as jest.MockedFunction<
   typeof publishJobDescriptionToBossLike
 >;
@@ -100,6 +109,7 @@ describe('runPublishRun', () => {
       createdAt: now,
     });
     reconcilePublishBatchWithRetryMock.mockResolvedValue(jobDescription);
+    recoverStaleJobDescriptionPublishingMock.mockResolvedValue(jobDescription);
   });
 
   it('marks the JD published when boss-like publish succeeds', async () => {
@@ -118,6 +128,11 @@ describe('runPublishRun', () => {
 
     await runPublishRun({ run, jobDescription, settings });
 
+    expect(publishMock).toHaveBeenCalledWith({
+      jobDescription,
+      settings,
+      batchId: 'batch-1',
+    });
     expect(reconcilePublishBatchWithRetryMock).toHaveBeenCalledWith({
       userId: 'u1',
       id: 'jd-1',
@@ -125,6 +140,70 @@ describe('runPublishRun', () => {
       mode: 'batch',
       result: 'success',
     });
+    expect(updatePublishRunMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ expectedStatus: 'pending', status: 'running' }),
+    );
+    expect(updatePublishRunMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ expectedStatus: 'running', status: 'success' }),
+    );
+  });
+
+  it('does not call the browser after losing the pending-to-running claim', async () => {
+    updatePublishRunMock.mockResolvedValueOnce(null);
+
+    await expect(runPublishRun({ run, jobDescription, settings })).resolves.toBeUndefined();
+
+    expect(updatePublishRunMock).toHaveBeenCalledTimes(1);
+    expect(updatePublishRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedStatus: 'pending', status: 'running' }),
+    );
+    expect(publishMock).not.toHaveBeenCalled();
+    expect(createPublishRunEventMock).not.toHaveBeenCalled();
+    expect(reconcilePublishBatchWithRetryMock).not.toHaveBeenCalled();
+  });
+
+  it('does not reconcile or write a completion event after losing the terminal CAS', async () => {
+    updatePublishRunMock.mockResolvedValueOnce(run).mockResolvedValueOnce(null);
+    publishMock.mockResolvedValueOnce({
+      taskId: 'task-1',
+      skillId: 'skill-1',
+      status: 'success',
+      trace: {
+        taskId: 'task-1',
+        skillId: 'skill-1',
+        status: 'success',
+        steps: [],
+        createdAt: now,
+      },
+    });
+
+    await expect(runPublishRun({ run, jobDescription, settings })).resolves.toBeUndefined();
+
+    expect(updatePublishRunMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ expectedStatus: 'running', status: 'success' }),
+    );
+    expect(reconcilePublishBatchWithRetryMock).not.toHaveBeenCalled();
+    expect(createPublishRunEventMock).toHaveBeenCalledTimes(1);
+    expect(createPublishRunEventMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'completed' }),
+    );
+  });
+
+  it('does not reconcile or write a failure event when recovery already failed the run', async () => {
+    updatePublishRunMock.mockResolvedValueOnce(run).mockResolvedValueOnce(null);
+    publishMock.mockRejectedValueOnce(new Error('connection refused'));
+
+    await expect(runPublishRun({ run, jobDescription, settings })).resolves.toBeUndefined();
+
+    expect(updatePublishRunMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ expectedStatus: 'running', status: 'failed' }),
+    );
+    expect(reconcilePublishBatchWithRetryMock).not.toHaveBeenCalled();
+    expect(createPublishRunEventMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not overwrite a successful run when batch reconciliation fails afterward', async () => {
@@ -152,6 +231,40 @@ describe('runPublishRun', () => {
       expect.objectContaining({ runId: 'run-1', status: 'failed' }),
     );
     expect(reconcilePublishBatchWithRetryMock).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
+  });
+
+  it('recovers from the successful task instead of downgrading when run success persistence fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    updatePublishRunMock
+      .mockResolvedValueOnce(run)
+      .mockRejectedValueOnce(new Error('run outcome write failed'));
+    publishMock.mockResolvedValueOnce({
+      taskId: 'task-1',
+      skillId: 'skill-1',
+      status: 'success',
+      trace: {
+        taskId: 'task-1',
+        skillId: 'skill-1',
+        status: 'success',
+        steps: [],
+        createdAt: now,
+      },
+    });
+
+    await expect(runPublishRun({ run, jobDescription, settings })).resolves.toBeUndefined();
+
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    expect(updatePublishRunMock).toHaveBeenCalledTimes(2);
+    expect(updatePublishRunMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-1', status: 'failed' }),
+    );
+    expect(recoverStaleJobDescriptionPublishingMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      id: 'jd-1',
+    });
+    expect(reconcilePublishBatchWithRetryMock).not.toHaveBeenCalled();
+    expect(createPublishRunEventMock).toHaveBeenCalledTimes(1);
     consoleError.mockRestore();
   });
 

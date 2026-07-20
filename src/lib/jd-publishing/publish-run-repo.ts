@@ -72,6 +72,7 @@ export type CreatePublishRunParams = {
 export type UpdatePublishRunParams = {
   userId: string;
   runId: string;
+  expectedStatus: JobDescriptionPublishRunStatus | readonly JobDescriptionPublishRunStatus[];
   status?: JobDescriptionPublishRunStatus;
   currentStage?: JobDescriptionPublishRunStage | null;
   errorMessage?: string | null;
@@ -185,7 +186,14 @@ export async function updatePublishRun(
   if (params.finishedAt !== undefined) data.finishedAt = params.finishedAt;
 
   const result = await prisma.jobDescriptionPublishRun.updateMany({
-    where: { id: params.runId, userId: params.userId },
+    where: {
+      id: params.runId,
+      userId: params.userId,
+      status:
+        typeof params.expectedStatus === 'string'
+          ? params.expectedStatus
+          : { in: [...params.expectedStatus] },
+    },
     data,
   });
   if (result.count === 0) return null;

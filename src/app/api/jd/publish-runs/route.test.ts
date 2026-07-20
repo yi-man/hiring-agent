@@ -130,7 +130,7 @@ describe('POST /api/jd/publish-runs', () => {
       jobDescription: params.jobDescription,
       settings: params.settings,
     }));
-    failInitializedPublishRunMock.mockResolvedValue();
+    failInitializedPublishRunMock.mockResolvedValue(true);
   });
 
   it('creates one independent run for each company default platform', async () => {
@@ -362,6 +362,7 @@ describe('POST /api/jd/publish-runs', () => {
     });
     failInitializedPublishRunMock.mockImplementationOnce(async () => {
       events.push('liepin-failed');
+      return true;
     });
     reconcilePublishBatchWithRetryMock.mockImplementationOnce(async () => {
       events.push('reconciled');

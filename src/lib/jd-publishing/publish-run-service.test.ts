@@ -1,6 +1,7 @@
 /** @jest-environment node */
 
 import { scheduleBackgroundTask } from '@/lib/jd/background';
+import { runWithJobDescriptionPublishLease } from '@/lib/jd/job-description-repo';
 import type { JobDescriptionDto } from '@/types';
 import {
   createPublishRun,
@@ -17,6 +18,9 @@ import {
 } from './publish-run-service';
 
 jest.mock('@/lib/jd/background', () => ({ scheduleBackgroundTask: jest.fn() }));
+jest.mock('@/lib/jd/job-description-repo', () => ({
+  runWithJobDescriptionPublishLease: jest.fn(),
+}));
 jest.mock('./publish-run-repo', () => ({
   createPublishRun: jest.fn(),
   createPublishRunEvent: jest.fn(),
@@ -27,6 +31,9 @@ jest.mock('./publish-run-runner', () => ({ runPublishRun: jest.fn() }));
 
 const scheduleBackgroundTaskMock = scheduleBackgroundTask as jest.MockedFunction<
   typeof scheduleBackgroundTask
+>;
+const runWithPublishLeaseMock = runWithJobDescriptionPublishLease as jest.MockedFunction<
+  typeof runWithJobDescriptionPublishLease
 >;
 const reconcileMock = reconcilePublishBatchWithRetry as jest.MockedFunction<
   typeof reconcilePublishBatchWithRetry
@@ -91,6 +98,7 @@ const settings = {
 describe('publish run initialization and scheduling', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    runWithPublishLeaseMock.mockImplementation(({ operation }) => operation());
     createPublishRunMock.mockResolvedValue(run);
     createPublishRunEventMock.mockResolvedValue({
       id: 'event-1',
@@ -128,6 +136,12 @@ describe('publish run initialization and scheduling', () => {
     const backgroundTask = scheduleBackgroundTaskMock.mock.calls[0]?.[0];
     expect(backgroundTask).toBeDefined();
     await backgroundTask?.();
+    expect(runWithPublishLeaseMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      id: 'jd-1',
+      batchId: 'batch-1',
+      operation: expect.any(Function),
+    });
     expect(runPublishRunMock).toHaveBeenCalledWith({ run, jobDescription, settings });
   });
 
@@ -147,6 +161,7 @@ describe('publish run initialization and scheduling', () => {
     expect(updatePublishRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: 'run-1',
+        expectedStatus: 'pending',
         status: 'failed',
         currentStage: 'completed',
         errorMessage: '发布任务初始化失败：event insert failed',
@@ -176,6 +191,37 @@ describe('publish run initialization and scheduling', () => {
     });
   });
 
+  it('fails initialized runs when the publish lease is lost before execution starts', async () => {
+    runWithPublishLeaseMock.mockRejectedValueOnce(new Error('publish lease lost'));
+    const initialized = await initializePublishRun({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      jobDescription,
+      batchId: 'batch-1',
+      settings,
+    });
+    schedulePublishRuns([initialized]);
+
+    const backgroundTask = scheduleBackgroundTaskMock.mock.calls[0]?.[0];
+    await expect(backgroundTask?.()).rejects.toThrow('publish lease lost');
+
+    expect(runPublishRunMock).not.toHaveBeenCalled();
+    expect(updatePublishRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-1',
+        expectedStatus: 'pending',
+        status: 'failed',
+      }),
+    );
+    expect(reconcileMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      id: 'jd-1',
+      batchId: 'batch-1',
+      mode: 'batch',
+      result: 'failed',
+    });
+  });
+
   it('marks an initialized sibling failed without scheduling when its batch cannot start', async () => {
     await failInitializedPublishRun(
       { run, jobDescription, settings },
@@ -185,6 +231,7 @@ describe('publish run initialization and scheduling', () => {
     expect(updatePublishRunMock).toHaveBeenCalledWith({
       userId: 'u1',
       runId: 'run-1',
+      expectedStatus: 'pending',
       status: 'failed',
       currentStage: 'completed',
       errorMessage:
@@ -218,7 +265,12 @@ describe('publish run initialization and scheduling', () => {
     const backgroundTask = scheduleBackgroundTaskMock.mock.calls[0]?.[0];
     await expect(backgroundTask?.()).rejects.toThrow('startup failed');
     expect(updatePublishRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: 'run-1', status: 'failed', currentStage: 'completed' }),
+      expect.objectContaining({
+        runId: 'run-1',
+        expectedStatus: ['pending', 'running'],
+        status: 'failed',
+        currentStage: 'completed',
+      }),
     );
     expect(reconcileMock).toHaveBeenCalledWith({
       userId: 'u1',
@@ -227,5 +279,40 @@ describe('publish run initialization and scheduling', () => {
       mode: 'batch',
       result: 'failed',
     });
+  });
+
+  it('does not reconcile after an outer startup failure loses its CAS', async () => {
+    runPublishRunMock.mockRejectedValueOnce(new Error('startup failed'));
+    updatePublishRunMock.mockResolvedValueOnce(null);
+    const initialized = await initializePublishRun({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      jobDescription,
+      batchId: 'batch-1',
+      settings,
+    });
+    schedulePublishRuns([initialized]);
+
+    const backgroundTask = scheduleBackgroundTaskMock.mock.calls[0]?.[0];
+    await expect(backgroundTask?.()).rejects.toThrow('startup failed');
+
+    expect(updatePublishRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedStatus: ['pending', 'running'], status: 'failed' }),
+    );
+    expect(reconcileMock).not.toHaveBeenCalled();
+  });
+
+  it('does not write a not-started event after an initialized run already advanced', async () => {
+    updatePublishRunMock.mockResolvedValueOnce(null);
+
+    await failInitializedPublishRun(
+      { run, jobDescription, settings },
+      new Error('sibling initialization failed'),
+    );
+
+    expect(updatePublishRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedStatus: 'pending', status: 'failed' }),
+    );
+    expect(createPublishRunEventMock).not.toHaveBeenCalled();
   });
 });

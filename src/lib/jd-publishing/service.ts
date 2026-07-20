@@ -21,6 +21,7 @@ function targetUrls(baseUrl: string, variables: Record<string, string>): Record<
 
 export async function publishJobDescription(options: {
   jobDescription: JobDescriptionDto;
+  batchId: string;
   settings: PublishJobDescriptionSettings;
   executor?: BrowserExecutor;
 }): Promise<PublishTaskResult> {
@@ -39,6 +40,7 @@ export async function publishJobDescription(options: {
   try {
     return await runPublishingAgentGraph({
       jobDescription,
+      batchId: options.batchId,
       settings,
       executor,
       credentials: { username: config.username, password: config.password },
@@ -52,6 +54,7 @@ export async function publishJobDescription(options: {
 
 export async function publishJobDescriptionToBossLike(options: {
   jobDescription: JobDescriptionDto;
+  batchId: string;
   settings: PublishJobDescriptionSettings;
   executor?: BrowserExecutor;
 }): Promise<PublishTaskResult> {

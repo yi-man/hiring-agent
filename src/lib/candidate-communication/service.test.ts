@@ -1,7 +1,7 @@
 /** @jest-environment node */
 
 import { handleCandidateMessage } from './service';
-import type { CandidateConversationRepository } from './repo';
+import type { CandidateConversationRepository, CreateDecisionParams } from './repo';
 import type { RawCandidate } from '@/lib/candidate-screening/ingest';
 
 const createdAt = '2026-06-30T12:00:00.000Z';
@@ -12,6 +12,7 @@ function createRepo(overrides: Partial<CandidateConversationRepository> = {}) {
       jobDescription: {
         id: 'jd-1',
         position: '高级后端工程师',
+        status: 'published',
         content: {
           title: '高级后端工程师',
           summary: '负责 Java 微服务和招聘平台核心链路',
@@ -62,23 +63,42 @@ function createRepo(overrides: Partial<CandidateConversationRepository> = {}) {
         role: 'candidate',
         content: '可以，加我微信 wxid_backend_2026',
         deliveryStatus: 'received',
+        occurredAt: createdAt,
+        createdAt,
       })
       .mockResolvedValueOnce({
         id: 'outgoing-1',
         role: 'agent',
         content: '收到，我稍后加你。',
         deliveryStatus: 'planned',
+        occurredAt: createdAt,
+        createdAt,
       }),
+    claimIncomingMessageProcessing: jest
+      .fn()
+      .mockResolvedValue({ status: 'claimed', claimId: 'claim-1' }),
+    completeIncomingMessageProcessing: jest.fn().mockResolvedValue(true),
+    renewIncomingMessageProcessing: jest.fn().mockResolvedValue(true),
     updateMessageDelivery: jest.fn().mockResolvedValue({
       id: 'outgoing-1',
       role: 'agent',
       content: '收到，我稍后加你。',
       deliveryStatus: 'sent',
     }),
-    createDecision: jest.fn().mockResolvedValue({
+    createDecision: jest.fn(async (params: CreateDecisionParams) => ({
       id: 'decision-1',
-      intent: 'contact_shared',
-      nextStage: 'contact_exchanged',
+      ...params,
+      outputMessageId: params.outputMessageId ?? null,
+      llmMeta: params.llmMeta ?? null,
+      finalizedAt: null,
+      createdAt,
+    })),
+    updateDecisionOutput: jest.fn().mockResolvedValue({ id: 'decision-1' }),
+    finalizeCandidateDecision: jest.fn().mockResolvedValue({
+      id: 'conversation-1',
+      stage: 'contact_exchanged',
+      status: 'closed',
+      messageCount: 4,
     }),
     updateConversation: jest.fn().mockResolvedValue({
       id: 'conversation-1',
@@ -156,12 +176,7 @@ describe('candidate communication service', () => {
       candidateId: 'candidate-1',
       lastActiveAt: new Date(createdAt),
     });
-    expect(repo.syncCandidateInterviewStage).toHaveBeenCalledWith({
-      userId: 'user-1',
-      jobDescriptionId: 'jd-1',
-      candidateId: 'candidate-1',
-      interviewStage: 'replied',
-    });
+    expect(repo.syncCandidateInterviewStage).not.toHaveBeenCalled();
     expect(chatCandidate).toHaveBeenCalledWith(
       {
         candidateId: 'candidate-1',
@@ -198,10 +213,13 @@ describe('candidate communication service', () => {
         status: 'success',
       }),
     );
-    expect(repo.createMemory).toHaveBeenCalledWith(
+    expect(repo.finalizeCandidateDecision).toHaveBeenCalledWith(
       expect.objectContaining({
-        conversationId: 'conversation-1',
-        outcomeResult: 'contact_exchanged',
+        interviewStage: 'replied',
+        memory: expect.objectContaining({
+          conversationId: 'conversation-1',
+          outcomeResult: 'contact_exchanged',
+        }),
       }),
     );
     expect(result.conversation.stage).toBe('contact_exchanged');
@@ -214,6 +232,7 @@ describe('candidate communication service', () => {
         jobDescription: {
           id: 'jd-1',
           position: '高级后端工程师',
+          status: 'published',
           content: { title: '高级后端工程师' },
         },
         candidate: {
@@ -279,7 +298,7 @@ describe('candidate communication service', () => {
       id: 'action-1',
       expectedStatus: 'planned',
       status: 'skipped',
-      errorMessage: 'candidate interview stage changed before automatic reply',
+      errorMessage: 'candidate or job state changed before automatic reply',
     });
     expect(createAdapter).not.toHaveBeenCalled();
     expect(chatCandidate).not.toHaveBeenCalled();
@@ -293,6 +312,7 @@ describe('candidate communication service', () => {
         jobDescription: {
           id: 'jd-1',
           position: '高级后端工程师',
+          status: 'published',
           content: { title: '高级后端工程师' },
         },
         candidate: {
@@ -364,7 +384,7 @@ describe('candidate communication service', () => {
       const updateActionLog = jest.fn();
       const createAdapter = jest.fn();
 
-      const result = await handleCandidateMessage({
+      const execution = handleCandidateMessage({
         userId: 'user-1',
         payload: {
           jobDescriptionId: 'jd-1',
@@ -396,17 +416,15 @@ describe('candidate communication service', () => {
         },
       });
 
+      if (status === 'running') {
+        await expect(execution).rejects.toThrow('candidate reply action is already running');
+      } else {
+        await expect(execution).resolves.toMatchObject({ outgoingMessage: null });
+      }
       expect(claimActionLog).toHaveBeenCalledTimes(1);
-      expect(updateActionLog).toHaveBeenCalledWith({
-        userId: 'user-1',
-        id: 'action-1',
-        expectedStatus: 'planned',
-        status: 'skipped',
-        errorMessage: 'candidate interview stage changed before automatic reply',
-      });
+      expect(updateActionLog).not.toHaveBeenCalled();
       expect(createAdapter).not.toHaveBeenCalled();
       expect(repo.createMessage).toHaveBeenCalledTimes(1);
-      expect(result.outgoingMessage).toBeNull();
     },
   );
 
@@ -474,6 +492,144 @@ describe('candidate communication service', () => {
     expect(adapter.close).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['offline', 'filled'] as const)(
+    'does not auto-reply when the JD is %s even without a screening result',
+    async (jobDescriptionStatus) => {
+      const repo = createRepo({
+        getSubject: jest.fn().mockResolvedValue({
+          jobDescription: {
+            id: 'jd-1',
+            position: '高级后端工程师',
+            status: jobDescriptionStatus,
+            content: { title: '高级后端工程师' },
+          },
+          candidate: {
+            id: 'candidate-1',
+            displayName: 'Ada Lovelace',
+            profileUrl: 'http://127.0.0.1:6183/employer/resumes/boss-cand-1',
+            sourcePlatform: 'boss-like',
+          },
+          latestResume: null,
+          screeningResult: null,
+        }),
+      });
+      const chatCandidate = jest.fn().mockResolvedValue({ success: true });
+      const adapter = {
+        platform: 'boss-like' as const,
+        getBrowserExecutor: jest.fn(),
+        loginIfNeeded: jest.fn().mockResolvedValue(undefined),
+        searchCandidates: jest.fn(),
+        enrichCandidate: jest.fn(async (candidate: RawCandidate) => candidate),
+        collectCandidate: jest.fn(),
+        chatCandidate,
+        close: jest.fn().mockResolvedValue(undefined),
+      };
+      const createAdapter = jest.fn().mockResolvedValue(adapter);
+      const createActionLog = jest.fn();
+      const claimActionLog = jest.fn();
+
+      const result = await handleCandidateMessage({
+        userId: 'user-1',
+        payload: {
+          jobDescriptionId: 'jd-1',
+          candidateId: 'candidate-1',
+          platform: 'boss-like',
+          message: {
+            content: '这个岗位还在招聘吗？',
+            externalMessageId: `msg-${jobDescriptionStatus}`,
+            receivedAt: new Date(createdAt),
+          },
+          executeReply: true,
+        },
+        dependencies: {
+          repo,
+          createAdapter,
+          createActionLog,
+          claimActionLog,
+          runLLM: async () => ({
+            intent: 'job_question',
+            intentLevel: 'medium',
+            nextStage: 'contact_requested',
+            shouldReply: true,
+            reply: '还在招聘，方便继续聊聊吗？',
+            actions: ['reply'],
+            rationale: 'candidate asked about the job',
+          }),
+          strictLlm: false,
+        },
+      });
+
+      expect(createActionLog).not.toHaveBeenCalled();
+      expect(claimActionLog).not.toHaveBeenCalled();
+      expect(createAdapter).not.toHaveBeenCalled();
+      expect(chatCandidate).not.toHaveBeenCalled();
+      expect(repo.createMessage).toHaveBeenCalledTimes(1);
+      expect(result.outgoingMessage).toBeNull();
+    },
+  );
+
+  it('rechecks the JD and candidate under lock before auto-replying without a screening result', async () => {
+    const repo = createRepo({
+      getSubject: jest.fn().mockResolvedValue({
+        jobDescription: {
+          id: 'jd-1',
+          position: '高级后端工程师',
+          status: 'published',
+          content: { title: '高级后端工程师' },
+        },
+        candidate: {
+          id: 'candidate-1',
+          displayName: 'Ada Lovelace',
+          profileUrl: 'http://127.0.0.1:6183/employer/resumes/boss-cand-1',
+          sourcePlatform: 'boss-like',
+        },
+        latestResume: null,
+        screeningResult: null,
+      }),
+    });
+    const claimJobDescriptionOutreach = jest.fn().mockResolvedValue(false);
+    const createAdapter = jest.fn();
+
+    const result = await handleCandidateMessage({
+      userId: 'user-1',
+      payload: {
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        message: {
+          content: '这个岗位还在招聘吗？',
+          externalMessageId: 'msg-offline-race',
+          receivedAt: new Date(createdAt),
+        },
+        executeReply: true,
+      },
+      dependencies: {
+        repo,
+        claimJobDescriptionOutreach,
+        createAdapter,
+        runLLM: async () => ({
+          intent: 'job_question',
+          intentLevel: 'medium',
+          nextStage: 'contact_requested',
+          shouldReply: true,
+          reply: '还在招聘，方便继续聊聊吗？',
+          actions: ['reply'],
+          rationale: 'candidate asked about the job',
+        }),
+        strictLlm: false,
+      },
+    });
+
+    expect(claimJobDescriptionOutreach).toHaveBeenCalledWith({
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+    });
+    expect(createAdapter).not.toHaveBeenCalled();
+    expect(repo.createMessage).toHaveBeenCalledTimes(1);
+    expect(result.outgoingMessage).toBeNull();
+  });
+
   it('withdraws the candidate from the interview flow after an explicit rejection', async () => {
     const repo = createRepo();
     const adapter = {
@@ -516,11 +672,9 @@ describe('candidate communication service', () => {
       },
     });
 
-    expect(repo.syncCandidateInterviewStage).toHaveBeenCalledWith({
-      userId: 'user-1',
-      jobDescriptionId: 'jd-1',
-      candidateId: 'candidate-1',
-      interviewStage: 'withdrawn',
-    });
+    expect(repo.syncCandidateInterviewStage).not.toHaveBeenCalled();
+    expect(repo.finalizeCandidateDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ interviewStage: 'withdrawn' }),
+    );
   });
 });

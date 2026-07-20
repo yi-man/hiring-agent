@@ -186,6 +186,10 @@ const sampleJobDescription: JobDescriptionDto = {
   department: '技术部',
   position: '高级后端工程师',
   positionDescription: '负责 Java 微服务',
+  salaryRange: null,
+  workLocations: [],
+  hiringTarget: 2,
+  onboardedCount: 0,
   tone: 'tech',
   status: 'published',
   content: sampleJdContent,
@@ -488,6 +492,7 @@ const sampleCandidateListItem: CandidateScreeningResultListItem = {
 
 const sampleCandidateDetail: CandidateScreeningDetailDto = {
   ...sampleCandidateListItem,
+  latestPlannedChatRunId: 'run-1',
   actionLogs: [
     {
       id: 'action-log-1',
@@ -1622,6 +1627,128 @@ describe('candidate screening UI', () => {
     expectReturnContext(pushedRunHref, '/jd-generator/jd-1/candidates/cand-1', '返回候选人详情');
   });
 
+  it('starts single-candidate communication from the latest planned chat run after rescreening', async () => {
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      runId: 'run-1',
+      latestPlannedChatRunId: 'run-2',
+      actionLogs: [
+        {
+          ...sampleCandidateDetail.actionLogs[0],
+          id: 'action-log-run-2',
+          runId: 'run-2',
+          idempotencyKey: 'run-2:cand-1:chat',
+        },
+        {
+          ...sampleCandidateDetail.actionLogs[0],
+          status: 'success',
+        },
+      ],
+    });
+    startCandidateCommunicationRunMock.mockResolvedValueOnce({
+      ...sampleCommunicationRun,
+      id: 'comm-run-rescreened',
+      mode: 'single',
+      candidateId: 'cand-1',
+      candidate: { id: 'cand-1', displayName: 'Ada Lovelace' },
+    });
+
+    render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '单点沟通' }));
+
+    await waitFor(() =>
+      expect(startCandidateCommunicationRunMock).toHaveBeenCalledWith({
+        mode: 'single',
+        jobDescriptionId: 'jd-1',
+        candidateId: 'cand-1',
+        sourceScreeningRunId: 'run-2',
+        platform: 'boss-like',
+      }),
+    );
+  });
+
+  it.each(['collect', 'skip'] as const)(
+    'does not offer single-candidate communication for a %s action plan',
+    async (action) => {
+      fetchJdCandidateDetailMock.mockResolvedValueOnce({
+        ...sampleCandidateDetail,
+        actionPlan: {
+          ...sampleCandidateDetail.actionPlan,
+          action,
+          message: action === 'skip' ? null : sampleCandidateDetail.actionPlan?.message,
+        },
+      });
+
+      render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+      expect(await screen.findByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '单点沟通' })).not.toBeInTheDocument();
+    },
+  );
+
+  it('does not offer single-candidate communication without a planned chat log', async () => {
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      latestPlannedChatRunId: null,
+      actionLogs: [],
+    });
+
+    render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    expect(await screen.findByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '单点沟通' })).not.toBeInTheDocument();
+  });
+
+  it.each(['filled', 'offline'] as const)(
+    'does not offer single-candidate communication when the JD is %s',
+    async (status) => {
+      fetchJobDescriptionMock.mockResolvedValueOnce({
+        ...sampleJobDescription,
+        status,
+      });
+
+      render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+      expect(await screen.findByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '单点沟通' })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(['running', 'success', 'failed', 'skipped'] as const)(
+    'does not offer single-candidate communication when its chat log is %s',
+    async (status) => {
+      fetchJdCandidateDetailMock.mockResolvedValueOnce({
+        ...sampleCandidateDetail,
+        latestPlannedChatRunId: null,
+        actionLogs: sampleCandidateDetail.actionLogs.map((actionLog) => ({
+          ...actionLog,
+          status,
+        })),
+      });
+
+      render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+      expect(await screen.findByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '单点沟通' })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(['onboarded', 'not_joined', 'rejected', 'withdrawn'] as const)(
+    'does not offer single-candidate communication in terminal stage %s',
+    async (interviewStage) => {
+      fetchJdCandidateDetailMock.mockResolvedValueOnce({
+        ...sampleCandidateDetail,
+        interviewStage,
+      });
+
+      render(<CandidateDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+      expect(await screen.findByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '单点沟通' })).not.toBeInTheDocument();
+    },
+  );
+
   it('renders a communication run log with scope, steps, stats, and records', async () => {
     render(<CandidateCommunicationRunLog runId="comm-run-1" />);
 
@@ -1777,6 +1904,24 @@ describe('candidate screening UI', () => {
     expect(screen.getByText('候选人最终结果已记录，无需再生成录用建议。')).toBeInTheDocument();
     expect(screen.queryByText('录用建议')).not.toBeInTheDocument();
   });
+
+  it.each([
+    ['rejected', '候选人已淘汰，流程已结束，无需再生成录用建议。'],
+    ['withdrawn', '候选人已退出，流程已结束，无需再生成录用建议。'],
+  ] as const)(
+    'interview detail explains terminal stage %s and hides hiring recommendations',
+    async (interviewStage, terminalMessage) => {
+      fetchJdCandidateDetailMock.mockResolvedValueOnce({
+        ...sampleCandidateDetail,
+        interviewStage,
+      });
+
+      render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+      expect(await screen.findByText(terminalMessage)).toBeInTheDocument();
+      expect(screen.queryByText('录用建议')).not.toBeInTheDocument();
+    },
+  );
 
   it('interview detail repairs a replied candidate with a stale contacted stage', async () => {
     fetchJdCandidateDetailMock.mockResolvedValueOnce({

@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getJobDescriptionById, updateMutableJobDescription } from '@/lib/jd/job-description-repo';
+import {
+  getJobDescriptionById,
+  recoverStaleJobDescriptionPublishing,
+  updateMutableJobDescription,
+} from '@/lib/jd/job-description-repo';
 import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { isEditableJobDescriptionStatus, parseUpdateJobDescriptionPayload } from '@/lib/jd/api';
 
@@ -48,9 +52,14 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       return badRequest('job description id is required');
     }
 
-    const jobDescription = await getJobDescriptionById(auth.user.id, id);
+    let jobDescription = await getJobDescriptionById(auth.user.id, id);
     if (!jobDescription) {
       return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+    }
+    if (jobDescription.status === 'publishing') {
+      jobDescription =
+        (await recoverStaleJobDescriptionPublishing({ userId: auth.user.id, id })) ??
+        jobDescription;
     }
     const summaries = await listJdScreeningSummaries({
       userId: auth.user.id,

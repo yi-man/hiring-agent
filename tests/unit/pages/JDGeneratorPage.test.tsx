@@ -1111,6 +1111,36 @@ describe('JD pages', () => {
     expect(screen.queryByRole('button', { name: '发布到 Boss-like' })).not.toBeInTheDocument();
   });
 
+  it('blocks further screening for a legacy published JD until its hiring target is set', async () => {
+    const legacyPublishedJob = {
+      ...screenedJobDescription,
+      hiringTarget: null,
+      onboardedCount: 0,
+    };
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: legacyPublishedJob }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    expect(
+      await screen.findByText(/设置完成前不能继续筛选候选人，也无法在入职达标时自动标记招满/),
+    ).toBeInTheDocument();
+    const topActions = screen.getByLabelText('JD 详情主操作');
+    expect(within(topActions).queryByRole('button', { name: /筛选/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '设置招聘人数' })).toBeInTheDocument();
+  });
+
   it('shows global batch communication on the JD workbench header', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: true,

@@ -4,10 +4,18 @@ import { reconcileJobDescriptionPublishResult } from '@/lib/jd/job-description-r
 import {
   reconcilePublishBatchWithRetry,
   reconcileTerminalPublishRunWithRetry,
+  updatePublishRun,
   type JobDescriptionPublishRunDto,
 } from './publish-run-repo';
 
-jest.mock('@/lib/prisma', () => ({ prisma: {} }));
+jest.mock('@/lib/prisma', () => ({
+  prisma: {
+    jobDescriptionPublishRun: {
+      findFirst: jest.fn(),
+      updateMany: jest.fn(),
+    },
+  },
+}));
 jest.mock('@/lib/jd/job-description-repo', () => ({
   reconcileJobDescriptionPublishResult: jest.fn(),
 }));
@@ -15,6 +23,14 @@ jest.mock('@/lib/jd/job-description-repo', () => ({
 const reconcileMock = reconcileJobDescriptionPublishResult as jest.MockedFunction<
   typeof reconcileJobDescriptionPublishResult
 >;
+const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
+  prisma: {
+    jobDescriptionPublishRun: {
+      findFirst: jest.Mock;
+      updateMany: jest.Mock;
+    };
+  };
+};
 
 const timestamp = '2026-07-20T12:30:00.000Z';
 const terminalRun: JobDescriptionPublishRunDto = {
@@ -33,6 +49,64 @@ const terminalRun: JobDescriptionPublishRunDto = {
   createdAt: timestamp,
   updatedAt: timestamp,
 };
+
+const terminalRunRecord = {
+  ...terminalRun,
+  startedAt: new Date(timestamp),
+  finishedAt: new Date(timestamp),
+  createdAt: new Date(timestamp),
+  updatedAt: new Date(timestamp),
+};
+
+describe('publish run compare-and-set updates', () => {
+  beforeEach(() => {
+    prismaMock.jobDescriptionPublishRun.findFirst.mockReset();
+    prismaMock.jobDescriptionPublishRun.updateMany.mockReset();
+  });
+
+  it('updates a run only from the required expected status', async () => {
+    prismaMock.jobDescriptionPublishRun.updateMany.mockResolvedValueOnce({ count: 1 });
+    prismaMock.jobDescriptionPublishRun.findFirst.mockResolvedValueOnce({
+      ...terminalRunRecord,
+      status: 'running',
+      currentStage: 'publishing',
+      finishedAt: null,
+    });
+
+    const result = await updatePublishRun({
+      userId: 'u1',
+      runId: 'run-1',
+      expectedStatus: 'pending',
+      status: 'running',
+      currentStage: 'publishing',
+    });
+
+    expect(prismaMock.jobDescriptionPublishRun.updateMany).toHaveBeenCalledWith({
+      where: { id: 'run-1', userId: 'u1', status: 'pending' },
+      data: { status: 'running', currentStage: 'publishing' },
+    });
+    expect(result?.status).toBe('running');
+  });
+
+  it('supports a bounded expected-status set and returns null after losing the race', async () => {
+    prismaMock.jobDescriptionPublishRun.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      updatePublishRun({
+        userId: 'u1',
+        runId: 'run-1',
+        expectedStatus: ['pending', 'running'],
+        status: 'failed',
+      }),
+    ).resolves.toBeNull();
+
+    expect(prismaMock.jobDescriptionPublishRun.updateMany).toHaveBeenCalledWith({
+      where: { id: 'run-1', userId: 'u1', status: { in: ['pending', 'running'] } },
+      data: { status: 'failed' },
+    });
+    expect(prismaMock.jobDescriptionPublishRun.findFirst).not.toHaveBeenCalled();
+  });
+});
 
 describe('publish run reconciliation recovery', () => {
   beforeEach(() => {

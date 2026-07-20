@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { claimJobDescriptionForPublishing } from '@/lib/jd/job-description-repo';
+import {
+  claimJobDescriptionForPublishing,
+  recoverStaleJobDescriptionPublishing,
+  runWithJobDescriptionPublishLease,
+} from '@/lib/jd/job-description-repo';
 import { parsePublishJobDescriptionPayload } from '@/lib/jd-publishing/publish-payload';
 import { listPublishTasksForJobDescription } from '@/lib/jd-publishing/publish-repo';
 import { reconcilePublishBatchWithRetry } from '@/lib/jd-publishing/publish-run-repo';
@@ -57,9 +61,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     let task;
     try {
-      task = await publishJobDescriptionToBossLike({
-        jobDescription: claimed,
-        settings: parsed.value,
+      task = await runWithJobDescriptionPublishLease({
+        userId: auth.user.id,
+        id,
+        batchId,
+        operation: () =>
+          publishJobDescriptionToBossLike({
+            jobDescription: claimed,
+            settings: parsed.value,
+            batchId,
+          }),
       });
     } catch (error) {
       const updated = await reconcilePublishBatchWithRetry({
@@ -100,6 +111,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (!id?.trim()) {
       return badRequest('job description id is required');
     }
+
+    await recoverStaleJobDescriptionPublishing({ userId: auth.user.id, id });
 
     const tasks = await listPublishTasksForJobDescription({
       userId: auth.user.id,

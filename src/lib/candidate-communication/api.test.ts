@@ -63,6 +63,33 @@ describe('candidate communication api payload', () => {
     ).toEqual({ ok: false, error: 'message.receivedAt is invalid' });
   });
 
+  it('requires a stable external message id before executing a reply', () => {
+    expect(
+      parseCandidateMessagePayload({
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        message: { content: 'hello' },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'message.externalMessageId is required when executeReply is true',
+    });
+
+    expect(
+      parseCandidateMessagePayload({
+        jobDescriptionId: 'jd-1',
+        candidateId: 'candidate-1',
+        platform: 'boss-like',
+        message: { content: 'hello' },
+        executeReply: false,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { executeReply: false, message: { externalMessageId: null } },
+    });
+  });
+
   it('rejects unsupported platforms', () => {
     expect(
       parseCandidateMessagePayload({

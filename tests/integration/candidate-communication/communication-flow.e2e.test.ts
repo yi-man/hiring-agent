@@ -11,8 +11,16 @@ import {
   requireIntegrationEnv,
 } from '../chat/test-env';
 import { BossLikeCandidateCommunicationAdapter } from '@/lib/candidate-communication/adapters/boss-like';
+import {
+  candidateCommunicationReplyExternalMessageId,
+  prismaCandidateConversationRepository,
+} from '@/lib/candidate-communication/repo';
 import { BossLikeCandidateSourceAdapter } from '@/lib/candidate-screening/adapters/boss-like';
 import { createCandidateIdentity } from '@/lib/candidate-screening/dedupe';
+import {
+  CandidateActionInProgressError,
+  updateCandidateInterviewProgress,
+} from '@/lib/candidate-screening/repo';
 import { runCandidateCommunicationSkill } from '@/lib/candidate-communication/skill-runner';
 import { handleCandidateMessage } from '@/lib/candidate-communication/service';
 import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-executor';
@@ -107,10 +115,25 @@ function renderMessagesPage(unread: boolean): string {
       <h1>消息列表</h1>
       <div class="overflow-y-auto">${unreadRow}</div>
       <div id="selected-thread"></div>
-      <form method="post" action="/employer/messages/boss-message-1/reply">
-        <label>消息 <textarea name="message" placeholder="输入回复内容..."></textarea></label>
-        <button type="submit">发送</button>
-      </form>
+      ${
+        unread
+          ? `<div class="flex-1 flex flex-col">
+              <div class="p-4 border-b">
+                <h3>Ada Lovelace</h3>
+                <p>高级后端工程师 · Analytical Engines</p>
+              </div>
+              <div class="flex-1 overflow-y-auto">
+                <div class="flex justify-start" data-message-id="boss-incoming-message-1">
+                  <div><p>可以，加我微信 wxid_backend_2026</p><p>2026-07-20T09:00:00.000Z</p></div>
+                </div>
+              </div>
+              <form method="post" action="/employer/messages/boss-message-1/reply">
+                <label>消息 <textarea name="message" placeholder="输入回复内容..."></textarea></label>
+                <button type="submit">发送</button>
+              </form>
+            </div>`
+          : ''
+      }
       ${unread ? '' : '<p>暂无未读消息</p>'}
     </main>
   </body>
@@ -406,4 +429,1042 @@ describe('candidate communication integration flow with real postgres, LLM, and 
       await bossLike.close();
     }
   }, 180000);
+
+  it('claims an inbound-only replay once and finalizes one canonical decision', async () => {
+    const userId = await createIntegrationUser();
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+      const runLLM = jest.fn().mockResolvedValue({
+        intent: 'greeting' as const,
+        intentLevel: 'medium' as const,
+        nextStage: 'contact_requested' as const,
+        shouldReply: false,
+        reply: null,
+        actions: ['noop'] as const,
+        rationale: 'integration recovery decision',
+      });
+      const evaluateCandidate = jest.fn().mockResolvedValue({
+        tags: {
+          skills: ['Java'],
+          domainKnowledge: [],
+          generalAbility: [],
+          risk: [],
+          activity: [],
+          custom: [],
+        },
+        score: { skill: 90, domain: 80, ability: 70, risk: 0, llmBonus: 0, total: 82 },
+        decision: { action: 'chat', priority: 'high', reason: 'integration fixture' },
+      });
+      const payload = {
+        jobDescriptionId: jobDescription.id,
+        candidateId,
+        platform: 'boss-like' as const,
+        message: {
+          content: '你好，还在招聘吗？',
+          externalMessageId: `inbound-only-${candidateId}`,
+          receivedAt: new Date(),
+        },
+        executeReply: false,
+      };
+
+      const concurrent = await Promise.all([
+        handleCandidateMessage({ userId, payload, dependencies: { runLLM, evaluateCandidate } }),
+        handleCandidateMessage({ userId, payload, dependencies: { runLLM, evaluateCandidate } }),
+      ]);
+      const completedReplay = await handleCandidateMessage({
+        userId,
+        payload,
+        dependencies: { runLLM, evaluateCandidate },
+      });
+
+      const conversation = await prisma.candidateConversation.findFirstOrThrow({
+        where: { userId, jobDescriptionId: jobDescription.id, candidateId },
+      });
+      const incoming = await prisma.candidateConversationMessage.findFirstOrThrow({
+        where: { userId, externalMessageId: payload.message.externalMessageId },
+      });
+      const decisions = await prisma.candidateConversationDecision.findMany({
+        where: { userId, inputMessageId: incoming.id },
+      });
+
+      expect(runLLM).toHaveBeenCalledTimes(1);
+      expect(evaluateCandidate).toHaveBeenCalledTimes(1);
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0]?.finalizedAt).not.toBeNull();
+      expect(conversation.messageCount).toBe(1);
+      expect(incoming).toMatchObject({
+        processingClaimId: null,
+        processingOutcome: 'processed_ackable',
+      });
+      expect(incoming.processedAt).not.toBeNull();
+      expect(concurrent.some((result) => result.ackable)).toBe(true);
+      expect(completedReplay).toMatchObject({
+        processingStatus: 'processed',
+        processingOutcome: 'processed_ackable',
+        ackable: true,
+      });
+    } finally {
+      await cleanupIntegrationUser(userId);
+    }
+  }, 60000);
+
+  it('skips auto-reply when a terminal screening result appears while the LLM is deciding', async () => {
+    const userId = await createIntegrationUser();
+    let releaseLlm: () => void = () => undefined;
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+      let markLlmStarted: () => void = () => undefined;
+      const llmStarted = new Promise<void>((resolve) => {
+        markLlmStarted = resolve;
+      });
+      const llmRelease = new Promise<void>((resolve) => {
+        releaseLlm = resolve;
+      });
+      const runLLM = jest.fn().mockImplementation(async () => {
+        markLlmStarted();
+        await llmRelease;
+        return {
+          intent: 'job_question' as const,
+          intentLevel: 'medium' as const,
+          nextStage: 'contact_requested' as const,
+          shouldReply: true,
+          reply: '还在招聘，方便继续聊聊吗？',
+          actions: ['reply'] as const,
+          rationale: 'candidate asked about the job',
+        };
+      });
+      const evaluateCandidate = jest.fn().mockResolvedValue({ score: { total: 82 } });
+      const createAdapter = jest.fn();
+
+      const processing = handleCandidateMessage({
+        userId,
+        payload: {
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          message: {
+            content: '这个岗位还在招聘吗？',
+            externalMessageId: `terminal-during-llm-${candidateId}`,
+            receivedAt: new Date(),
+          },
+          executeReply: true,
+        },
+        dependencies: { runLLM, evaluateCandidate, createAdapter },
+      });
+
+      await llmStarted;
+      const screeningRun = await prisma.candidateScreeningRun.create({
+        data: {
+          userId,
+          jobDescriptionId: jobDescription.id,
+          platform: 'boss-like',
+          mode: 'dry_run',
+          status: 'success',
+        },
+      });
+      await prisma.candidateScreeningResult.create({
+        data: {
+          userId,
+          runId: screeningRun.id,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          source: 'live_search',
+          tags: {},
+          scoreDetail: {},
+          finalScore: 80,
+          rank: 1,
+          decisionAction: 'chat',
+          decisionPriority: 'high',
+          decisionReason: 'terminal state race fixture',
+          interviewStage: 'withdrawn',
+        },
+      });
+      releaseLlm();
+
+      const result = await processing;
+
+      expect(result.outgoingMessage).toBeNull();
+      expect(createAdapter).not.toHaveBeenCalled();
+      await expect(
+        prisma.candidateConversationMessage.count({
+          where: {
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            role: 'agent',
+          },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.candidateScreeningResult.findFirstOrThrow({
+          where: { userId, jobDescriptionId: jobDescription.id, candidateId },
+        }),
+      ).resolves.toMatchObject({ interviewStage: 'withdrawn' });
+    } finally {
+      releaseLlm();
+      await cleanupIntegrationUser(userId);
+    }
+  }, 60000);
+
+  it('blocks terminal progress while the candidate message processing claim is active', async () => {
+    const userId = await createIntegrationUser();
+    let releaseLlm: () => void = () => undefined;
+    let processing: ReturnType<typeof handleCandidateMessage> | null = null;
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+      let markLlmStarted: () => void = () => undefined;
+      const llmStarted = new Promise<void>((resolve) => {
+        markLlmStarted = resolve;
+      });
+      const llmRelease = new Promise<void>((resolve) => {
+        releaseLlm = resolve;
+      });
+      const runLLM = jest.fn().mockImplementation(async () => {
+        markLlmStarted();
+        await llmRelease;
+        return {
+          intent: 'job_question' as const,
+          intentLevel: 'medium' as const,
+          nextStage: 'contact_requested' as const,
+          shouldReply: false,
+          reply: null,
+          actions: ['noop'] as const,
+          rationale: 'no automatic reply needed',
+        };
+      });
+
+      processing = handleCandidateMessage({
+        userId,
+        payload: {
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          message: {
+            content: '这个岗位还在招聘吗？',
+            externalMessageId: `terminal-fence-${candidateId}`,
+            receivedAt: new Date(),
+          },
+          executeReply: true,
+        },
+        dependencies: {
+          runLLM,
+          evaluateCandidate: jest.fn().mockResolvedValue({ score: { total: 82 } }),
+          createAdapter: jest.fn(),
+        },
+      });
+
+      await llmStarted;
+      const screeningRun = await prisma.candidateScreeningRun.create({
+        data: {
+          userId,
+          jobDescriptionId: jobDescription.id,
+          platform: 'boss-like',
+          mode: 'dry_run',
+          status: 'success',
+        },
+      });
+      await prisma.candidateScreeningResult.create({
+        data: {
+          userId,
+          runId: screeningRun.id,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          source: 'live_search',
+          tags: {},
+          scoreDetail: {},
+          finalScore: 80,
+          rank: 1,
+          decisionAction: 'chat',
+          decisionPriority: 'high',
+          decisionReason: 'active message fence fixture',
+          interviewStage: 'offer',
+        },
+      });
+
+      await expect(
+        updateCandidateInterviewProgress({
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          interviewStage: 'withdrawn',
+          expectedInterviewStage: 'offer',
+        }),
+      ).rejects.toBeInstanceOf(CandidateActionInProgressError);
+
+      releaseLlm();
+      await processing;
+      await expect(
+        updateCandidateInterviewProgress({
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          interviewStage: 'withdrawn',
+          expectedInterviewStage: 'offer',
+        }),
+      ).resolves.toMatchObject({ interviewStage: 'withdrawn' });
+    } finally {
+      releaseLlm();
+      await processing?.catch(() => undefined);
+      await cleanupIntegrationUser(userId);
+    }
+  }, 60000);
+
+  it.each(['newer_first', 'older_first'] as const)(
+    'keeps the newer finalized stage when platform messages share one occurrence time (%s)',
+    async (completionOrder) => {
+      const userId = await createIntegrationUser();
+
+      try {
+        const jobDescription = await createPublishedJobDescription(userId);
+        const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+        const screeningRun = await prisma.candidateScreeningRun.create({
+          data: {
+            userId,
+            jobDescriptionId: jobDescription.id,
+            platform: 'boss-like',
+            mode: 'dry_run',
+            status: 'success',
+          },
+        });
+        await prisma.candidateScreeningResult.create({
+          data: {
+            userId,
+            runId: screeningRun.id,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            source: 'live_search',
+            tags: {},
+            scoreDetail: {},
+            finalScore: 80,
+            rank: 1,
+            decisionAction: 'chat',
+            decisionPriority: 'high',
+            decisionReason: 'chronology integration fixture',
+            interviewStage: 'withdrawn',
+          },
+        });
+        const occurredAt = new Date('2026-07-20T09:00:00.000Z');
+        const conversation = await prisma.candidateConversation.create({
+          data: {
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            platform: 'boss-like',
+            stage: 'new',
+            status: 'active',
+            lastActiveAt: occurredAt,
+            lastCandidateMessageAt: occurredAt,
+          },
+        });
+        const older = await prisma.candidateConversationMessage.create({
+          data: {
+            conversationId: conversation.id,
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            platform: 'boss-like',
+            role: 'candidate',
+            content: '第一条同时间消息',
+            externalMessageId: `same-time-older-${candidateId}`,
+            deliveryStatus: 'received',
+            processingClaimId: 'older-claim',
+            processingLeaseExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+            processingOutcome: 'in_flight',
+            occurredAt,
+            createdAt: new Date('2026-07-20T09:00:01.000Z'),
+          },
+        });
+        const newer = await prisma.candidateConversationMessage.create({
+          data: {
+            conversationId: conversation.id,
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            platform: 'boss-like',
+            role: 'candidate',
+            content: '第二条同时间消息',
+            externalMessageId: `same-time-newer-${candidateId}`,
+            deliveryStatus: 'received',
+            processingClaimId: 'newer-claim',
+            processingLeaseExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+            processingOutcome: 'in_flight',
+            occurredAt,
+            createdAt: new Date('2026-07-20T09:00:02.000Z'),
+          },
+        });
+        await expect(
+          prismaCandidateConversationRepository.listRecentMessages({
+            conversationId: conversation.id,
+            limit: 10,
+          }),
+        ).resolves.toEqual([
+          expect.objectContaining({ id: older.id }),
+          expect.objectContaining({ id: newer.id }),
+        ]);
+        await prisma.candidateConversationDecision.createMany({
+          data: [
+            {
+              conversationId: conversation.id,
+              userId,
+              jobDescriptionId: jobDescription.id,
+              candidateId,
+              inputMessageId: older.id,
+              intent: 'not_interested',
+              intentLevel: 'high',
+              nextStage: 'rejected',
+              shouldReply: false,
+              reply: null,
+              actions: ['mark_rejected'],
+              rationale: 'older decision',
+            },
+            {
+              conversationId: conversation.id,
+              userId,
+              jobDescriptionId: jobDescription.id,
+              candidateId,
+              inputMessageId: newer.id,
+              intent: 'greeting',
+              intentLevel: 'medium',
+              nextStage: 'contact_requested',
+              shouldReply: false,
+              reply: null,
+              actions: ['noop'],
+              rationale: 'newer decision',
+            },
+          ],
+        });
+
+        const finalizeNewer = () =>
+          prismaCandidateConversationRepository.finalizeCandidateDecision({
+            userId,
+            messageId: newer.id,
+            claimId: 'newer-claim',
+            inputMessageId: newer.id,
+            interviewStage: 'replied',
+            conversation: {
+              conversationId: conversation.id,
+              userId,
+              jobDescriptionId: jobDescription.id,
+              candidateId,
+              stage: 'contact_requested',
+              status: 'active',
+              intentLevel: 'medium',
+              messageCountIncrement: 1,
+              lastActiveAt: occurredAt,
+              lastCandidateMessageAt: occurredAt,
+              lastAgentMessageAt: null,
+              nextFollowUpAt: null,
+              outcomeResult: null,
+              outcomeReason: null,
+            },
+          });
+        const finalizeOlder = () =>
+          prismaCandidateConversationRepository.finalizeCandidateDecision({
+            userId,
+            messageId: older.id,
+            claimId: 'older-claim',
+            inputMessageId: older.id,
+            interviewStage: 'withdrawn',
+            conversation: {
+              conversationId: conversation.id,
+              userId,
+              jobDescriptionId: jobDescription.id,
+              candidateId,
+              stage: 'rejected',
+              status: 'closed',
+              intentLevel: 'high',
+              messageCountIncrement: 1,
+              lastActiveAt: occurredAt,
+              lastCandidateMessageAt: occurredAt,
+              lastAgentMessageAt: null,
+              nextFollowUpAt: null,
+              outcomeResult: 'rejected',
+              outcomeReason: 'older decision',
+            },
+          });
+        if (completionOrder === 'newer_first') {
+          await finalizeNewer();
+          await finalizeOlder();
+        } else {
+          await finalizeOlder();
+          await finalizeNewer();
+        }
+
+        await expect(
+          prisma.candidateConversation.findUniqueOrThrow({ where: { id: conversation.id } }),
+        ).resolves.toMatchObject({
+          stage: 'contact_requested',
+          status: 'active',
+          intentLevel: 'medium',
+          messageCount: 2,
+          outcomeResult: null,
+        });
+        await expect(
+          prisma.candidateConversationDecision.count({
+            where: { userId, finalizedAt: { not: null } },
+          }),
+        ).resolves.toBe(2);
+        await expect(
+          prisma.candidateScreeningResult.findFirstOrThrow({
+            where: { userId, jobDescriptionId: jobDescription.id, candidateId },
+          }),
+        ).resolves.toMatchObject({ interviewStage: 'replied' });
+      } finally {
+        await cleanupIntegrationUser(userId);
+      }
+    },
+    60000,
+  );
+
+  it('does not reopen a manually withdrawn candidate from an unrelated historical rejection', async () => {
+    const userId = await createIntegrationUser();
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+      const screeningRun = await prisma.candidateScreeningRun.create({
+        data: {
+          userId,
+          jobDescriptionId: jobDescription.id,
+          platform: 'boss-like',
+          mode: 'dry_run',
+          status: 'success',
+        },
+      });
+      await prisma.candidateScreeningResult.create({
+        data: {
+          userId,
+          runId: screeningRun.id,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          source: 'live_search',
+          tags: {},
+          scoreDetail: {},
+          finalScore: 80,
+          rank: 1,
+          decisionAction: 'chat',
+          decisionPriority: 'high',
+          decisionReason: 'manual withdrawal fixture',
+          interviewStage: 'withdrawn',
+        },
+      });
+      const olderOccurredAt = new Date('2026-07-20T08:00:00.000Z');
+      const currentOccurredAt = new Date('2026-07-20T09:00:00.000Z');
+      const conversation = await prisma.candidateConversation.create({
+        data: {
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          stage: 'rejected',
+          status: 'closed',
+          lastActiveAt: olderOccurredAt,
+          lastCandidateMessageAt: olderOccurredAt,
+          outcomeResult: 'rejected',
+          outcomeReason: 'historical rejection',
+        },
+      });
+      const older = await prisma.candidateConversationMessage.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          role: 'candidate',
+          content: '之前不考虑',
+          externalMessageId: `historical-rejection-${candidateId}`,
+          deliveryStatus: 'received',
+          processingOutcome: 'processed_ackable',
+          processedAt: new Date('2026-07-20T08:00:02.000Z'),
+          occurredAt: olderOccurredAt,
+          createdAt: new Date('2026-07-20T08:00:01.000Z'),
+        },
+      });
+      const current = await prisma.candidateConversationMessage.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          role: 'candidate',
+          content: '新的候选人消息',
+          externalMessageId: `manual-withdrawal-current-${candidateId}`,
+          deliveryStatus: 'received',
+          processingClaimId: 'current-claim',
+          processingLeaseExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          processingOutcome: 'in_flight',
+          occurredAt: currentOccurredAt,
+          createdAt: new Date('2026-07-20T09:00:01.000Z'),
+        },
+      });
+      await prisma.candidateConversationDecision.createMany({
+        data: [
+          {
+            conversationId: conversation.id,
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            inputMessageId: older.id,
+            intent: 'not_interested',
+            intentLevel: 'high',
+            nextStage: 'rejected',
+            shouldReply: false,
+            reply: null,
+            actions: ['mark_rejected'],
+            rationale: 'historical rejection',
+            finalizedAt: new Date('2026-07-20T08:00:02.000Z'),
+          },
+          {
+            conversationId: conversation.id,
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            inputMessageId: current.id,
+            intent: 'greeting',
+            intentLevel: 'medium',
+            nextStage: 'contact_requested',
+            shouldReply: false,
+            reply: null,
+            actions: ['noop'],
+            rationale: 'current non-rejection decision',
+          },
+        ],
+      });
+
+      await prismaCandidateConversationRepository.finalizeCandidateDecision({
+        userId,
+        messageId: current.id,
+        claimId: 'current-claim',
+        inputMessageId: current.id,
+        interviewStage: 'replied',
+        conversation: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          stage: 'contact_requested',
+          status: 'active',
+          intentLevel: 'medium',
+          messageCountIncrement: 1,
+          lastActiveAt: currentOccurredAt,
+          lastCandidateMessageAt: currentOccurredAt,
+          lastAgentMessageAt: null,
+          nextFollowUpAt: null,
+          outcomeResult: null,
+          outcomeReason: null,
+        },
+      });
+
+      await expect(
+        prisma.candidateScreeningResult.findFirstOrThrow({
+          where: { userId, jobDescriptionId: jobDescription.id, candidateId },
+        }),
+      ).resolves.toMatchObject({ interviewStage: 'withdrawn' });
+    } finally {
+      await cleanupIntegrationUser(userId);
+    }
+  }, 60000);
+
+  it('keeps a finalized decision with a planned outgoing reply non-ackable without replaying side effects', async () => {
+    const userId = await createIntegrationUser();
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+      const occurredAt = new Date('2026-07-20T09:00:00.000Z');
+      const finalizedAt = new Date('2026-07-20T09:00:02.000Z');
+      const conversation = await prisma.candidateConversation.create({
+        data: {
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          stage: 'contact_requested',
+          status: 'active',
+          messageCount: 2,
+          lastActiveAt: occurredAt,
+          lastCandidateMessageAt: occurredAt,
+        },
+      });
+      const incoming = await prisma.candidateConversationMessage.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          role: 'candidate',
+          content: '你好，还在招聘吗？',
+          externalMessageId: `finalized-planned-${candidateId}`,
+          deliveryStatus: 'received',
+          processingClaimId: 'expired-claim',
+          processingLeaseExpiresAt: new Date('2026-07-20T09:05:00.000Z'),
+          processingOutcome: 'in_flight',
+          occurredAt,
+        },
+      });
+      const outgoing = await prisma.candidateConversationMessage.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          role: 'agent',
+          content: '还在招聘，方便继续聊聊吗？',
+          externalMessageId: candidateCommunicationReplyExternalMessageId(incoming.id),
+          deliveryStatus: 'planned',
+          occurredAt: new Date(occurredAt.getTime() + 1000),
+        },
+      });
+      await prisma.candidateConversationDecision.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          inputMessageId: incoming.id,
+          outputMessageId: outgoing.id,
+          intent: 'greeting',
+          intentLevel: 'medium',
+          nextStage: 'contact_requested',
+          shouldReply: true,
+          reply: outgoing.content,
+          actions: ['reply'],
+          rationale: 'finalized before delivery acknowledgement was durable',
+          finalizedAt,
+        },
+      });
+      const runLLM = jest.fn();
+      const createAdapter = jest.fn();
+
+      const result = await handleCandidateMessage({
+        userId,
+        payload: {
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          message: {
+            content: incoming.content,
+            externalMessageId: incoming.externalMessageId,
+            receivedAt: occurredAt,
+          },
+          executeReply: true,
+        },
+        dependencies: { runLLM, createAdapter },
+      });
+
+      const [storedIncoming, storedOutgoing, storedConversation, memoryCount] = await Promise.all([
+        prisma.candidateConversationMessage.findUniqueOrThrow({ where: { id: incoming.id } }),
+        prisma.candidateConversationMessage.findUniqueOrThrow({ where: { id: outgoing.id } }),
+        prisma.candidateConversation.findUniqueOrThrow({ where: { id: conversation.id } }),
+        prisma.candidateConversationMemory.count({
+          where: { userId, conversationId: conversation.id },
+        }),
+      ]);
+
+      expect(runLLM).not.toHaveBeenCalled();
+      expect(createAdapter).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        processingStatus: 'processed',
+        processingOutcome: 'delivery_unknown',
+        ackable: false,
+      });
+      expect(storedIncoming).toMatchObject({
+        processingClaimId: null,
+        processingOutcome: 'delivery_unknown',
+        errorMessage: expect.stringContaining('发送结果未知'),
+      });
+      expect(storedIncoming.processedAt).not.toBeNull();
+      expect(storedOutgoing).toMatchObject({
+        deliveryStatus: 'failed',
+        errorMessage: expect.stringContaining('发送结果未知'),
+      });
+      expect(storedConversation.messageCount).toBe(2);
+      expect(memoryCount).toBe(0);
+    } finally {
+      await cleanupIntegrationUser(userId);
+    }
+  }, 60000);
+
+  it.each([
+    {
+      label: 'sent reply',
+      deliveryStatus: 'sent' as const,
+      expectedStatus: 'sent',
+      expectedOutcome: 'processed_ackable',
+      expectedAckable: true,
+      stableExternalId: true,
+      linkedDecisionOutput: false,
+    },
+    {
+      label: 'ambiguous planned reply',
+      deliveryStatus: 'planned' as const,
+      expectedStatus: 'failed',
+      expectedOutcome: 'delivery_unknown',
+      expectedAckable: false,
+      stableExternalId: true,
+      linkedDecisionOutput: false,
+    },
+    {
+      label: 'decision-linked sent reply without a stable external id',
+      deliveryStatus: 'sent' as const,
+      expectedStatus: 'sent',
+      expectedOutcome: 'processed_ackable',
+      expectedAckable: true,
+      stableExternalId: false,
+      linkedDecisionOutput: true,
+    },
+  ])(
+    'resumes local finalization for a persisted decision with $label without resending',
+    async ({
+      deliveryStatus,
+      expectedStatus,
+      expectedOutcome,
+      expectedAckable,
+      stableExternalId,
+      linkedDecisionOutput,
+    }) => {
+      const userId = await createIntegrationUser();
+
+      try {
+        const jobDescription = await createPublishedJobDescription(userId);
+        const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+        const occurredAt = new Date('2026-07-20T09:00:00.000Z');
+        const conversation = await prisma.candidateConversation.create({
+          data: {
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            platform: 'boss-like',
+            stage: 'new',
+            status: 'active',
+            lastActiveAt: occurredAt,
+            lastCandidateMessageAt: occurredAt,
+          },
+        });
+        const incoming = await prisma.candidateConversationMessage.create({
+          data: {
+            conversationId: conversation.id,
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            platform: 'boss-like',
+            role: 'candidate',
+            content: '你好，还在招聘吗？',
+            externalMessageId: `resume-finalization-${deliveryStatus}-${candidateId}`,
+            deliveryStatus: 'received',
+            processingClaimId: 'expired-claim',
+            processingLeaseExpiresAt: new Date('2026-07-20T09:05:00.000Z'),
+            processingOutcome: 'in_flight',
+            occurredAt,
+          },
+        });
+        const outgoing = await prisma.candidateConversationMessage.create({
+          data: {
+            conversationId: conversation.id,
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            platform: 'boss-like',
+            role: 'agent',
+            content: '还在招聘，方便继续聊聊吗？',
+            externalMessageId: stableExternalId
+              ? candidateCommunicationReplyExternalMessageId(incoming.id)
+              : null,
+            deliveryStatus,
+            occurredAt: new Date(occurredAt.getTime() + 1000),
+          },
+        });
+        await prisma.candidateConversationDecision.create({
+          data: {
+            conversationId: conversation.id,
+            userId,
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            inputMessageId: incoming.id,
+            outputMessageId: linkedDecisionOutput ? outgoing.id : null,
+            intent: 'greeting',
+            intentLevel: 'medium',
+            nextStage: 'contact_requested',
+            shouldReply: true,
+            reply: outgoing.content,
+            actions: ['reply'],
+            rationale: 'persisted before the interrupted delivery',
+          },
+        });
+        const runLLM = jest.fn();
+        const createAdapter = jest.fn();
+
+        const result = await handleCandidateMessage({
+          userId,
+          payload: {
+            jobDescriptionId: jobDescription.id,
+            candidateId,
+            platform: 'boss-like',
+            message: {
+              content: incoming.content,
+              externalMessageId: incoming.externalMessageId,
+              receivedAt: occurredAt,
+            },
+            executeReply: true,
+          },
+          dependencies: { runLLM, createAdapter },
+        });
+
+        const [storedIncoming, storedOutgoing, storedDecision, storedConversation] =
+          await Promise.all([
+            prisma.candidateConversationMessage.findUniqueOrThrow({
+              where: { id: incoming.id },
+            }),
+            prisma.candidateConversationMessage.findUniqueOrThrow({
+              where: { id: outgoing.id },
+            }),
+            prisma.candidateConversationDecision.findUniqueOrThrow({
+              where: { inputMessageId: incoming.id },
+            }),
+            prisma.candidateConversation.findUniqueOrThrow({
+              where: { id: conversation.id },
+            }),
+          ]);
+
+        expect(runLLM).not.toHaveBeenCalled();
+        expect(createAdapter).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          processingStatus: 'processed',
+          processingOutcome: expectedOutcome,
+          ackable: expectedAckable,
+        });
+        expect(storedIncoming.processingOutcome).toBe(expectedOutcome);
+        expect(storedIncoming.processedAt).not.toBeNull();
+        expect(storedOutgoing.deliveryStatus).toBe(expectedStatus);
+        expect(storedDecision.finalizedAt).not.toBeNull();
+        expect(storedDecision.outputMessageId).toBe(outgoing.id);
+        await expect(
+          prisma.candidateConversationMessage.count({
+            where: { userId, conversationId: conversation.id, role: 'agent' },
+          }),
+        ).resolves.toBe(1);
+        expect(storedConversation).toMatchObject({
+          stage: 'contact_requested',
+          messageCount: 2,
+        });
+      } finally {
+        await cleanupIntegrationUser(userId);
+      }
+    },
+    60000,
+  );
+
+  it('fails closed without resending when a persisted decision points to a missing output', async () => {
+    const userId = await createIntegrationUser();
+
+    try {
+      const jobDescription = await createPublishedJobDescription(userId);
+      const candidateId = await createCandidate(userId, 'http://127.0.0.1:6183');
+      const occurredAt = new Date('2026-07-20T09:00:00.000Z');
+      const conversation = await prisma.candidateConversation.create({
+        data: {
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          stage: 'new',
+          status: 'active',
+          lastActiveAt: occurredAt,
+          lastCandidateMessageAt: occurredAt,
+        },
+      });
+      const incoming = await prisma.candidateConversationMessage.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          role: 'candidate',
+          content: '你好，还在招聘吗？',
+          externalMessageId: `missing-output-${candidateId}`,
+          deliveryStatus: 'received',
+          processingClaimId: 'expired-claim',
+          processingLeaseExpiresAt: new Date(Date.now() - 1000),
+          processingOutcome: 'in_flight',
+          occurredAt,
+        },
+      });
+      const missingOutputMessageId = `missing-agent-${candidateId}`;
+      await prisma.candidateConversationDecision.create({
+        data: {
+          conversationId: conversation.id,
+          userId,
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          inputMessageId: incoming.id,
+          outputMessageId: missingOutputMessageId,
+          intent: 'greeting',
+          intentLevel: 'medium',
+          nextStage: 'contact_requested',
+          shouldReply: true,
+          reply: '还在招聘，方便继续聊聊吗？',
+          actions: ['reply'],
+          rationale: 'output disappeared after the delivery checkpoint',
+        },
+      });
+      const runLLM = jest.fn();
+      const createAdapter = jest.fn();
+
+      const result = await handleCandidateMessage({
+        userId,
+        payload: {
+          jobDescriptionId: jobDescription.id,
+          candidateId,
+          platform: 'boss-like',
+          message: {
+            content: incoming.content,
+            externalMessageId: incoming.externalMessageId,
+            receivedAt: occurredAt,
+          },
+          executeReply: true,
+        },
+        dependencies: { runLLM, createAdapter },
+      });
+
+      const [storedIncoming, storedDecision, outgoingCount] = await Promise.all([
+        prisma.candidateConversationMessage.findUniqueOrThrow({ where: { id: incoming.id } }),
+        prisma.candidateConversationDecision.findUniqueOrThrow({
+          where: { inputMessageId: incoming.id },
+        }),
+        prisma.candidateConversationMessage.count({
+          where: { userId, conversationId: conversation.id, role: 'agent' },
+        }),
+      ]);
+
+      expect(runLLM).not.toHaveBeenCalled();
+      expect(createAdapter).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        processingStatus: 'processed',
+        processingOutcome: 'delivery_unknown',
+        ackable: false,
+      });
+      expect(storedIncoming).toMatchObject({
+        processingOutcome: 'delivery_unknown',
+        errorMessage: expect.stringContaining('发送结果未知'),
+      });
+      expect(storedDecision).toMatchObject({
+        outputMessageId: missingOutputMessageId,
+        finalizedAt: expect.any(Date),
+      });
+      expect(outgoingCount).toBe(0);
+    } finally {
+      await cleanupIntegrationUser(userId);
+    }
+  }, 60000);
 });

@@ -103,6 +103,7 @@ function buildInput(sample: HiringDecisionGoldenSample) {
       fetchedAt: now,
       createdAt: now,
     },
+    latestPlannedChatRunId: null,
     actionLogs: [],
   };
   const feedbacks: CandidateInterviewFeedbackDto[] = sample.input.feedbacks.map(

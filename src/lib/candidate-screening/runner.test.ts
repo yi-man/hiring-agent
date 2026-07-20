@@ -369,6 +369,8 @@ function makeDetail(
       },
     ],
     ...overrides,
+    latestPlannedChatRunId:
+      overrides.latestPlannedChatRunId === undefined ? 'run-1' : overrides.latestPlannedChatRunId,
   };
 }
 
@@ -2307,6 +2309,189 @@ describe('candidate screening runner', () => {
     );
   });
 
+  it('preserves an existing offer stage when repeat contact is allowed', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({
+          candidates: [
+            makeRawCandidate({
+              platformCandidateId: 'platform-candidate-1',
+              name: 'Ada Offered',
+            }),
+          ],
+        }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 1,
+      candidateContacted: true,
+      candidateWasExisting: false,
+      resumeWasExisting: false,
+      existingCandidateId: null,
+      existingCandidateName: null,
+      existingResumeId: null,
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score, decision: chatDecision });
+    const offeredResult = makeResult({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      actionStatus: 'success',
+      interviewStage: 'offer',
+      notes: 'offer accepted verbally',
+      candidate: {
+        ...makeResult().candidate,
+        contacted: true,
+      },
+    });
+    dependencies.repo.listResults = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([offeredResult]);
+    dependencies.repo.upsertResult = jest.fn().mockResolvedValueOnce(offeredResult);
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request: { ...request, allowAlreadyContacted: true },
+      dependencies,
+    });
+
+    expect(dependencies.repo.upsertResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: 'candidate-1',
+        interviewStage: 'offer',
+        notes: 'offer accepted verbally',
+      }),
+    );
+  });
+
+  it('does not create stale action logs when the candidate becomes terminal during planning', async () => {
+    const adapter = makeAdapter({
+      searchCandidates: jest.fn(() =>
+        batches({ candidates: [makeRawCandidate({ name: 'Ada Concurrent' })] }),
+      ),
+    });
+    const dependencies = makeDependencies(adapter);
+    dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+      candidateId: 'candidate-1',
+      resumeId: 'resume-1',
+      identityHash: 'identity-live',
+      chunkCount: 1,
+      candidateContacted: false,
+      candidateWasExisting: true,
+      resumeWasExisting: true,
+      existingCandidateId: 'candidate-1',
+      existingCandidateName: 'Ada Concurrent',
+      existingResumeId: 'resume-1',
+    });
+    dependencies.mergeAndRank = jest
+      .fn()
+      .mockReturnValueOnce([
+        { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+      ]);
+    dependencies.evaluateCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({ tags, score, decision: chatDecision });
+    dependencies.repo.listResults = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([makeResult({ interviewStage: 'to_contact' })]);
+    dependencies.repo.upsertResult = jest
+      .fn()
+      .mockResolvedValueOnce(makeResult({ interviewStage: 'withdrawn' }));
+
+    await runCandidateScreening({
+      runId: 'run-1',
+      userId: 'user-1',
+      jobDescription,
+      request,
+      dependencies,
+    });
+
+    expect(dependencies.repo.createActionLog).not.toHaveBeenCalled();
+    expect(dependencies.repo.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        stats: expect.objectContaining({ recommendedChat: 0 }),
+      }),
+    );
+  });
+
+  it.each(['onboarded', 'not_joined', 'rejected', 'withdrawn'] as const)(
+    'does not plan new actions for a candidate in terminal stage %s',
+    async (interviewStage) => {
+      const adapter = makeAdapter({
+        searchCandidates: jest.fn(() =>
+          batches({
+            candidates: [
+              makeRawCandidate({
+                platformCandidateId: 'platform-candidate-1',
+                name: 'Ada Terminal',
+              }),
+            ],
+          }),
+        ),
+      });
+      const dependencies = makeDependencies(adapter);
+      dependencies.ingestCandidate = jest.fn().mockResolvedValueOnce({
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        identityHash: 'identity-live',
+        chunkCount: 1,
+        candidateContacted: false,
+        candidateWasExisting: false,
+        resumeWasExisting: false,
+        existingCandidateId: null,
+        existingCandidateName: null,
+        existingResumeId: null,
+      });
+      dependencies.mergeAndRank = jest
+        .fn()
+        .mockReturnValueOnce([
+          { candidateId: 'candidate-1', matchScore: 1, source: 'live_search', rank: 1 },
+        ]);
+      dependencies.evaluateCandidate = jest
+        .fn()
+        .mockResolvedValueOnce({ tags, score, decision: chatDecision });
+      const terminalResult = makeResult({
+        candidateId: 'candidate-1',
+        resumeId: 'resume-1',
+        actionStatus: 'success',
+        interviewStage,
+        candidate: {
+          ...makeResult().candidate,
+          contacted: false,
+        },
+      });
+      dependencies.repo.listResults = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([terminalResult]);
+
+      await runCandidateScreening({
+        runId: 'run-1',
+        userId: 'user-1',
+        jobDescription,
+        request: { ...request, allowAlreadyContacted: true },
+        dependencies,
+      });
+
+      expect(dependencies.repo.upsertResult).not.toHaveBeenCalled();
+      expect(dependencies.repo.createActionLog).not.toHaveBeenCalled();
+    },
+  );
+
   it('preserves already contacted progress even when the evaluated action is skip', async () => {
     const adapter = makeAdapter({
       searchCandidates: jest.fn(() =>
@@ -2538,7 +2723,7 @@ describe('candidate screening runner', () => {
         profileUrl: '/employer/resumes/2',
       },
     });
-    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([historicalResult]);
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([historicalResult]);
     dependencies.repo.upsertResult = jest.fn().mockResolvedValueOnce(
       makeResult({
         id: 'result-history',
@@ -2655,7 +2840,7 @@ describe('candidate screening runner', () => {
       },
     });
     const freshScore = { ...score, total: 84 };
-    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([historicalResult]);
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([historicalResult]);
     dependencies.evaluateCandidate = jest
       .fn()
       .mockResolvedValueOnce({ tags, score: freshScore, decision: chatDecision });
@@ -2731,7 +2916,7 @@ describe('candidate screening runner', () => {
       .mockReturnValueOnce([
         { candidateId: 'candidate-vector', matchScore: 0.82, source: 'vector_recall', rank: 1 },
       ]);
-    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([
       makeResult({
         id: 'result-history',
         runId: 'previous-run',
@@ -2807,7 +2992,7 @@ describe('candidate screening runner', () => {
       .mockReturnValueOnce([
         { candidateId: 'candidate-vector', matchScore: 0.82, source: 'vector_recall', rank: 1 },
       ]);
-    dependencies.repo.listResults = jest.fn().mockResolvedValueOnce([
+    dependencies.repo.listResults = jest.fn().mockResolvedValue([
       makeResult({
         id: 'result-history',
         runId: 'previous-run',
@@ -3322,63 +3507,69 @@ describe('candidate screening runner', () => {
     );
   });
 
-  it('does not execute a stale planned action after the candidate reaches a final outcome', async () => {
-    const adapter = makeAdapter({
-      chatCandidate: jest.fn().mockResolvedValue({ success: true }),
-      collectCandidate: jest.fn().mockResolvedValue({ success: true }),
-    });
-    const dependencies = makeDependencies(adapter);
-    const plannedResult = makeResult({
-      actionPlan: chatDecision,
-      actionStatus: 'planned',
-      interviewStage: 'to_contact',
-    });
-    const finalDetail = makeDetail({
-      ...plannedResult,
-      interviewStage: 'onboarded',
-      actionLogs: [makePlannedActionLog(plannedResult, chatDecision)],
-    });
-    dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
-    dependencies.repo.getDetail = jest.fn().mockResolvedValue(finalDetail);
-
-    await executeScreeningRunActions({
-      runId: 'run-1',
-      userId: 'user-1',
-      request: executeRequest,
-      dependencies,
-    });
-
-    expect(dependencies.repo.claimActionLog).not.toHaveBeenCalled();
-    expect(dependencies.createAdapter).not.toHaveBeenCalled();
-    expect(adapter.chatCandidate).not.toHaveBeenCalled();
-  });
-
-  it('rejects a manual stale action after the candidate reaches a final outcome', async () => {
-    const dependencies = makeDependencies();
-    const plannedResult = makeResult({
-      actionPlan: chatDecision,
-      actionStatus: 'planned',
-      interviewStage: 'onboarded',
-    });
-    dependencies.repo.getDetail = jest.fn().mockResolvedValue(
-      makeDetail({
+  it.each(['onboarded', 'not_joined', 'rejected', 'withdrawn'] as const)(
+    'does not execute a stale planned action after the candidate reaches terminal stage %s',
+    async (interviewStage) => {
+      const adapter = makeAdapter({
+        chatCandidate: jest.fn().mockResolvedValue({ success: true }),
+        collectCandidate: jest.fn().mockResolvedValue({ success: true }),
+      });
+      const dependencies = makeDependencies(adapter);
+      const plannedResult = makeResult({
+        actionPlan: chatDecision,
+        actionStatus: 'planned',
+        interviewStage: 'to_contact',
+      });
+      const terminalDetail = makeDetail({
         ...plannedResult,
+        interviewStage,
         actionLogs: [makePlannedActionLog(plannedResult, chatDecision)],
-      }),
-    );
+      });
+      dependencies.repo.listResults = jest.fn().mockResolvedValue([plannedResult]);
+      dependencies.repo.getDetail = jest.fn().mockResolvedValue(terminalDetail);
 
-    await expect(
-      executeSingleCandidateAction({
+      await executeScreeningRunActions({
         runId: 'run-1',
         userId: 'user-1',
-        jobDescriptionId: 'jd-1',
-        candidateId: 'candidate-1',
+        request: executeRequest,
         dependencies,
-      }),
-    ).rejects.toThrow('candidate hiring outcome is already final');
-    expect(dependencies.repo.claimActionLog).not.toHaveBeenCalled();
-    expect(dependencies.createAdapter).not.toHaveBeenCalled();
-  });
+      });
+
+      expect(dependencies.repo.claimActionLog).not.toHaveBeenCalled();
+      expect(dependencies.createAdapter).not.toHaveBeenCalled();
+      expect(adapter.chatCandidate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['onboarded', 'not_joined', 'rejected', 'withdrawn'] as const)(
+    'rejects a manual stale action after the candidate reaches terminal stage %s',
+    async (interviewStage) => {
+      const dependencies = makeDependencies();
+      const plannedResult = makeResult({
+        actionPlan: chatDecision,
+        actionStatus: 'planned',
+        interviewStage,
+      });
+      dependencies.repo.getDetail = jest.fn().mockResolvedValue(
+        makeDetail({
+          ...plannedResult,
+          actionLogs: [makePlannedActionLog(plannedResult, chatDecision)],
+        }),
+      );
+
+      await expect(
+        executeSingleCandidateAction({
+          runId: 'run-1',
+          userId: 'user-1',
+          jobDescriptionId: 'jd-1',
+          candidateId: 'candidate-1',
+          dependencies,
+        }),
+      ).rejects.toThrow('candidate workflow is already terminal');
+      expect(dependencies.repo.claimActionLog).not.toHaveBeenCalled();
+      expect(dependencies.createAdapter).not.toHaveBeenCalled();
+    },
+  );
 
   it('executes planned actions only through executeScreeningRunActions and updates contacted state after successful chat action', async () => {
     const adapter = makeAdapter({

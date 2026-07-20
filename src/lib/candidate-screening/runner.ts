@@ -16,7 +16,7 @@ import {
   CANDIDATE_SCREENING_CALIBRATION_VERSION,
   CANDIDATE_SCREENING_QUALITY_POLICY_VERSION,
   CANDIDATE_SCREENING_SCORING_VERSION,
-  isFinalHiringOutcomeStage,
+  isTerminalCandidateInterviewStage,
   MAX_SCREENING_EVALUATION_CANDIDATES,
   MAX_VECTOR_RECALL_CANDIDATES,
 } from './constants';
@@ -784,25 +784,12 @@ async function listExistingResultsForActionPlanning(params: {
   userId: string;
   jobDescriptionId: string;
   rankedCandidates: RankedCandidate[];
-  contexts: Map<string, CandidateContext>;
-  allowAlreadyContacted: boolean;
 }): Promise<Map<string, CandidateScreeningResultListItem>> {
-  if (params.allowAlreadyContacted) {
-    return new Map();
-  }
-
-  const contactedCandidateIds = params.rankedCandidates
-    .filter((candidate) => params.contexts.get(candidate.candidateId)?.contacted === true)
-    .map((candidate) => candidate.candidateId);
-  if (contactedCandidateIds.length === 0) {
-    return new Map();
-  }
-
   return listHistoricalEvaluations({
     dependencies: params.dependencies,
     userId: params.userId,
     jobDescriptionId: params.jobDescriptionId,
-    candidateIds: contactedCandidateIds,
+    candidateIds: params.rankedCandidates.map((candidate) => candidate.candidateId),
   });
 }
 
@@ -987,8 +974,6 @@ async function createPlannedActions(params: {
     userId: params.userId,
     jobDescriptionId: params.jobDescription.id,
     rankedCandidates: params.rankedCandidates,
-    contexts: params.contexts,
-    allowAlreadyContacted: params.request.allowAlreadyContacted,
   });
 
   for (const rankedCandidate of params.rankedCandidates) {
@@ -999,7 +984,7 @@ async function createPlannedActions(params: {
     }
 
     const existingResult = existingResults.get(rankedCandidate.candidateId);
-    if (existingResult && isFinalHiringOutcomeStage(existingResult.interviewStage)) {
+    if (existingResult && isTerminalCandidateInterviewStage(existingResult.interviewStage)) {
       continue;
     }
 
@@ -1022,7 +1007,6 @@ async function createPlannedActions(params: {
       actionPlan.action === 'skip' && (params.request.mode === 'execution' || skipAlreadyContacted)
         ? 'skipped'
         : 'planned';
-    incrementDecisionStats(params.stats, actionPlan.action);
 
     const result = await params.dependencies.repo.upsertResult({
       userId: params.userId,
@@ -1039,7 +1023,7 @@ async function createPlannedActions(params: {
       decisionPriority: actionPlan.priority,
       decisionReason: actionPlan.reason,
       actionPlan,
-      ...(skipAlreadyContacted && existingResult
+      ...(existingResult
         ? {
             actionStatus,
             interviewStage: existingResult.interviewStage,
@@ -1051,6 +1035,11 @@ async function createPlannedActions(params: {
             notes: null,
           }),
     });
+
+    if (isTerminalCandidateInterviewStage(result.interviewStage)) {
+      continue;
+    }
+    incrementDecisionStats(params.stats, actionPlan.action);
 
     const actionsToLog =
       actionPlan.action === 'skip' ? (['skip'] as const) : plannedActionSequence(actionPlan.action);
@@ -2278,7 +2267,7 @@ async function executePlannedActionsForRun(params: {
   });
 
   for (const result of results) {
-    if (!result.actionPlan || isFinalHiringOutcomeStage(result.interviewStage)) {
+    if (!result.actionPlan || isTerminalCandidateInterviewStage(result.interviewStage)) {
       continue;
     }
 
@@ -2302,7 +2291,7 @@ async function executePlannedActionsForRun(params: {
       candidateId: result.candidateId,
     });
     if (!detail) continue;
-    if (isFinalHiringOutcomeStage(detail.interviewStage)) continue;
+    if (isTerminalCandidateInterviewStage(detail.interviewStage)) continue;
 
     const pairedCollectActionLog =
       result.actionPlan.action === 'chat'
@@ -2669,8 +2658,8 @@ export async function executeSingleCandidateAction(params: {
   if (!detail) {
     throw new Error('candidate screening detail not found');
   }
-  if (isFinalHiringOutcomeStage(detail.interviewStage)) {
-    throw new Error('candidate hiring outcome is already final');
+  if (isTerminalCandidateInterviewStage(detail.interviewStage)) {
+    throw new Error('candidate workflow is already terminal');
   }
 
   const actionPlan = detail.actionPlan;

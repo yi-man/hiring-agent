@@ -44,6 +44,7 @@ type PublishTaskRecord = {
   id: string;
   userId: string;
   jobDescriptionId: string;
+  batchId: string | null;
   skillId: string;
   platform: string;
   input: unknown;
@@ -150,6 +151,7 @@ function mapTask(row: PublishTaskRecord): PublishTaskDto {
     id: row.id,
     userId: row.userId,
     jobDescriptionId: row.jobDescriptionId,
+    batchId: row.batchId,
     skillId: row.skillId,
     platform: row.platform as PublishPlatform,
     input: toRecord(row.input),
@@ -319,6 +321,7 @@ export function getActivePublishSkillFromDb(
 export async function createPublishTask(params: {
   userId: string;
   jobDescriptionId: string;
+  batchId: string;
   skillId: string;
   platform: PublishPlatform;
   input: Record<string, unknown>;
@@ -328,6 +331,7 @@ export async function createPublishTask(params: {
     data: {
       userId: params.userId,
       jobDescriptionId: params.jobDescriptionId,
+      batchId: params.batchId,
       skillId: params.skillId,
       platform: params.platform,
       input: toJson(params.input),
@@ -341,36 +345,79 @@ export async function createPublishTask(params: {
 
 export async function updatePublishTaskCurrentStep(params: {
   taskId: string;
+  userId: string;
+  jobDescriptionId: string;
+  batchId: string | null;
+  expectedCurrentStep: string | null;
   currentStep: string | null;
-}): Promise<void> {
-  await prisma.jobPublishTask.update({
-    where: { id: params.taskId },
+  now?: Date;
+}): Promise<boolean> {
+  if (!params.batchId) return false;
+  const result = await prisma.jobPublishTask.updateMany({
+    where: {
+      id: params.taskId,
+      userId: params.userId,
+      jobDescriptionId: params.jobDescriptionId,
+      batchId: params.batchId,
+      status: 'running',
+      currentStep: params.expectedCurrentStep,
+      jobDescription: {
+        status: 'publishing',
+        activePublishBatchId: params.batchId,
+        publishLeaseExpiresAt: { gt: params.now ?? new Date() },
+      },
+    },
     data: { currentStep: params.currentStep },
   });
+  return result.count === 1;
 }
 
 export async function completePublishTask(params: {
   taskId: string;
+  userId: string;
+  jobDescriptionId: string;
+  batchId: string | null;
   skillId: string;
   status: 'success' | 'failed';
   steps: PublishTraceStep[];
   errorMessage?: string | null;
-}): Promise<void> {
-  await prisma.jobPublishTask.update({
-    where: { id: params.taskId },
-    data: {
-      status: params.status,
-      currentStep: null,
-      errorMessage: params.errorMessage ?? null,
-    },
-  });
-  await prisma.jobPublishTrace.create({
-    data: {
-      taskId: params.taskId,
-      skillId: params.skillId,
-      status: params.status,
-      steps: toJson(params.steps),
-    },
+  now?: Date;
+}): Promise<boolean> {
+  if (!params.batchId) return false;
+  const now = params.now ?? new Date();
+  return prisma.$transaction(async (tx) => {
+    const completed = await tx.jobPublishTask.updateMany({
+      where: {
+        id: params.taskId,
+        userId: params.userId,
+        jobDescriptionId: params.jobDescriptionId,
+        batchId: params.batchId,
+        skillId: params.skillId,
+        status: 'running',
+        currentStep: null,
+        jobDescription: {
+          status: 'publishing',
+          activePublishBatchId: params.batchId,
+          publishLeaseExpiresAt: { gt: now },
+        },
+      },
+      data: {
+        status: params.status,
+        currentStep: null,
+        errorMessage: params.errorMessage ?? null,
+      },
+    });
+    if (completed.count === 0) return false;
+
+    await tx.jobPublishTrace.create({
+      data: {
+        taskId: params.taskId,
+        skillId: params.skillId,
+        status: params.status,
+        steps: toJson(params.steps),
+      },
+    });
+    return true;
   });
 }
 

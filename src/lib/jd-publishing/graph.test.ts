@@ -173,6 +173,7 @@ function taskFor(skill: PublishSkill): PublishTaskDto {
     id: 'task-1',
     userId: 'u1',
     jobDescriptionId: 'jd-1',
+    batchId: 'batch-1',
     skillId: skill.id,
     platform: 'boss-like',
     input: {},
@@ -196,17 +197,412 @@ function settings() {
 }
 
 describe('runPublishingAgentGraph', () => {
+  it('does not issue a browser command after the task loses its batch lease fence', async () => {
+    const executor = new GraphExecutor();
+    const updateTaskCurrentStep = jest
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    await expect(
+      runPublishingAgentGraph({
+        jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
+        settings: settings(),
+        executor,
+        target: { newJobUrl: 'http://localhost:6183/employer/jobs/new' },
+        credentials: {},
+        dependencies: {
+          getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
+          createTask: jest.fn().mockResolvedValue(taskFor(simpleSkill)),
+          updateTaskCurrentStep,
+          completeTask: jest.fn(),
+        },
+      }),
+    ).rejects.toThrow('publish task is no longer active');
+
+    expect(executor.calls).toEqual(['navigate:http://localhost:6183/employer/jobs/new']);
+    expect(updateTaskCurrentStep).toHaveBeenNthCalledWith(1, {
+      taskId: 'task-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      batchId: 'batch-1',
+      expectedCurrentStep: 'open_new_job',
+      currentStep: 'open_new_job',
+    });
+    expect(updateTaskCurrentStep).toHaveBeenNthCalledWith(2, {
+      taskId: 'task-1',
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      batchId: 'batch-1',
+      expectedCurrentStep: 'open_new_job',
+      currentStep: 'fill_title',
+    });
+  });
+
+  it('checks the task fence before the first browser command', async () => {
+    const executor = new GraphExecutor();
+
+    await expect(
+      runPublishingAgentGraph({
+        jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
+        settings: settings(),
+        executor,
+        target: { newJobUrl: 'http://localhost:6183/employer/jobs/new' },
+        credentials: {},
+        dependencies: {
+          getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
+          createTask: jest.fn().mockResolvedValue(taskFor(simpleSkill)),
+          updateTaskCurrentStep: jest.fn().mockResolvedValue(false),
+          completeTask: jest.fn(),
+        },
+      }),
+    ).rejects.toThrow('publish task is no longer active');
+
+    expect(executor.calls).toEqual([]);
+  });
+
+  it('rechecks the task fence before each fallback browser command', async () => {
+    const staleTarget: TargetDescriptor = {
+      kind: 'field',
+      role: 'textbox',
+      name: '旧版职位名称',
+      exact: true,
+    };
+    const failingSkill: PublishSkill = {
+      ...simpleSkill,
+      steps: [
+        {
+          id: 'fill_title',
+          type: 'action',
+          action: 'fill',
+          params: { target: staleTarget, value: '{{input.title}}' },
+          next: 'done',
+          onFail: { type: 'fallback_agent', reason: 'title target changed' },
+        },
+        { id: 'done', type: 'end' },
+      ],
+    };
+    const executor = new GraphExecutor({
+      'fill:旧版职位名称': { success: false, error: 'not_found_target: old title' },
+    });
+    const updateTaskCurrentStep = jest
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    await expect(
+      runPublishingAgentGraph({
+        jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
+        settings: settings(),
+        executor,
+        target: {},
+        credentials: {},
+        dependencies: {
+          getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
+          createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+          updateTaskCurrentStep,
+          completeTask: jest.fn(),
+          createNextSkillVersion: jest.fn(),
+        },
+      }),
+    ).rejects.toThrow('publish task is no longer active');
+
+    expect(executor.calls).toEqual(['fill:旧版职位名称:高级前端工程师', 'snapshotStructured']);
+    expect(executor.calls).not.toContain('resolveTarget:旧版职位名称');
+  });
+
+  it('rechecks the task fence before persisting a repaired skill version', async () => {
+    const repairedSteps: PublishSkill['steps'] = [
+      {
+        id: 'fill_title_repaired',
+        type: 'action',
+        action: 'fill',
+        params: { locator: '职位标题', value: '{{input.title}}' },
+        next: 'done',
+      },
+      { id: 'done', type: 'end' },
+    ];
+    const failingSkill: PublishSkill = {
+      ...simpleSkill,
+      steps: [
+        {
+          id: 'fill_title',
+          type: 'action',
+          action: 'fill',
+          params: { locator: '职位名称', value: '{{input.title}}' },
+          next: 'done',
+          onFail: {
+            type: 'fallback_agent',
+            reason: 'title target changed',
+            repairSteps: repairedSteps,
+          },
+        },
+        { id: 'done', type: 'end' },
+      ],
+    };
+    const createNextSkillVersion = jest.fn();
+
+    await expect(
+      runPublishingAgentGraph({
+        jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
+        settings: settings(),
+        executor: new GraphExecutor({
+          'fill:职位名称': { success: false, error: 'selector not found' },
+        }),
+        target: {},
+        credentials: {},
+        dependencies: {
+          getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
+          createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+          updateTaskCurrentStep: jest
+            .fn()
+            .mockResolvedValueOnce(true)
+            .mockResolvedValueOnce(true)
+            .mockResolvedValueOnce(false),
+          completeTask: jest.fn(),
+          createNextSkillVersion,
+        },
+      }),
+    ).rejects.toThrow('publish task is no longer active');
+
+    expect(createNextSkillVersion).not.toHaveBeenCalled();
+  });
+
+  it('fails and finalizes an active task when the executor rejects', async () => {
+    const executor = new GraphExecutor();
+    executor.navigate = jest.fn().mockRejectedValue(new Error('browser transport disconnected'));
+    const completeTask = jest.fn().mockResolvedValue(true);
+
+    const result = await runPublishingAgentGraph({
+      jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
+      settings: settings(),
+      executor,
+      target: { newJobUrl: 'http://localhost:6183/employer/jobs/new' },
+      credentials: {},
+      dependencies: {
+        getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
+        createTask: jest.fn().mockResolvedValue(taskFor(simpleSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+        completeTask,
+      },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.trace.steps.at(-1)).toEqual(
+      expect.objectContaining({
+        stepId: 'open_new_job',
+        action: 'navigate',
+        result: { success: false, error: 'browser transport disconnected' },
+      }),
+    );
+    expect(completeTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        status: 'failed',
+        errorMessage: 'browser transport disconnected',
+      }),
+    );
+  });
+
+  it('does not overwrite recovery when the task fence is lost while handling an executor error', async () => {
+    const executor = new GraphExecutor();
+    executor.navigate = jest.fn().mockRejectedValue(new Error('browser transport disconnected'));
+    const completeTask = jest.fn();
+
+    await expect(
+      runPublishingAgentGraph({
+        jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
+        settings: settings(),
+        executor,
+        target: { newJobUrl: 'http://localhost:6183/employer/jobs/new' },
+        credentials: {},
+        dependencies: {
+          getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
+          createTask: jest.fn().mockResolvedValue(taskFor(simpleSkill)),
+          updateTaskCurrentStep: jest.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
+          completeTask,
+        },
+      }),
+    ).rejects.toThrow('publish task is no longer active');
+
+    expect(completeTask).not.toHaveBeenCalled();
+  });
+
+  it('fails and finalizes an active task when fallback processing rejects', async () => {
+    const staleTarget: TargetDescriptor = {
+      kind: 'field',
+      role: 'textbox',
+      name: '旧版职位名称',
+      exact: true,
+    };
+    const failingSkill: PublishSkill = {
+      ...simpleSkill,
+      steps: [
+        {
+          id: 'fill_title',
+          type: 'action',
+          action: 'fill',
+          params: { target: staleTarget, value: '{{input.title}}' },
+          next: 'done',
+          onFail: { type: 'fallback_agent', reason: 'title target changed' },
+        },
+        { id: 'done', type: 'end' },
+      ],
+    };
+    const executor = new GraphExecutor({
+      'fill:旧版职位名称': { success: false, error: 'not_found_target: old title' },
+    });
+    executor.snapshotStructured = () => {
+      throw new Error('fallback snapshot crashed');
+    };
+    const completeTask = jest.fn().mockResolvedValue(true);
+
+    const result = await runPublishingAgentGraph({
+      jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
+      settings: settings(),
+      executor,
+      target: {},
+      credentials: {},
+      dependencies: {
+        getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
+        createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+        completeTask,
+        createNextSkillVersion: jest.fn(),
+      },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.trace.steps.at(-1)).toEqual(
+      expect.objectContaining({
+        stepId: 'fallback_agent',
+        action: 'fallback_agent',
+        result: expect.objectContaining({
+          success: false,
+          error: 'fallback snapshot crashed',
+        }),
+      }),
+    );
+    expect(completeTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        errorMessage: 'fallback snapshot crashed',
+      }),
+    );
+  });
+
+  it('fails and finalizes an active task when skill upgrade persistence rejects', async () => {
+    const repairedSteps: PublishSkill['steps'] = [
+      {
+        id: 'fill_title_repaired',
+        type: 'action',
+        action: 'fill',
+        params: { locator: '职位标题', value: '{{input.title}}' },
+        next: 'done',
+      },
+      { id: 'done', type: 'end' },
+    ];
+    const failingSkill: PublishSkill = {
+      ...simpleSkill,
+      steps: [
+        {
+          id: 'fill_title',
+          type: 'action',
+          action: 'fill',
+          params: { locator: '职位名称', value: '{{input.title}}' },
+          next: 'done',
+          onFail: {
+            type: 'fallback_agent',
+            reason: 'title target changed',
+            repairSteps: repairedSteps,
+          },
+        },
+        { id: 'done', type: 'end' },
+      ],
+    };
+    const completeTask = jest.fn().mockResolvedValue(true);
+
+    const result = await runPublishingAgentGraph({
+      jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
+      settings: settings(),
+      executor: new GraphExecutor({
+        'fill:职位名称': { success: false, error: 'selector not found' },
+      }),
+      target: {},
+      credentials: {},
+      dependencies: {
+        getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
+        createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+        completeTask,
+        createNextSkillVersion: jest
+          .fn()
+          .mockRejectedValue(new Error('skill version write failed')),
+      },
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.trace.steps.at(-1)).toEqual(
+      expect.objectContaining({
+        stepId: 'skill_upgrade',
+        action: 'skill_upgrade',
+        result: { success: false, error: 'skill version write failed' },
+      }),
+    );
+    expect(completeTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        errorMessage: 'skill version write failed',
+      }),
+    );
+  });
+
+  it('stops a late worker after losing the task terminal CAS', async () => {
+    const executor = new GraphExecutor();
+
+    await expect(
+      runPublishingAgentGraph({
+        jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
+        settings: settings(),
+        executor,
+        target: { newJobUrl: 'http://localhost:6183/employer/jobs/new' },
+        credentials: {},
+        dependencies: {
+          getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
+          createTask: jest.fn().mockResolvedValue(taskFor(simpleSkill)),
+          updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+          completeTask: jest.fn().mockResolvedValue(false),
+        },
+      }),
+    ).rejects.toThrow('publish task is no longer active');
+  });
+
   it('explores and stores a skill before creating the task when DB has no active skill', async () => {
     const executor = new GraphExecutor();
     const getActiveSkill = jest.fn().mockResolvedValue(null);
     const exploreSkill = jest.fn().mockResolvedValue(simpleSkill);
     const createExploredSkill = jest.fn().mockResolvedValue({ ...simpleSkill, id: 'db-skill-1' });
     const createTask = jest.fn().mockResolvedValue(taskFor({ ...simpleSkill, id: 'db-skill-1' }));
-    const updateTaskCurrentStep = jest.fn().mockResolvedValue(undefined);
-    const completeTask = jest.fn().mockResolvedValue(undefined);
+    const updateTaskCurrentStep = jest.fn().mockResolvedValue(true);
+    const completeTask = jest.fn().mockResolvedValue(true);
 
     const result = await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
       target: {
@@ -239,6 +635,7 @@ describe('runPublishingAgentGraph', () => {
     expect(createExploredSkill).toHaveBeenCalledWith(simpleSkill);
     expect(createTask).toHaveBeenCalledWith(
       expect.objectContaining({
+        batchId: 'batch-1',
         skillId: 'db-skill-1',
         currentStep: 'open_new_job',
       }),
@@ -259,11 +656,12 @@ describe('runPublishingAgentGraph', () => {
   it('executes skill steps one at a time through the graph', async () => {
     const executor = new GraphExecutor();
     const createTask = jest.fn().mockResolvedValue(taskFor(simpleSkill));
-    const completeTask = jest.fn().mockResolvedValue(undefined);
-    const updateTaskCurrentStep = jest.fn().mockResolvedValue(undefined);
+    const completeTask = jest.fn().mockResolvedValue(true);
+    const updateTaskCurrentStep = jest.fn().mockResolvedValue(true);
 
     const result = await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
       target: {
@@ -285,7 +683,10 @@ describe('runPublishingAgentGraph', () => {
       'fill:职位名称:高级前端工程师',
     ]);
     expect(updateTaskCurrentStep.mock.calls.map(([call]) => call.currentStep)).toEqual([
+      'open_new_job',
       'fill_title',
+      'fill_title',
+      'done',
       'done',
       null,
     ]);
@@ -296,6 +697,7 @@ describe('runPublishingAgentGraph', () => {
 
     await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
       target: {
@@ -306,8 +708,8 @@ describe('runPublishingAgentGraph', () => {
       dependencies: {
         getActiveSkill: jest.fn().mockResolvedValue(simpleSkill),
         createTask: jest.fn().mockResolvedValue(taskFor(simpleSkill)),
-        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
-        completeTask: jest.fn().mockResolvedValue(undefined),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+        completeTask: jest.fn().mockResolvedValue(true),
       },
     });
 
@@ -338,6 +740,7 @@ describe('runPublishingAgentGraph', () => {
 
     const result = await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
       target: {
@@ -348,8 +751,8 @@ describe('runPublishingAgentGraph', () => {
       dependencies: {
         getActiveSkill: jest.fn().mockResolvedValue(longSkill),
         createTask: jest.fn().mockResolvedValue(taskFor(longSkill)),
-        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
-        completeTask: jest.fn().mockResolvedValue(undefined),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+        completeTask: jest.fn().mockResolvedValue(true),
       },
     });
 
@@ -399,11 +802,12 @@ describe('runPublishingAgentGraph', () => {
       version: 2,
       steps: repairedSteps,
     });
-    const updateTaskCurrentStep = jest.fn().mockResolvedValue(undefined);
-    const completeTask = jest.fn().mockResolvedValue(undefined);
+    const updateTaskCurrentStep = jest.fn().mockResolvedValue(true);
+    const completeTask = jest.fn().mockResolvedValue(true);
 
     const result = await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
       target: {
@@ -545,6 +949,7 @@ describe('runPublishingAgentGraph', () => {
 
     const result = await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
       target: {
@@ -555,8 +960,8 @@ describe('runPublishingAgentGraph', () => {
       dependencies: {
         getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
         createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
-        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
-        completeTask: jest.fn().mockResolvedValue(undefined),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+        completeTask: jest.fn().mockResolvedValue(true),
         createNextSkillVersion,
       },
     });
@@ -644,10 +1049,11 @@ describe('runPublishingAgentGraph', () => {
       ],
     };
     const createNextSkillVersion = jest.fn();
-    const completeTask = jest.fn().mockResolvedValue(undefined);
+    const completeTask = jest.fn().mockResolvedValue(true);
 
     const result = await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor: new GraphExecutor(
         {
@@ -667,7 +1073,7 @@ describe('runPublishingAgentGraph', () => {
       dependencies: {
         getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
         createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
-        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
         completeTask,
         createNextSkillVersion,
       },
@@ -795,6 +1201,7 @@ describe('runPublishingAgentGraph', () => {
 
     await runPublishingAgentGraph({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
       target: {
@@ -805,8 +1212,8 @@ describe('runPublishingAgentGraph', () => {
       dependencies: {
         getActiveSkill: jest.fn().mockResolvedValue(failingSkill),
         createTask: jest.fn().mockResolvedValue(taskFor(failingSkill)),
-        updateTaskCurrentStep: jest.fn().mockResolvedValue(undefined),
-        completeTask: jest.fn().mockResolvedValue(undefined),
+        updateTaskCurrentStep: jest.fn().mockResolvedValue(true),
+        completeTask: jest.fn().mockResolvedValue(true),
         createNextSkillVersion,
       },
     });

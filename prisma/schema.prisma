@@ -141,6 +141,7 @@ model JobDescription {
   workLocations                  Json?                           @map("work_locations")
   hiringTarget                   Int?                            @map("hiring_target")
   activePublishBatchId           String?                         @map("active_publish_batch_id")
+  publishLeaseExpiresAt          DateTime?                       @map("publish_lease_expires_at")
   content                        Json
   evaluation                     Json?
   generationMeta                 Json?                           @map("generation_meta")
@@ -166,6 +167,7 @@ model JobDescription {
   @@index([status], map: "idx_job_descriptions_status")
   @@index([updatedAt(sort: Desc)], map: "idx_job_descriptions_updated_at")
   @@index([userId, status], map: "idx_job_descriptions_user_status")
+  @@index([userId, status, publishLeaseExpiresAt], map: "idx_job_descriptions_publish_lease")
   @@map("job_descriptions")
 }
 
@@ -328,6 +330,7 @@ model JobPublishTask {
   id               String           @id @default(uuid())
   userId           String           @map("user_id")
   jobDescriptionId String           @map("job_description_id")
+  batchId          String?          @map("batch_id")
   skillId          String           @map("skill_id")
   platform         String
   input            Json
@@ -342,6 +345,7 @@ model JobPublishTask {
   trace            JobPublishTrace?
 
   @@index([userId, jobDescriptionId, createdAt(sort: Desc)], map: "idx_job_publish_tasks_user_jd_created")
+  @@index([userId, jobDescriptionId, batchId], map: "idx_job_publish_tasks_user_jd_batch")
   @@index([status], map: "idx_job_publish_tasks_status")
   @@index([skillId], map: "idx_job_publish_tasks_skill_id")
   @@map("job_publish_tasks")
@@ -814,28 +818,32 @@ model CandidateCommunicationRun {
 }
 
 model CandidateConversationMessage {
-  id                String                @id @default(uuid())
-  conversationId    String                @map("conversation_id")
-  userId            String                @map("user_id")
-  jobDescriptionId  String                @map("job_description_id")
-  candidateId       String                @map("candidate_id")
-  platform          String
-  role              String
-  content           String
-  externalMessageId String?               @map("external_message_id")
-  deliveryStatus    String                @default("received") @map("delivery_status")
-  browserTrace      Json?                 @map("browser_trace")
-  errorMessage      String?               @map("error_message")
-  occurredAt        DateTime              @map("occurred_at")
-  createdAt         DateTime              @default(now()) @map("created_at")
-  conversation      CandidateConversation @relation(fields: [conversationId, userId, jobDescriptionId, candidateId], references: [id, userId, jobDescriptionId, candidateId], onDelete: Cascade, onUpdate: Restrict)
-  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  jobDescription    JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
-  candidate         Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  id                       String                @id @default(uuid())
+  conversationId           String                @map("conversation_id")
+  userId                   String                @map("user_id")
+  jobDescriptionId         String                @map("job_description_id")
+  candidateId              String                @map("candidate_id")
+  platform                 String
+  role                     String
+  content                  String
+  externalMessageId        String?               @map("external_message_id")
+  deliveryStatus           String                @default("received") @map("delivery_status")
+  processingClaimId        String?               @map("processing_claim_id")
+  processingLeaseExpiresAt DateTime?             @map("processing_lease_expires_at")
+  processingOutcome        String?               @map("processing_outcome")
+  processedAt              DateTime?             @map("processed_at")
+  browserTrace             Json?                 @map("browser_trace")
+  errorMessage             String?               @map("error_message")
+  occurredAt               DateTime              @map("occurred_at")
+  createdAt                DateTime              @default(now()) @map("created_at")
+  conversation             CandidateConversation @relation(fields: [conversationId, userId, jobDescriptionId, candidateId], references: [id, userId, jobDescriptionId, candidateId], onDelete: Cascade, onUpdate: Restrict)
+  user                     User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription           JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate                Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
 
+  @@unique([userId, platform, externalMessageId], map: "candidate_conversation_messages_user_platform_external_key")
   @@index([conversationId, occurredAt], map: "idx_candidate_conversation_messages_conversation_time")
   @@index([userId, jobDescriptionId, candidateId, occurredAt(sort: Desc)], map: "idx_candidate_conversation_messages_user_jd_candidate_time")
-  @@index([userId, platform, externalMessageId], map: "idx_candidate_conversation_messages_external")
   @@map("candidate_conversation_messages")
 }
 
@@ -855,14 +863,15 @@ model CandidateConversationDecision {
   actions          Json
   rationale        String
   llmMeta          Json?                 @map("llm_meta")
+  finalizedAt      DateTime?             @map("finalized_at")
   createdAt        DateTime              @default(now()) @map("created_at")
   conversation     CandidateConversation @relation(fields: [conversationId, userId, jobDescriptionId, candidateId], references: [id, userId, jobDescriptionId, candidateId], onDelete: Cascade, onUpdate: Restrict)
   user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
   jobDescription   JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
   candidate        Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
 
+  @@unique([inputMessageId], map: "candidate_conversation_decisions_input_message_key")
   @@index([conversationId, createdAt(sort: Desc)], map: "idx_candidate_conversation_decisions_conversation_created")
-  @@index([inputMessageId], map: "idx_candidate_conversation_decisions_input_message")
   @@map("candidate_conversation_decisions")
 }
 

@@ -296,6 +296,7 @@ const sampleTrackingOverview: CandidateTrackingOverviewDto = {
 
 const sampleCandidateDetail: CandidateScreeningDetailDto = {
   ...sampleCandidateListItem,
+  latestPlannedChatRunId: 'run-1',
   actionLogs: [
     {
       id: 'action-log-1',
@@ -540,6 +541,47 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(409);
     expect(body.error).toBe('job description is not eligible for screening');
+    expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
+  });
+
+  it('requires legacy published JDs to set a hiring target before screening', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      ...sampleJobDescription,
+      status: 'published',
+      hiringTarget: null,
+    });
+    const request = jsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs', {
+      platform: 'boss-like',
+    });
+
+    const response = await createScreeningRun(request, {
+      params: params({ id: 'jd-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('hiring target is required before screening');
+    expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start screening after the hiring target has been reached', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      ...sampleJobDescription,
+      status: 'published',
+      hiringTarget: 2,
+      onboardedCount: 2,
+    });
+    const request = jsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs', {
+      platform: 'boss-like',
+    });
+
+    const response = await createScreeningRun(request, {
+      params: params({ id: 'jd-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('hiring target has already been reached');
     expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
   });
 
@@ -896,6 +938,27 @@ describe('candidate screening API routes', () => {
       jobDescriptionId: 'jd-1',
       candidateId: 'cand-1',
     });
+  });
+
+  it('returns the latest planned chat run for a rescreened candidate', async () => {
+    getCandidateScreeningDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      runId: 'run-1',
+      latestPlannedChatRunId: 'run-2',
+    });
+
+    const response = await getJdCandidate({} as Request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.candidate).toEqual(
+      expect.objectContaining({
+        runId: 'run-1',
+        latestPlannedChatRunId: 'run-2',
+      }),
+    );
   });
 
   it('lists structured interview feedback for a scoped candidate', async () => {
