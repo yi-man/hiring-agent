@@ -23,6 +23,8 @@ const statusTone: Record<JDStatus, string> = {
     'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200',
   published:
     'border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950/40 dark:text-green-200',
+  filled:
+    'border-teal-200 bg-teal-50 text-teal-700 dark:border-teal-900 dark:bg-teal-950/40 dark:text-teal-200',
   publish_failed:
     'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200',
   offline:
@@ -50,6 +52,14 @@ function statusLabel(overview: DashboardOverviewDto, status: JDStatus) {
 function platformLabel(overview: DashboardOverviewDto) {
   const currentPlatform = overview.filters.platform ?? DASHBOARD_PLATFORM_ALL;
   return overview.platforms.find((item) => item.platform === currentPlatform)?.label ?? '全部平台';
+}
+
+function hiringProgress(job: DashboardJobDto): string {
+  const onboardedCount = job.candidateStats.onboardedCount ?? 0;
+  if (job.hiringTarget === null || job.hiringTarget === undefined) {
+    return `已入职 ${onboardedCount} / 目标未设置`;
+  }
+  return `已入职 ${onboardedCount} / 目标 ${job.hiringTarget}`;
 }
 
 function dashboardHref(params: { status?: JDStatus; platform?: DashboardPlatformFilter }) {
@@ -174,6 +184,7 @@ function JobRow({ job, overview }: { job: DashboardJobDto; overview: DashboardOv
             {job.candidateStats.followUpCandidates} 个待跟进
           </div>
         ) : null}
+        <div className="text-muted-foreground mt-1 text-xs tabular-nums">{hiringProgress(job)}</div>
       </div>
 
       <div className="text-muted-foreground text-xs">{formatUpdatedAt(job.updatedAt)}</div>

@@ -7,7 +7,10 @@ import { ArrowLeft, ExternalLink, Eye, ListFilter, MessageCircle, RefreshCw } fr
 import { Button, Chip } from '@/components/ui';
 import { startCandidateCommunicationRun } from '@/lib/candidate-communication/client';
 import { fetchCandidateTrackingOverview } from '@/lib/candidate-screening/client';
-import { CANDIDATE_SCREENING_INTERVIEW_STAGES } from '@/lib/candidate-screening/constants';
+import {
+  CANDIDATE_INTERVIEW_STAGE_LABELS,
+  CANDIDATE_SCREENING_INTERVIEW_STAGES,
+} from '@/lib/candidate-screening/constants';
 import type {
   CandidateTrackingCandidateDto,
   CandidateTrackingOverviewDto,
@@ -30,7 +33,14 @@ const actionOptions: Array<{ value: '' | CandidateDecisionAction; label: string 
 ];
 
 type CandidateScope = 'active' | 'ended' | 'all';
-type CandidateProgressState = 'active' | 'rejected' | 'offer';
+type CandidateProgressState = 'active' | 'rejected' | 'onboarded' | 'not_joined';
+
+const interviewingStages = new Set<CandidateInterviewStage>([
+  'phone_screen',
+  'interviewing',
+  'interview_completed',
+  'offer',
+]);
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -53,11 +63,12 @@ function candidateSubtitle(item: CandidateTrackingCandidateDto) {
 }
 
 function getCandidateProgressState(item: CandidateTrackingCandidateDto): CandidateProgressState {
-  if (item.interviewStage === 'offer') return 'offer';
+  if (item.interviewStage === 'onboarded') return 'onboarded';
+  if (item.interviewStage === 'not_joined') return 'not_joined';
   if (
     item.interviewStage === 'rejected' ||
     item.interviewStage === 'withdrawn' ||
-    item.decisionAction === 'skip'
+    (item.decisionAction === 'skip' && !interviewingStages.has(item.interviewStage))
   ) {
     return 'rejected';
   }
@@ -66,7 +77,8 @@ function getCandidateProgressState(item: CandidateTrackingCandidateDto): Candida
 
 function getCandidateProgressLabel(item: CandidateTrackingCandidateDto) {
   const state = getCandidateProgressState(item);
-  if (state === 'offer') return '录取/Offer';
+  if (state === 'onboarded') return CANDIDATE_INTERVIEW_STAGE_LABELS.onboarded;
+  if (state === 'not_joined') return CANDIDATE_INTERVIEW_STAGE_LABELS.not_joined;
   if (state === 'rejected') return '淘汰';
   return '正在推进';
 }
@@ -244,7 +256,7 @@ export function CandidateTrackingDashboard() {
               <option value="">全部阶段</option>
               {CANDIDATE_SCREENING_INTERVIEW_STAGES.map((stage) => (
                 <option key={stage} value={stage}>
-                  {stage}
+                  {CANDIDATE_INTERVIEW_STAGE_LABELS[stage]}
                 </option>
               ))}
             </select>
@@ -389,7 +401,7 @@ export function CandidateTrackingDashboard() {
                 </Chip>
                 <div className="min-w-0 space-y-1">
                   <span className="text-muted-foreground block truncate text-xs">
-                    {item.interviewStage}
+                    {CANDIDATE_INTERVIEW_STAGE_LABELS[item.interviewStage]}
                   </span>
                   <span className="text-muted-foreground block truncate text-xs">
                     {getCandidateProgressLabel(item)}

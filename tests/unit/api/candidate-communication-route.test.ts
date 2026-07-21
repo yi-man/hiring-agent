@@ -83,7 +83,7 @@ describe('candidate communication messages route', () => {
         jobDescriptionId: 'jd-1',
         candidateId: 'candidate-1',
         platform: 'boss-like',
-        message: { content: '薪资范围是多少？' },
+        message: { content: '薪资范围是多少？', externalMessageId: 'message-1' },
       }),
     );
     const body = await res.json();

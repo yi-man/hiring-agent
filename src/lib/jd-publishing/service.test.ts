@@ -46,6 +46,8 @@ const sampleJobDescription: JobDescriptionDto = {
   positionDescription: '负责招聘产品前端体验',
   salaryRange: null,
   workLocations: [],
+  hiringTarget: 1,
+  onboardedCount: 0,
   tone: 'tech',
   status: 'ready_to_publish',
   content: sampleJd,
@@ -152,6 +154,7 @@ describe('publishJobDescriptionToBossLike', () => {
 
     const result = await publishJobDescriptionToBossLike({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
       executor,
     });
@@ -160,6 +163,7 @@ describe('publishJobDescriptionToBossLike', () => {
     expect(runPublishingAgentGraphMock).toHaveBeenCalledWith(
       expect.objectContaining({
         jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
         settings: settings(),
         executor,
         credentials: { username: 'hr-admin', password: 'secret' },
@@ -180,6 +184,7 @@ describe('publishJobDescriptionToBossLike', () => {
 
     await publishJobDescriptionToBossLike({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
     });
 
@@ -196,6 +201,7 @@ describe('publishJobDescriptionToBossLike', () => {
 
     await publishJobDescriptionToBossLike({
       jobDescription: sampleJobDescription,
+      batchId: 'batch-1',
       settings: settings(),
     });
 
@@ -211,6 +217,7 @@ describe('publishJobDescriptionToBossLike', () => {
     await expect(
       publishJobDescriptionToBossLike({
         jobDescription: sampleJobDescription,
+        batchId: 'batch-1',
         settings: settings(),
         executor,
       }),

@@ -2,18 +2,32 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { addHours } from 'date-fns';
 import { createCandidateSourceAdapter } from '@/lib/candidate-screening/adapters/factory';
 import type { CandidateSourceAdapter } from '@/lib/candidate-screening/adapters/types';
+import {
+  isCandidateOutreachAllowedJobStatus,
+  isTerminalCandidateInterviewStage,
+} from '@/lib/candidate-screening/constants';
 import { evaluateCandidateForJd } from '@/lib/candidate-screening/evaluation';
 import { buildScreeningPlanFromJd } from '@/lib/candidate-screening/planner';
+import {
+  claimCandidateActionLog,
+  claimJobDescriptionForCandidateOutreach,
+  createCandidateActionLog,
+  updateCandidateActionLog,
+} from '@/lib/candidate-screening/repo';
 import type { CandidateActionPlan } from '@/lib/candidate-screening/types';
 import { JD_STATUSES, type JD, type JDStatus, type JDTone, type JobDescriptionDto } from '@/types';
 import { decideCandidateCommunication, type RunCandidateCommunicationLLM } from './decision';
 import { runCandidateCommunicationLLM } from './llm';
 import {
+  candidateCommunicationActionIdempotencyKey,
+  candidateCommunicationReplyExternalMessageId,
+  CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR,
   prismaCandidateConversationRepository,
   type CandidateCommunicationSubject,
   type CandidateConversationDto,
   type CandidateConversationMessageDto,
   type CandidateConversationRepository,
+  type CandidateMessageProcessingOutcome,
 } from './repo';
 import type { CandidateMessagePayload } from './api';
 import type {
@@ -31,6 +45,9 @@ export type CandidateCommunicationGraphResult = {
   incomingMessage: CandidateConversationMessageDto;
   outgoingMessage: CandidateConversationMessageDto | null;
   decision: CandidateCommunicationDecision;
+  processingStatus: 'processed' | 'in_flight';
+  processingOutcome: CandidateMessageProcessingOutcome;
+  ackable: boolean;
 };
 
 export type CandidateCommunicationGraphDependencyOverrides = {
@@ -42,6 +59,10 @@ export type CandidateCommunicationGraphDependencyOverrides = {
   evaluateCandidate?: EvaluateCandidate;
   buildPlan?: BuildScreeningPlan;
   strictResumeEvaluation?: boolean;
+  createActionLog?: typeof createCandidateActionLog;
+  claimActionLog?: typeof claimCandidateActionLog;
+  claimJobDescriptionOutreach?: typeof claimJobDescriptionForCandidateOutreach;
+  updateActionLog?: typeof updateCandidateActionLog;
 };
 
 type CandidateCommunicationGraphDependencies =
@@ -62,6 +83,13 @@ const CandidateCommunicationGraphState = Annotation.Root({
   subject: Annotation<LoadedSubject | undefined>(),
   conversation: Annotation<CandidateConversationDto | undefined>(),
   incomingMessage: Annotation<CandidateConversationMessageDto | undefined>(),
+  processingClaimId: Annotation<string | null>(),
+  processingStatus: Annotation<
+    'claimed' | 'resume_finalization' | 'processed' | 'in_flight' | undefined
+  >(),
+  completionOutcome: Annotation<
+    Exclude<CandidateMessageProcessingOutcome, 'in_flight'> | undefined
+  >(),
   history: Annotation<CandidateConversationMessageDto[]>(),
   candidateMatchScore: Annotation<number | null>(),
   resumeEvaluationSource: Annotation<ResumeEvaluationSource>(),
@@ -86,8 +114,20 @@ function withDefaultDependencies(
     evaluateCandidate: dependencies.evaluateCandidate ?? evaluateCandidateForJd,
     buildPlan: dependencies.buildPlan ?? buildScreeningPlanFromJd,
     strictResumeEvaluation: dependencies.strictResumeEvaluation ?? false,
+    createActionLog: dependencies.createActionLog ?? createCandidateActionLog,
+    claimActionLog: dependencies.claimActionLog ?? claimCandidateActionLog,
+    claimJobDescriptionOutreach:
+      dependencies.claimJobDescriptionOutreach ?? claimJobDescriptionForCandidateOutreach,
+    updateActionLog: dependencies.updateActionLog ?? updateCandidateActionLog,
   };
 }
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const CANDIDATE_REPLY_CLAIM_LOST_ERROR = 'candidate or job state changed before automatic reply';
+const DUPLICATE_MESSAGE_REPLAY_REASON = 'duplicate external message replay ignored';
 
 function readStringField(value: unknown, key: string): string | null {
   if (!value || typeof value !== 'object' || !(key in value)) return null;
@@ -155,6 +195,10 @@ function resolveJobDescriptionForEvaluation(
         ? jobDescription.salaryRange.trim()
         : null,
     workLocations: readStringList(jobDescription.workLocations),
+    hiringTarget:
+      typeof jobDescription.hiringTarget === 'number' ? jobDescription.hiringTarget : null,
+    onboardedCount:
+      typeof jobDescription.onboardedCount === 'number' ? jobDescription.onboardedCount : 0,
     tone: isJdTone(jobDescription.tone) ? jobDescription.tone : 'tech',
     status: isJdStatus(jobDescription.status) ? jobDescription.status : 'created',
     content: jobDescription.content,
@@ -256,6 +300,38 @@ function resolveNextFollowUpAt(stage: CandidateCommunicationStage, base: Date): 
     return addHours(base, 24);
   }
   return null;
+}
+
+function createReplayDecision(
+  conversation: CandidateConversationDto,
+): CandidateCommunicationDecision {
+  return {
+    intent: 'unknown',
+    intentLevel: conversation.intentLevel ?? 'low',
+    nextStage: conversation.stage,
+    shouldReply: false,
+    reply: null,
+    actions: ['noop'],
+    rationale: DUPLICATE_MESSAGE_REPLAY_REASON,
+  };
+}
+
+async function renewProcessingClaimOrThrow(
+  dependencies: CandidateCommunicationGraphDependencies,
+  state: CandidateCommunicationGraphState,
+): Promise<void> {
+  const incomingMessage = requireIncomingMessage(state);
+  if (!state.processingClaimId) {
+    throw new Error('candidate communication processing claim is missing');
+  }
+  const renewed = await dependencies.repo.renewIncomingMessageProcessing({
+    userId: state.userId,
+    messageId: incomingMessage.id,
+    claimId: state.processingClaimId,
+  });
+  if (!renewed) {
+    throw new Error('candidate communication processing claim was lost');
+  }
 }
 
 function toActionPlan(decision: CandidateCommunicationDecision): CandidateActionPlan {
@@ -360,11 +436,50 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
       deliveryStatus: 'received',
       occurredAt: state.payload.message.receivedAt,
     });
+    const canonicalReceivedAt = new Date(incomingMessage.occurredAt);
+    if (Number.isNaN(canonicalReceivedAt.getTime())) {
+      throw new Error('candidate communication incoming message time is invalid');
+    }
+    const canonicalPayload: CandidateMessagePayload = {
+      ...state.payload,
+      message: {
+        ...state.payload.message,
+        receivedAt: canonicalReceivedAt,
+      },
+    };
+
+    const processing = await dependencies.repo.claimIncomingMessageProcessing({
+      userId: state.userId,
+      messageId: incomingMessage.id,
+    });
+    if (processing.status === 'processed' || processing.status === 'in_flight') {
+      return {
+        conversation,
+        incomingMessage,
+        payload: canonicalPayload,
+        processingStatus: processing.status,
+        completionOutcome: processing.status === 'processed' ? processing.outcome : undefined,
+        history: [],
+      };
+    }
+    if (processing.status === 'resume_finalization') {
+      return {
+        conversation,
+        incomingMessage,
+        payload: canonicalPayload,
+        processingClaimId: processing.claimId,
+        processingStatus: processing.status,
+        decision: processing.decision,
+        outgoingMessage: processing.outgoingMessage,
+        completionOutcome: processing.completionOutcome,
+        history: [],
+      };
+    }
 
     await dependencies.repo.markCandidateReplied({
       userId: state.userId,
       candidateId: state.payload.candidateId,
-      lastActiveAt: state.payload.message.receivedAt,
+      lastActiveAt: canonicalReceivedAt,
     });
 
     const history = await dependencies.repo.listRecentMessages({
@@ -372,7 +487,36 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
       limit: 20,
     });
 
-    return { conversation, incomingMessage, history };
+    return {
+      conversation,
+      incomingMessage,
+      payload: canonicalPayload,
+      processingClaimId: processing.claimId,
+      processingStatus: processing.status,
+      decision: processing.decision,
+      history,
+    };
+  }
+
+  function finishReplayNode(
+    state: CandidateCommunicationGraphState,
+  ): CandidateCommunicationGraphUpdate {
+    const conversation = requireConversation(state);
+    return {
+      decision: createReplayDecision(conversation),
+      outgoingMessage: null,
+      updatedConversation: conversation,
+    };
+  }
+
+  function routeAfterIncoming(
+    state: CandidateCommunicationGraphState,
+  ): 'finish_replay' | 'resume_send' | 'resume_finalization' | 'evaluate_resume' {
+    if (state.processingStatus === 'claimed') {
+      return state.decision ? 'resume_send' : 'evaluate_resume';
+    }
+    if (state.processingStatus === 'resume_finalization') return 'resume_finalization';
+    return 'finish_replay';
   }
 
   async function evaluateResumeNode(
@@ -443,48 +587,147 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
   ): Promise<CandidateCommunicationGraphUpdate> {
     const subject = requireLoadedSubject(state);
     const conversation = requireConversation(state);
+    const incomingMessage = requireIncomingMessage(state);
     const decision = requireDecision(state);
 
     if (!decision.shouldReply || !decision.reply) {
       return { outgoingMessage: null };
     }
-
-    let outgoingMessage = await dependencies.repo.createMessage({
-      conversationId: conversation.id,
-      userId: state.userId,
-      jobDescriptionId: state.payload.jobDescriptionId,
-      candidateId: state.payload.candidateId,
-      platform: state.payload.platform,
-      role: 'agent',
-      content: decision.reply,
-      deliveryStatus: state.payload.executeReply ? 'planned' : 'sent',
-      occurredAt: new Date(),
-    });
-
-    if (state.payload.executeReply) {
-      const adapter = await dependencies.createAdapter(state.payload.platform, {
+    if (!isCandidateOutreachAllowedJobStatus(subject.jobDescription.status)) {
+      return { outgoingMessage: null };
+    }
+    if (
+      subject.screeningResult &&
+      isTerminalCandidateInterviewStage(subject.screeningResult.interviewStage)
+    ) {
+      return { outgoingMessage: null };
+    }
+    if (
+      state.payload.executeReply &&
+      !subject.screeningResult &&
+      !(await dependencies.claimJobDescriptionOutreach({
         userId: state.userId,
+        jobDescriptionId: state.payload.jobDescriptionId,
+        candidateId: state.payload.candidateId,
+      }))
+    ) {
+      return { outgoingMessage: null };
+    }
+
+    // Fence the owner before creating any durable outbound state. Otherwise an expired
+    // worker could leave a running action/planned message that a new owner must treat as
+    // an ambiguous delivery even though no platform command was issued.
+    await renewProcessingClaimOrThrow(dependencies, state);
+
+    let claimedActionLog: Awaited<ReturnType<typeof claimCandidateActionLog>> = null;
+    if (state.payload.executeReply && subject.screeningResult) {
+      const actionLog = await dependencies.createActionLog({
+        userId: state.userId,
+        runId: subject.screeningResult.runId,
+        screeningResultId: subject.screeningResult.id,
+        candidateId: state.payload.candidateId,
+        jobDescriptionId: state.payload.jobDescriptionId,
+        platform: state.payload.platform,
+        mode: 'execution',
+        action: 'chat',
+        message: decision.reply,
+        status: 'planned',
+        idempotencyKey: candidateCommunicationActionIdempotencyKey(incomingMessage.id),
       });
-      try {
+      claimedActionLog = await dependencies.claimActionLog({
+        userId: state.userId,
+        id: actionLog.id,
+        expectedInterviewStage: subject.screeningResult.interviewStage,
+      });
+      if (!claimedActionLog) {
+        if (actionLog.status === 'running') {
+          throw new Error('candidate reply action is already running');
+        }
+        if (actionLog.status !== 'planned') {
+          return { outgoingMessage: null };
+        }
+        const skipped = await dependencies.updateActionLog({
+          userId: state.userId,
+          id: actionLog.id,
+          expectedStatus: 'planned',
+          status: 'skipped',
+          errorMessage: CANDIDATE_REPLY_CLAIM_LOST_ERROR,
+        });
+        if (!skipped) {
+          throw new Error('candidate reply action is already running');
+        }
+        return { outgoingMessage: null };
+      }
+    }
+
+    let outgoingMessage: CandidateConversationMessageDto;
+    let adapter: CandidateSourceAdapter | null = null;
+    let actionLogFinalized = false;
+    try {
+      outgoingMessage = await dependencies.repo.createMessage({
+        conversationId: conversation.id,
+        userId: state.userId,
+        jobDescriptionId: state.payload.jobDescriptionId,
+        candidateId: state.payload.candidateId,
+        platform: state.payload.platform,
+        role: 'agent',
+        content: decision.reply,
+        externalMessageId: candidateCommunicationReplyExternalMessageId(incomingMessage.id),
+        deliveryStatus: state.payload.executeReply ? 'planned' : 'sent',
+        occurredAt: new Date(),
+      });
+
+      if (state.payload.executeReply) {
+        await renewProcessingClaimOrThrow(dependencies, state);
+        adapter = await dependencies.createAdapter(state.payload.platform, {
+          userId: state.userId,
+        });
         const executionResult = await sendReply({
           adapter,
           candidate: subject.candidate,
           decision,
         });
-        outgoingMessage =
-          (await dependencies.repo.updateMessageDelivery({
+        if (claimedActionLog) {
+          await dependencies.updateActionLog({
             userId: state.userId,
-            messageId: outgoingMessage.id,
-            deliveryStatus: executionResult.success ? 'sent' : 'failed',
+            id: claimedActionLog.id,
+            expectedStatus: 'running',
+            status: executionResult.success ? 'success' : 'failed',
             browserTrace: executionResult.browserTrace ?? null,
             errorMessage: executionResult.success
               ? null
               : (executionResult.error ?? 'candidate reply execution failed'),
-          })) ?? outgoingMessage;
-      } finally {
-        if (dependencies.closeAdapterAfterReply) {
-          await adapter.close();
+          });
+          actionLogFinalized = true;
         }
+        const updatedOutgoing = await dependencies.repo.updateMessageDelivery({
+          userId: state.userId,
+          messageId: outgoingMessage.id,
+          deliveryStatus: executionResult.success ? 'sent' : 'failed',
+          browserTrace: executionResult.browserTrace ?? null,
+          errorMessage: executionResult.success
+            ? null
+            : (executionResult.error ?? 'candidate reply execution failed'),
+        });
+        if (!updatedOutgoing) {
+          throw new Error('candidate reply delivery state was not persisted');
+        }
+        outgoingMessage = updatedOutgoing;
+      }
+    } catch (error) {
+      if (claimedActionLog && !actionLogFinalized) {
+        await dependencies.updateActionLog({
+          userId: state.userId,
+          id: claimedActionLog.id,
+          expectedStatus: 'running',
+          status: 'failed',
+          errorMessage: getErrorMessage(error),
+        });
+      }
+      throw error;
+    } finally {
+      if (adapter && dependencies.closeAdapterAfterReply) {
+        await adapter.close();
       }
     }
 
@@ -497,13 +740,16 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
     const conversation = requireConversation(state);
     const incomingMessage = requireIncomingMessage(state);
     const decision = requireDecision(state);
-    await dependencies.repo.createDecision({
+    // The LLM may finish after its lease was taken over. Fence before persisting and use
+    // the repository's unique, canonical decision for every downstream side effect.
+    await renewProcessingClaimOrThrow(dependencies, state);
+    const persistedDecision = await dependencies.repo.createDecision({
       conversationId: conversation.id,
       userId: state.userId,
       jobDescriptionId: state.payload.jobDescriptionId,
       candidateId: state.payload.candidateId,
       inputMessageId: incomingMessage.id,
-      outputMessageId: state.outgoingMessage?.id ?? null,
+      outputMessageId: null,
       intent: decision.intent,
       intentLevel: decision.intentLevel,
       nextStage: decision.nextStage,
@@ -513,12 +759,25 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
       rationale: decision.rationale,
       llmMeta: { resumeEvaluationSource: state.resumeEvaluationSource },
     });
-    await dependencies.repo.syncCandidateInterviewStage({
+    return { decision: persistedDecision };
+  }
+
+  async function linkDecisionOutputNode(
+    state: CandidateCommunicationGraphState,
+  ): Promise<CandidateCommunicationGraphUpdate> {
+    const incomingMessage = requireIncomingMessage(state);
+    const decision = requireDecision(state);
+    if ('outputMessageId' in decision && decision.outputMessageId && !state.outgoingMessage) {
+      return {};
+    }
+    const linked = await dependencies.repo.updateDecisionOutput({
       userId: state.userId,
-      jobDescriptionId: state.payload.jobDescriptionId,
-      candidateId: state.payload.candidateId,
-      interviewStage: decision.nextStage === 'rejected' ? 'withdrawn' : 'replied',
+      inputMessageId: incomingMessage.id,
+      outputMessageId: state.outgoingMessage?.id ?? null,
     });
+    if (!linked) {
+      throw new Error('candidate communication decision output conflict');
+    }
     return {};
   }
 
@@ -529,23 +788,10 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
     const conversation = requireConversation(state);
     const decision = requireDecision(state);
     const outgoingMessage = state.outgoingMessage ?? null;
-
-    const updatedConversation = await dependencies.repo.updateConversation({
-      conversationId: conversation.id,
-      userId: state.userId,
-      jobDescriptionId: state.payload.jobDescriptionId,
-      candidateId: state.payload.candidateId,
-      stage: decision.nextStage,
-      status: resolveStatus(decision.nextStage),
-      intentLevel: decision.intentLevel,
-      messageCount: conversation.messageCount + 1 + (outgoingMessage ? 1 : 0),
-      lastActiveAt: state.payload.message.receivedAt,
-      lastCandidateMessageAt: state.payload.message.receivedAt,
-      lastAgentMessageAt: outgoingMessage ? new Date(outgoingMessage.occurredAt) : null,
-      nextFollowUpAt: resolveNextFollowUpAt(decision.nextStage, state.payload.message.receivedAt),
-      outcomeResult: resolveOutcomeResult(decision.nextStage),
-      outcomeReason: resolveOutcomeResult(decision.nextStage) ? decision.rationale : null,
-    });
+    const incomingMessage = requireIncomingMessage(state);
+    if (!state.processingClaimId) {
+      throw new Error('candidate communication processing claim is missing');
+    }
 
     const memoryPayload = createMemoryPayload({
       conversationId: conversation.id,
@@ -555,29 +801,95 @@ function makeGraph(dependencies: CandidateCommunicationGraphDependencies) {
       decision,
       candidateMatchScore: state.candidateMatchScore,
     });
-    if (memoryPayload) {
-      await dependencies.repo.createMemory(memoryPayload);
+    const updatedConversation = await dependencies.repo.finalizeCandidateDecision({
+      userId: state.userId,
+      messageId: incomingMessage.id,
+      claimId: state.processingClaimId,
+      inputMessageId: incomingMessage.id,
+      interviewStage: decision.nextStage === 'rejected' ? 'withdrawn' : 'replied',
+      conversation: {
+        conversationId: conversation.id,
+        userId: state.userId,
+        jobDescriptionId: state.payload.jobDescriptionId,
+        candidateId: state.payload.candidateId,
+        stage: decision.nextStage,
+        status: resolveStatus(decision.nextStage),
+        intentLevel: decision.intentLevel,
+        messageCountIncrement: 1 + (outgoingMessage ? 1 : 0),
+        lastActiveAt: state.payload.message.receivedAt,
+        lastCandidateMessageAt: state.payload.message.receivedAt,
+        lastAgentMessageAt: outgoingMessage ? new Date(outgoingMessage.occurredAt) : null,
+        nextFollowUpAt: resolveNextFollowUpAt(decision.nextStage, state.payload.message.receivedAt),
+        outcomeResult: resolveOutcomeResult(decision.nextStage),
+        outcomeReason: resolveOutcomeResult(decision.nextStage) ? decision.rationale : null,
+      },
+      memory: memoryPayload,
+    });
+    if (!updatedConversation) {
+      throw new Error('candidate communication processing claim was lost before finalization');
     }
 
     return { updatedConversation };
   }
 
+  async function completeProcessingNode(
+    state: CandidateCommunicationGraphState,
+  ): Promise<CandidateCommunicationGraphUpdate> {
+    const incomingMessage = requireIncomingMessage(state);
+    if (!state.processingClaimId) {
+      throw new Error('candidate communication processing claim is missing');
+    }
+    const outcome =
+      state.completionOutcome ??
+      (state.outgoingMessage?.deliveryStatus === 'failed'
+        ? 'delivery_failed'
+        : 'processed_ackable');
+    const completed = await dependencies.repo.completeIncomingMessageProcessing({
+      userId: state.userId,
+      messageId: incomingMessage.id,
+      claimId: state.processingClaimId,
+      outcome,
+      errorMessage:
+        outcome === 'processed_ackable'
+          ? null
+          : (state.outgoingMessage?.errorMessage ??
+            (outcome === 'delivery_unknown'
+              ? CANDIDATE_COMMUNICATION_DELIVERY_UNKNOWN_ERROR
+              : null)),
+    });
+    if (!completed) {
+      throw new Error('candidate communication processing claim was lost');
+    }
+    return { processingStatus: 'processed', completionOutcome: outcome };
+  }
+
   return new StateGraph(CandidateCommunicationGraphState)
     .addNode('load_subject', loadSubjectNode)
     .addNode('record_incoming', recordIncomingNode)
+    .addNode('finish_replay', finishReplayNode)
     .addNode('evaluate_resume', evaluateResumeNode)
     .addNode('decide_reply', decideReplyNode)
-    .addNode('send_reply', sendReplyNode)
     .addNode('persist_decision', persistDecisionNode)
+    .addNode('send_reply', sendReplyNode)
+    .addNode('link_decision_output', linkDecisionOutputNode)
     .addNode('finalize_conversation', finalizeConversationNode)
+    .addNode('complete_processing', completeProcessingNode)
     .addEdge(START, 'load_subject')
     .addEdge('load_subject', 'record_incoming')
-    .addEdge('record_incoming', 'evaluate_resume')
+    .addConditionalEdges('record_incoming', routeAfterIncoming, {
+      finish_replay: 'finish_replay',
+      resume_send: 'send_reply',
+      resume_finalization: 'link_decision_output',
+      evaluate_resume: 'evaluate_resume',
+    })
+    .addEdge('finish_replay', END)
     .addEdge('evaluate_resume', 'decide_reply')
-    .addEdge('decide_reply', 'send_reply')
-    .addEdge('send_reply', 'persist_decision')
-    .addEdge('persist_decision', 'finalize_conversation')
-    .addEdge('finalize_conversation', END)
+    .addEdge('decide_reply', 'persist_decision')
+    .addEdge('persist_decision', 'send_reply')
+    .addEdge('send_reply', 'link_decision_output')
+    .addEdge('link_decision_output', 'finalize_conversation')
+    .addEdge('finalize_conversation', 'complete_processing')
+    .addEdge('complete_processing', END)
     .compile();
 }
 
@@ -593,6 +905,9 @@ export async function runCandidateCommunicationGraph(params: {
     subject: undefined,
     conversation: undefined,
     incomingMessage: undefined,
+    processingClaimId: null,
+    processingStatus: undefined,
+    completionOutcome: undefined,
     history: [],
     candidateMatchScore: null,
     resumeEvaluationSource: 'none',
@@ -601,14 +916,25 @@ export async function runCandidateCommunicationGraph(params: {
     updatedConversation: undefined,
   });
 
-  if (!result.updatedConversation || !result.incomingMessage || !result.decision) {
+  if (
+    !result.updatedConversation ||
+    !result.incomingMessage ||
+    !result.decision ||
+    (result.processingStatus !== 'processed' && result.processingStatus !== 'in_flight') ||
+    (result.processingStatus === 'processed' && !result.completionOutcome)
+  ) {
     throw new Error('candidate communication graph finished without a complete result');
   }
 
+  const processingOutcome =
+    result.processingStatus === 'in_flight' ? 'in_flight' : result.completionOutcome!;
   return {
     conversation: result.updatedConversation,
     incomingMessage: result.incomingMessage,
     outgoingMessage: result.outgoingMessage ?? null,
     decision: result.decision,
+    processingStatus: result.processingStatus,
+    processingOutcome,
+    ackable: processingOutcome === 'processed_ackable',
   };
 }

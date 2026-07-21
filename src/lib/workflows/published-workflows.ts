@@ -1,5 +1,11 @@
 import { prisma } from '@/lib/prisma';
 import type { PublishPlatform, PublishSkillMeta, PublishStep } from '@/lib/jd-publishing/types';
+import {
+  addWorkflowExecutionStats,
+  getWorkflowExecutionStatsBySkillId,
+  successRateForWorkflowStats,
+  type WorkflowExecutionStats,
+} from './execution-stats';
 
 type PublishSkillRecord = {
   id: string;
@@ -26,6 +32,8 @@ export type PublishedWorkflowSummary = {
   version: number;
   isActive: boolean;
   stepCount: number;
+  usageCount: number;
+  successRate: number | null;
   meta?: PublishSkillMeta;
   createdAt: string;
   updatedAt: string;
@@ -57,7 +65,10 @@ function toSteps(value: unknown): PublishStep[] {
   return Array.isArray(value) ? (value as PublishStep[]) : [];
 }
 
-function mapSummary(row: PublishSkillRecord): PublishedWorkflowSummary {
+function mapSummary(
+  row: PublishSkillRecord,
+  stats?: WorkflowExecutionStats,
+): PublishedWorkflowSummary {
   const steps = toSteps(row.steps);
 
   return {
@@ -69,31 +80,31 @@ function mapSummary(row: PublishSkillRecord): PublishedWorkflowSummary {
     version: row.version,
     isActive: row.isActive,
     stepCount: steps.length,
+    usageCount: stats?.usageCount ?? 0,
+    successRate: successRateForWorkflowStats(stats),
     meta: toSkillMeta(row.meta),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-function mapWorkflow(row: PublishSkillRecord): PublishedWorkflow {
+function mapWorkflow(row: PublishSkillRecord, stats?: WorkflowExecutionStats): PublishedWorkflow {
   return {
-    ...mapSummary(row),
+    ...mapSummary(row, stats),
     inputSchema: toRecord(row.inputSchema),
     variables: toRecord(row.variables),
     steps: toSteps(row.steps),
   };
 }
 
-function workflowKey(
-  workflow: Pick<PublishedWorkflowSummary, 'name' | 'platform' | 'siteFingerprint'>,
-): string {
-  return `${workflow.platform}:${workflow.siteFingerprint}:${workflow.name}`;
+function workflowKey(workflow: Pick<PublishedWorkflowSummary, 'name' | 'platform'>): string {
+  return `${workflow.platform}:${workflow.name}`;
 }
 
 export async function listLatestActivePublishedWorkflows(): Promise<PublishedWorkflowSummary[]> {
   const rows = await prisma.publishSkill.findMany({
     where: { isActive: true },
-    orderBy: [{ name: 'asc' }, { platform: 'asc' }, { version: 'desc' }, { updatedAt: 'desc' }],
+    orderBy: [{ name: 'asc' }, { platform: 'asc' }, { updatedAt: 'desc' }, { version: 'desc' }],
   });
 
   const seen = new Set<string>();
@@ -109,7 +120,47 @@ export async function listLatestActivePublishedWorkflows(): Promise<PublishedWor
     workflows.push(workflow);
   }
 
-  return workflows;
+  if (workflows.length === 0) return [];
+
+  const workflowIdentities = await prisma.publishSkill.findMany({
+    where: {
+      OR: workflows.map((workflow) => ({
+        name: workflow.name,
+        platform: workflow.platform,
+      })),
+    },
+    select: { id: true, name: true, platform: true },
+  });
+  const statsBySkillId = await getWorkflowExecutionStatsBySkillId(
+    workflowIdentities.map((workflow) => workflow.id),
+  );
+  const statsByWorkflow = new Map<string, WorkflowExecutionStats>();
+
+  for (const identity of workflowIdentities) {
+    const key = workflowKey({
+      name: identity.name,
+      platform: identity.platform as PublishPlatform,
+    });
+    const stats = statsByWorkflow.get(key) ?? {
+      usageCount: 0,
+      completedCount: 0,
+      successCount: 0,
+    };
+    const identityStats = statsBySkillId.get(identity.id);
+    if (identityStats) addWorkflowExecutionStats(stats, identityStats);
+    statsByWorkflow.set(key, stats);
+  }
+
+  return workflows.flatMap((workflow) => {
+    const aggregateStats = statsByWorkflow.get(workflowKey(workflow));
+    const currentStats = statsBySkillId.get(workflow.id);
+    const summary = {
+      ...workflow,
+      usageCount: aggregateStats?.usageCount ?? 0,
+      successRate: successRateForWorkflowStats(currentStats),
+    };
+    return summary.successRate === 0 ? [] : [summary];
+  });
 }
 
 export async function getPublishedWorkflowDetail(
@@ -132,8 +183,12 @@ export async function getPublishedWorkflowDetail(
     orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }],
   });
 
+  const statsBySkillId = await getWorkflowExecutionStatsBySkillId(
+    versions.map((version) => version.id),
+  );
+
   return {
-    workflow: mapWorkflow(row),
-    versions: versions.map(mapSummary),
+    workflow: mapWorkflow(row, statsBySkillId.get(row.id)),
+    versions: versions.map((version) => mapSummary(version, statsBySkillId.get(version.id))),
   };
 }

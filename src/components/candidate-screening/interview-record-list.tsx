@@ -41,6 +41,17 @@ function textList(values: string[]) {
   return values.length > 0 ? values.join('、') : '暂无';
 }
 
+const jdStatusLabels: Record<CandidateInterviewRecordDto['jobDescription']['status'], string> = {
+  created: '已创建',
+  ready_to_publish: '待发布',
+  publishing: '发布中',
+  published: '招聘中',
+  filled: '已招满',
+  publish_failed: '发布失败',
+  offline: '已停止招聘（系统内）',
+  archived: '已归档',
+};
+
 export function InterviewRecordList() {
   const returnTarget = { href: '/interviews', label: '返回面试记录' };
   const [records, setRecords] = useState<CandidateInterviewRecordDto[]>([]);
@@ -225,7 +236,8 @@ export function InterviewRecordList() {
                       {record.jobDescription.title}
                     </Link>
                     <div className="text-muted-foreground mt-1 truncate text-xs">
-                      {record.jobDescription.department} · {record.jobDescription.status}
+                      {record.jobDescription.department} ·{' '}
+                      {jdStatusLabels[record.jobDescription.status]}
                     </div>
                   </div>
                   <Chip size="sm" variant="flat">

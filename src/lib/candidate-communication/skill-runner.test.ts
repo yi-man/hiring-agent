@@ -145,6 +145,32 @@ describe('candidate communication skill runner', () => {
     );
   });
 
+  it('fails closed when JD resolution is ambiguous despite an explicitly selected fallback', async () => {
+    const adapter = createAdapter([
+      [{ id: 'msg-1', candidateId: 'boss-cand-1', content: '你好，还在招吗？' }],
+    ]);
+    const repo = createRepo();
+    (repo.resolveJobDescriptionForCandidateMessage as jest.Mock).mockResolvedValueOnce(null);
+    const handleMessage = jest.fn();
+
+    await expect(
+      runCandidateCommunicationSkill({
+        userId: 'user-1',
+        jobDescriptionId: 'jd-selected',
+        platform: 'boss-like',
+        adapter,
+        repo,
+        handleMessage,
+      }),
+    ).rejects.toThrow('job description not found for unread message: msg-1');
+
+    expect(repo.resolveJobDescriptionForCandidateMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ fallbackJobDescriptionId: 'jd-selected' }),
+    );
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(adapter.close).toHaveBeenCalledTimes(1);
+  });
+
   it('fails instead of stopping when unread messages cannot be drained', async () => {
     const adapter = createAdapter([
       [{ id: 'msg-1', candidateId: 'boss-cand-1', content: '你好' }],
@@ -166,5 +192,142 @@ describe('candidate communication skill runner', () => {
     ).rejects.toThrow('unread inbox was not empty after 2 passes');
 
     expect(adapter.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['in-flight replay', false],
+    ['delivery failure', false],
+    ['completed processing', true],
+  ] as const)('acks the platform only for %s when it is ackable', async (_label, ackable) => {
+    const adapter = createAdapter([
+      [{ id: 'msg-1', candidateId: 'boss-cand-1', content: '你好' }],
+      [],
+    ]);
+    adapter.markUnreadMessageProcessed = jest.fn().mockResolvedValue(undefined);
+    const repo = createRepo();
+    const handleMessage = jest.fn().mockResolvedValue({
+      outgoingMessage: null,
+      processingStatus: ackable ? 'processed' : 'in_flight',
+      processingOutcome: ackable ? 'processed_ackable' : 'in_flight',
+      ackable,
+    });
+
+    await runCandidateCommunicationSkill({
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      adapter,
+      repo,
+      handleMessage,
+    });
+
+    expect(adapter.markUnreadMessageProcessed).toHaveBeenCalledTimes(ackable ? 1 : 0);
+  });
+
+  it.each([
+    { label: 'all messages complete', ackableResults: [true, true], expectedAcks: 1 },
+    { label: 'one message is unknown', ackableResults: [true, false], expectedAcks: 0 },
+  ] as const)(
+    'acks one browser thread once only when $label',
+    async ({ ackableResults, expectedAcks }) => {
+      const adapter = createAdapter([
+        [
+          { id: 'msg-1', candidateId: 'boss-cand-1', content: '第一条' },
+          { id: 'msg-2', candidateId: 'boss-cand-1', content: '第二条' },
+        ],
+        [],
+      ]);
+      const listUnreadMessages = adapter.listUnreadMessages.bind(adapter);
+      adapter.listUnreadMessages = jest.fn(async () =>
+        (await listUnreadMessages()).map((message) => ({
+          ...message,
+          replyTarget: {
+            browserThreadSelector: '[data-thread-id="thread-1"]',
+            sourceMessageId: message.externalMessageId,
+          },
+        })),
+      );
+      adapter.markUnreadMessageProcessed = jest.fn().mockResolvedValue(undefined);
+      const repo = createRepo();
+      const handleMessage = jest.fn();
+      for (const ackable of ackableResults) {
+        handleMessage.mockResolvedValueOnce({
+          outgoingMessage: null,
+          processingStatus: 'processed',
+          processingOutcome: ackable ? 'processed_ackable' : 'delivery_unknown',
+          ackable,
+        });
+      }
+
+      await runCandidateCommunicationSkill({
+        userId: 'user-1',
+        jobDescriptionId: 'jd-1',
+        platform: 'boss-like',
+        adapter,
+        repo,
+        handleMessage,
+      });
+
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      expect(
+        handleMessage.mock.calls.map(
+          ([call]) =>
+            (call as { payload: { message: { content: string } } }).payload.message.content,
+        ),
+      ).toEqual(['第一条', '第二条']);
+      expect(adapter.markUnreadMessageProcessed).toHaveBeenCalledTimes(expectedAcks);
+      if (expectedAcks === 1) {
+        expect(adapter.markUnreadMessageProcessed).toHaveBeenCalledWith(
+          expect.objectContaining({ externalMessageId: 'msg-2' }),
+        );
+      }
+    },
+  );
+
+  it('keeps acknowledgement gates isolated across browser threads', async () => {
+    const adapter = createAdapter([
+      [
+        { id: 'msg-1', candidateId: 'boss-cand-1', content: '第一条' },
+        { id: 'msg-2', candidateId: 'boss-cand-2', content: '第二条' },
+      ],
+      [],
+    ]);
+    const listUnreadMessages = adapter.listUnreadMessages.bind(adapter);
+    adapter.listUnreadMessages = jest.fn(async () =>
+      (await listUnreadMessages()).map((message) => ({
+        ...message,
+        replyTarget: {
+          browserThreadSelector: `[data-thread-id="thread-${message.platformCandidateId}"]`,
+          sourceMessageId: message.externalMessageId,
+        },
+      })),
+    );
+    adapter.markUnreadMessageProcessed = jest.fn().mockResolvedValue(undefined);
+    const handleMessage = jest
+      .fn()
+      .mockResolvedValueOnce({
+        processingStatus: 'processed',
+        processingOutcome: 'processed_ackable',
+        ackable: true,
+      })
+      .mockResolvedValueOnce({
+        processingStatus: 'processed',
+        processingOutcome: 'delivery_unknown',
+        ackable: false,
+      });
+
+    await runCandidateCommunicationSkill({
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      platform: 'boss-like',
+      adapter,
+      repo: createRepo(),
+      handleMessage,
+    });
+
+    expect(adapter.markUnreadMessageProcessed).toHaveBeenCalledTimes(1);
+    expect(adapter.markUnreadMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ externalMessageId: 'msg-1' }),
+    );
   });
 });

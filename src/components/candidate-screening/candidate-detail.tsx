@@ -19,7 +19,11 @@ import {
   fetchCandidateInterviewFeedbacks,
   fetchJdCandidateDetail,
 } from '@/lib/candidate-screening/client';
-import { CANDIDATE_INTERVIEW_FEEDBACK_STAGES } from '@/lib/candidate-screening/constants';
+import {
+  isCandidateOutreachAllowedJobStatus,
+  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
+  isTerminalCandidateInterviewStage,
+} from '@/lib/candidate-screening/constants';
 import type {
   CandidateInterviewFeedbackDto,
   CandidateScreeningDetailDto,
@@ -33,6 +37,8 @@ import {
   feedbackStageLabels,
   interviewStageLabels,
 } from '@/components/candidate-screening/interview-display';
+import { fetchJobDescription } from '@/lib/jd/client';
+import type { JDStatus } from '@/types';
 
 export function CandidateDetail({
   jobDescriptionId,
@@ -55,6 +61,7 @@ export function CandidateDetail({
     label: '返回候选人详情',
   };
   const [candidate, setCandidate] = useState<CandidateScreeningDetailDto | null>(null);
+  const [jobDescriptionStatus, setJobDescriptionStatus] = useState<JDStatus | null>(null);
   const [feedbacks, setFeedbacks] = useState<CandidateInterviewFeedbackDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isStartingCommunication, setIsStartingCommunication] = useState(false);
@@ -71,13 +78,15 @@ export function CandidateDetail({
       setIsLoading(true);
       setError('');
       try {
-        const [nextCandidate, nextFeedbacks] = await Promise.all([
+        const [nextCandidate, nextFeedbacks, jobDescription] = await Promise.all([
           fetchJdCandidateDetail(jobDescriptionId, candidateId),
           fetchCandidateInterviewFeedbacks(jobDescriptionId, candidateId),
+          fetchJobDescription(jobDescriptionId),
         ]);
         if (cancelled) return;
         setCandidate(nextCandidate);
         setFeedbacks(nextFeedbacks);
+        setJobDescriptionStatus(jobDescription.status);
       } catch (loadError) {
         if (cancelled) return;
         setError(loadError instanceof Error ? loadError.message : '加载候选人详情失败');
@@ -91,7 +100,7 @@ export function CandidateDetail({
     };
   }, [candidateId, jobDescriptionId]);
 
-  async function handleStartSingleCommunication() {
+  async function handleStartSingleCommunication(sourceScreeningRunId: string) {
     setIsStartingCommunication(true);
     setError('');
     try {
@@ -99,7 +108,7 @@ export function CandidateDetail({
         mode: 'single',
         jobDescriptionId,
         candidateId,
-        sourceScreeningRunId: candidate?.runId,
+        sourceScreeningRunId,
         platform: candidate?.candidate.sourcePlatform ?? 'boss-like',
       });
       router.push(
@@ -135,6 +144,12 @@ export function CandidateDetail({
     `/jd-generator/${jobDescriptionId}/candidates/${candidateId}/interview`,
     detailReturnTarget,
   );
+  const canStartSingleCommunication =
+    jobDescriptionStatus !== null &&
+    isCandidateOutreachAllowedJobStatus(jobDescriptionStatus) &&
+    !isTerminalCandidateInterviewStage(candidate.interviewStage) &&
+    candidate.actionPlan?.action === 'chat' &&
+    candidate.latestPlannedChatRunId !== null;
 
   return (
     <div className="space-y-4">
@@ -164,16 +179,22 @@ export function CandidateDetail({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-          <Button
-            className="gap-2"
-            isDisabled={isStartingCommunication}
-            type="button"
-            variant="bordered"
-            onClick={() => void handleStartSingleCommunication()}
-          >
-            <MessageCircle className="h-4 w-4" aria-hidden />
-            {isStartingCommunication ? '启动中' : '单点沟通'}
-          </Button>
+          {canStartSingleCommunication ? (
+            <Button
+              className="gap-2"
+              isDisabled={isStartingCommunication}
+              type="button"
+              variant="bordered"
+              onClick={() => {
+                if (candidate.latestPlannedChatRunId) {
+                  void handleStartSingleCommunication(candidate.latestPlannedChatRunId);
+                }
+              }}
+            >
+              <MessageCircle className="h-4 w-4" aria-hidden />
+              {isStartingCommunication ? '启动中' : '单点沟通'}
+            </Button>
+          ) : null}
           {originalProfileHref ? (
             <Button
               as={Link}

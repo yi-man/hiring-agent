@@ -18,6 +18,7 @@ import {
 import { Button, Chip } from '@/components/ui';
 import { fetchJobDescriptionPublishRunWithEvents } from '@/lib/jd/client';
 import { formatPublishAutomationError } from '@/lib/jd-publishing/format-error';
+import { getRecruitmentPlatformLabel, isRecruitmentPlatform } from '@/lib/recruitment-platforms';
 import {
   currentPathWithSearch,
   getReturnTarget,
@@ -62,11 +63,19 @@ const statusMeta: Record<
 
 const stageLabels: Record<JobDescriptionPublishRunStage, string> = {
   queued: '任务创建',
-  publishing: '发布到 BOSS 直聘',
+  publishing: '发布职位',
   completed: '完成',
 };
 
 const stageOrder: JobDescriptionPublishRunStage[] = ['queued', 'publishing', 'completed'];
+
+function platformLabel(platform: string): string {
+  return isRecruitmentPlatform(platform) ? getRecruitmentPlatformLabel(platform) : platform;
+}
+
+function stageLabel(stage: JobDescriptionPublishRunStage, platform: string): string {
+  return stage === 'publishing' ? `发布到${platformLabel(platform)}` : stageLabels[stage];
+}
 
 function formatTime(value: string | null) {
   if (!value) return '未记录';
@@ -311,8 +320,7 @@ export function JDPublishRunExecution({ runId }: { runId: string }) {
             </Chip>
           </div>
           <p className="text-muted-foreground mt-1 text-sm">
-            {run.platform === 'boss-like' ? 'BOSS 直聘' : run.platform} ·{' '}
-            {formatTime(run.updatedAt)}
+            {platformLabel(run.platform)} · {formatTime(run.updatedAt)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -353,7 +361,7 @@ export function JDPublishRunExecution({ runId }: { runId: string }) {
         <div className="border-border rounded-lg border p-4">
           <div className="text-muted-foreground text-xs">当前阶段</div>
           <div className="text-foreground mt-2 text-base font-semibold">
-            {run.currentStage ? stageLabels[run.currentStage] : '等待开始'}
+            {run.currentStage ? stageLabel(run.currentStage, run.platform) : '等待开始'}
           </div>
         </div>
         <div className="border-border rounded-lg border p-4">
@@ -367,7 +375,7 @@ export function JDPublishRunExecution({ runId }: { runId: string }) {
         <div className="border-border rounded-lg border p-4">
           <div className="text-muted-foreground text-xs">平台</div>
           <div className="text-foreground mt-2 truncate text-base font-semibold">
-            {run.platform === 'boss-like' ? 'BOSS 直聘' : run.platform}
+            {platformLabel(run.platform)}
           </div>
         </div>
       </section>
@@ -442,7 +450,7 @@ export function JDPublishRunExecution({ runId }: { runId: string }) {
                     <StepDot state={state} />
                     <div className="min-w-0">
                       <div className="text-foreground text-sm font-medium">
-                        {stageLabels[stage]}
+                        {stageLabel(stage, run.platform)}
                       </div>
                       <div className="text-muted-foreground mt-1 text-xs">
                         {lastEvent ? lastEvent.message : '等待执行'}
@@ -480,7 +488,7 @@ export function JDPublishRunExecution({ runId }: { runId: string }) {
                     <div className="min-w-0">
                       <div className="text-foreground text-sm font-medium">{event.message}</div>
                       <div className="text-muted-foreground mt-1 text-xs">
-                        {stageLabels[event.stage]} · {formatTime(event.createdAt)}
+                        {stageLabel(event.stage, run.platform)} · {formatTime(event.createdAt)}
                       </div>
                     </div>
                     <Chip size="sm" variant="flat">

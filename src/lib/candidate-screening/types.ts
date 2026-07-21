@@ -35,6 +35,8 @@ export type CandidateInterviewStage =
   | 'interviewing'
   | 'interview_completed'
   | 'offer'
+  | 'onboarded'
+  | 'not_joined'
   | 'rejected'
   | 'withdrawn';
 export type CandidateInterviewFeedbackStage =

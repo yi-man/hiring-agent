@@ -43,6 +43,8 @@ const jobDescription: JobDescriptionDto = {
   positionDescription: 'Build hiring workflows',
   salaryRange: null,
   workLocations: [],
+  hiringTarget: null,
+  onboardedCount: 0,
   tone: 'formal',
   status: 'created',
   content: {

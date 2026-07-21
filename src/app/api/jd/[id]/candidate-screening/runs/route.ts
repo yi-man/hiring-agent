@@ -85,6 +85,18 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         { status: 409 },
       );
     }
+    if (jobDescription.hiringTarget === null) {
+      return NextResponse.json(
+        { error: 'hiring target is required before screening' },
+        { status: 409 },
+      );
+    }
+    if (jobDescription.onboardedCount >= jobDescription.hiringTarget) {
+      return NextResponse.json(
+        { error: 'hiring target has already been reached' },
+        { status: 409 },
+      );
+    }
 
     const runs = await Promise.all(
       requests.map((screeningRequest) =>

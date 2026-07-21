@@ -9,7 +9,10 @@ import {
   ensureIntegrationSchema,
   requireIntegrationEnv,
 } from '../chat/test-env';
-import { createJobDescription } from '@/lib/jd/job-description-repo';
+import {
+  claimJobDescriptionForPublishing,
+  createJobDescription,
+} from '@/lib/jd/job-description-repo';
 import { upsertCompanyProfileForUser } from '@/lib/company-profile/repo';
 import { resolveRecruitmentPlatformRuntimeConfig } from '@/lib/recruitment-platform-config';
 import { PlaywrightBrowserExecutor } from '@/lib/browser/executors/playwright-executor';
@@ -215,6 +218,7 @@ async function createReadyJobDescription(
     department: '技术部',
     position: title,
     positionDescription: '负责招聘产品前端体验',
+    hiringTarget: 1,
     tone: 'tech',
     status: 'ready_to_publish',
     content: { ...sampleJd, title },
@@ -256,11 +260,21 @@ async function publishWithBrowser(
   baseUrl: string,
 ): ReturnType<typeof publishJobDescriptionToBossLike> {
   await configureBossLikePlatform(jobDescription.userId, baseUrl);
+  const batchId = `publish-flow-${randomBytes(8).toString('hex')}`;
+  const claim = await claimJobDescriptionForPublishing({
+    userId: jobDescription.userId,
+    id: jobDescription.id,
+    batchId,
+  });
+  if (!claim.ok) {
+    throw new Error(`publish fixture claim failed: ${claim.reason}`);
+  }
 
   const executor = new PlaywrightBrowserExecutor({ headless: true, timeoutMs: 5_000 });
   try {
     return await publishJobDescriptionToBossLike({
-      jobDescription,
+      jobDescription: claim.jobDescription,
+      batchId,
       settings: publishSettings(),
       executor,
     });

@@ -33,6 +33,14 @@ import type {
 } from './types';
 
 type PublishingRoute = 'execute' | 'fallback' | 'upgrade' | 'finalize';
+const PUBLISH_TASK_INACTIVE_ERROR = 'publish task is no longer active';
+
+class PublishTaskInactiveError extends Error {
+  constructor() {
+    super(PUBLISH_TASK_INACTIVE_ERROR);
+    this.name = 'PublishTaskInactiveError';
+  }
+}
 
 export type PublishingGraphDependencies = {
   getActiveSkill?: (
@@ -56,6 +64,7 @@ export type PublishingGraphDependencies = {
 
 const PublishingState = Annotation.Root({
   jobDescription: Annotation<JobDescriptionDto>(),
+  batchId: Annotation<string>(),
   settings: Annotation<PublishJobDescriptionSettings>(),
   executor: Annotation<BrowserExecutor>(),
   credentials: Annotation<Record<string, unknown>>(),
@@ -109,6 +118,45 @@ function setExecutorCommandContext(
 
 function lastError(traceStep?: PublishTraceStep, fallbackReason?: string): string | undefined {
   return traceStep?.result.error ?? fallbackReason;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'publish execution failed';
+}
+
+function buildUnexpectedFailureTrace(params: {
+  stepId: string;
+  action: string;
+  stepParams?: Record<string, unknown>;
+  error: unknown;
+}): PublishTraceStep {
+  return {
+    stepId: params.stepId,
+    action: params.action,
+    params: params.stepParams ?? {},
+    result: { success: false, error: errorMessage(params.error) },
+  };
+}
+
+function stepFailureTrace(skill: PublishSkill, stepId: string, error: unknown): PublishTraceStep {
+  const step = skill.steps.find((candidate) => candidate.id === stepId);
+  if (step?.type === 'action') {
+    return buildUnexpectedFailureTrace({
+      stepId,
+      action: step.action,
+      stepParams: step.params,
+      error,
+    });
+  }
+  if (step?.type === 'condition') {
+    return buildUnexpectedFailureTrace({
+      stepId,
+      action: 'condition',
+      stepParams: step.check as unknown as Record<string, unknown>,
+      error,
+    });
+  }
+  return buildUnexpectedFailureTrace({ stepId, action: 'execute_step', error });
 }
 
 function isBrowserTargetInput(value: unknown): value is BrowserTargetInput {
@@ -235,6 +283,55 @@ function routeAfterStep(state: PublishingGraphState): PublishingRoute {
 }
 
 function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
+  async function writeTaskStepOrThrow(params: {
+    task: PublishTaskDto;
+    expectedCurrentStep: string | null;
+    currentStep: string | null;
+  }): Promise<void> {
+    const active = await dependencies.updateTaskCurrentStep({
+      taskId: params.task.id,
+      userId: params.task.userId,
+      jobDescriptionId: params.task.jobDescriptionId,
+      batchId: params.task.batchId ?? null,
+      expectedCurrentStep: params.expectedCurrentStep,
+      currentStep: params.currentStep,
+    });
+    if (!active) {
+      throw new PublishTaskInactiveError();
+    }
+  }
+
+  async function fenceTaskStep(task: PublishTaskDto, currentStep: string | null): Promise<void> {
+    await writeTaskStepOrThrow({
+      task,
+      expectedCurrentStep: currentStep,
+      currentStep,
+    });
+  }
+
+  async function failActiveTaskFromError(params: {
+    task: PublishTaskDto;
+    expectedCurrentStep: string | null;
+    traceSteps: PublishTraceStep[];
+    traceStep: PublishTraceStep;
+    error: unknown;
+  }): Promise<PublishingGraphUpdate> {
+    if (params.error instanceof PublishTaskInactiveError) throw params.error;
+    await writeTaskStepOrThrow({
+      task: params.task,
+      expectedCurrentStep: params.expectedCurrentStep,
+      currentStep: null,
+    });
+    return {
+      traceSteps: [...params.traceSteps, params.traceStep],
+      currentStepId: undefined,
+      status: 'failed',
+      route: 'finalize',
+      failedTraceStep: params.traceStep,
+      errorMessage: errorMessage(params.error),
+    };
+  }
+
   async function prepareNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
     const input = buildBossLikeJobPayload(state.jobDescription, state.settings);
     const context: PublishExecutionContext = {
@@ -287,14 +384,11 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
     const task = await dependencies.createTask({
       userId: state.jobDescription.userId,
       jobDescriptionId: state.jobDescription.id,
+      batchId: state.batchId,
       skillId: skill.id,
       platform: state.settings.platform,
       input: state.input,
       currentStep: skill.steps[0]?.id ?? null,
-    });
-    setExecutorCommandContext(state.executor, {
-      taskId: task.id,
-      stepId: skill.steps[0]?.id,
     });
     return { task, currentStepId: skill.steps[0]?.id, traceSteps: [] };
   }
@@ -303,63 +397,89 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
     const skill = requireSkill(state);
     const task = requireTask(state);
     const stepId = state.currentStepId;
-    if (!stepId) {
-      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
-      return { status: 'success', route: 'finalize' };
-    }
+    let traceSteps = state.traceSteps;
+    try {
+      if (!stepId) {
+        await fenceTaskStep(task, null);
+        return { status: 'success', route: 'finalize' };
+      }
 
-    setExecutorCommandContext(state.executor, { taskId: task.id, stepId });
-    const result = await executePublishingStep({
-      stepId,
-      skill,
-      executor: state.executor,
-      context: state.context,
-    });
-    const traceSteps = appendTrace(state, result.traceStep);
-
-    if (result.status === 'running') {
-      await dependencies.updateTaskCurrentStep({
-        taskId: task.id,
-        currentStep: result.nextStepId ?? null,
+      await fenceTaskStep(task, stepId);
+      setExecutorCommandContext(state.executor, { taskId: task.id, stepId });
+      const result = await executePublishingStep({
+        stepId,
+        skill,
+        executor: state.executor,
+        context: state.context,
       });
-      return {
-        traceSteps,
-        currentStepId: result.nextStepId ?? undefined,
-        route: 'execute',
-      };
-    }
-    if (result.status === 'success') {
-      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
-      return {
-        traceSteps,
-        currentStepId: undefined,
-        status: 'success',
-        route: 'finalize',
-      };
-    }
-    if (result.status === 'fallback') {
-      await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
+      traceSteps = appendTrace(state, result.traceStep);
+
+      if (result.status === 'running') {
+        await writeTaskStepOrThrow({
+          task,
+          expectedCurrentStep: stepId,
+          currentStep: result.nextStepId ?? null,
+        });
+        return {
+          traceSteps,
+          currentStepId: result.nextStepId ?? undefined,
+          route: 'execute',
+        };
+      }
+      if (result.status === 'success') {
+        await writeTaskStepOrThrow({
+          task,
+          expectedCurrentStep: stepId,
+          currentStep: null,
+        });
+        return {
+          traceSteps,
+          currentStepId: undefined,
+          status: 'success',
+          route: 'finalize',
+        };
+      }
+      if (result.status === 'fallback') {
+        await writeTaskStepOrThrow({
+          task,
+          expectedCurrentStep: stepId,
+          currentStep: null,
+        });
+        return {
+          traceSteps,
+          currentStepId: undefined,
+          status: 'failed',
+          route: 'fallback',
+          onFail: result.onFail,
+          failedTraceStep: result.traceStep,
+          repairSteps: result.onFail?.repairSteps,
+          errorMessage: lastError(result.traceStep, result.onFail?.reason),
+        };
+      }
+      await writeTaskStepOrThrow({
+        task,
+        expectedCurrentStep: stepId,
+        currentStep: null,
+      });
       return {
         traceSteps,
         currentStepId: undefined,
         status: 'failed',
-        route: 'fallback',
+        route: 'finalize',
         onFail: result.onFail,
         failedTraceStep: result.traceStep,
-        repairSteps: result.onFail?.repairSteps,
         errorMessage: lastError(result.traceStep, result.onFail?.reason),
       };
+    } catch (error) {
+      const failureStepId = stepId ?? 'execute_step';
+      return failActiveTaskFromError({
+        task,
+        expectedCurrentStep: stepId ?? null,
+        traceSteps,
+        traceStep: stepFailureTrace(skill, failureStepId, error),
+        error,
+      });
     }
-    await dependencies.updateTaskCurrentStep({ taskId: task.id, currentStep: null });
-    return {
-      traceSteps,
-      currentStepId: undefined,
-      status: 'failed',
-      route: 'finalize',
-      onFail: result.onFail,
-      failedTraceStep: result.traceStep,
-      errorMessage: lastError(result.traceStep, result.onFail?.reason),
-    };
   }
 
   async function routeAfterStepNode(): Promise<PublishingGraphUpdate> {
@@ -369,87 +489,108 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
   async function fallbackAgentNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
     const task = requireTask(state);
-    setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'fallback_agent' });
-    const failedTraceStep = state.failedTraceStep;
-    const failed = readFailedTarget({ traceStep: failedTraceStep });
-    const failedTarget = failed.target;
-    let repairSteps = state.repairSteps;
-    let repairReason = state.repairReason;
-    let fallbackError = state.errorMessage;
-    let fallbackSnapshot = failedTraceStep?.result.domSnapshot;
-    let fallbackMatch: LocatorMatchReport | undefined;
+    try {
+      setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'fallback_agent' });
+      const failedTraceStep = state.failedTraceStep;
+      const failed = readFailedTarget({ traceStep: failedTraceStep });
+      const failedTarget = failed.target;
+      let repairSteps = state.repairSteps;
+      let repairReason = state.repairReason;
+      let fallbackError = state.errorMessage;
+      let fallbackSnapshot = failedTraceStep?.result.domSnapshot;
+      let fallbackMatch: LocatorMatchReport | undefined;
 
-    if (!repairSteps?.length && failedTraceStep && isBrowserTargetInput(failedTarget)) {
-      const structuredSnapshot = state.executor.snapshotStructured
-        ? await state.executor.snapshotStructured().catch(() => undefined)
-        : undefined;
-      fallbackSnapshot = structuredSnapshot ?? fallbackSnapshot;
-      const resolveOptions = resolveOptionsForTraceStep(failedTraceStep);
-      const report = await resolveUniqueRepairTarget({
-        executor: state.executor,
-        target: failedTarget,
-        options: resolveOptions,
-      });
-      if (report) {
-        fallbackMatch = report;
-        if (report.status === 'unique') {
-          repairSteps = patchFailedStepTarget({
-            steps: skill.steps,
-            failedStepId: failedTraceStep.stepId,
-            target: report.target,
-            targetKey: failed.targetKey,
-          });
-          repairReason = `target re-explore resolved by ${report.strategy}`;
-        } else {
-          fallbackError = errorFromMatchReport(report);
-        }
-      }
-
-      if (!repairSteps?.length && structuredSnapshot) {
-        const repairedTarget = repairBossLikeTargetFromSnapshot({
-          snapshot: structuredSnapshot,
-          failedStepId: failedTraceStep.stepId,
-          targetKey: failed.targetKey,
-          failedTarget,
-        });
-        const repairedReport = repairedTarget
-          ? await resolveUniqueRepairTarget({
-              executor: state.executor,
-              target: repairedTarget,
-              options: resolveOptions,
-            })
+      if (!repairSteps?.length && failedTraceStep && isBrowserTargetInput(failedTarget)) {
+        await fenceTaskStep(task, null);
+        const structuredSnapshot = state.executor.snapshotStructured
+          ? await state.executor.snapshotStructured().catch(() => undefined)
           : undefined;
-        if (repairedReport) {
-          fallbackMatch = repairedReport;
-          if (repairedReport.status === 'unique') {
+        fallbackSnapshot = structuredSnapshot ?? fallbackSnapshot;
+        const resolveOptions = resolveOptionsForTraceStep(failedTraceStep);
+        await fenceTaskStep(task, null);
+        const report = await resolveUniqueRepairTarget({
+          executor: state.executor,
+          target: failedTarget,
+          options: resolveOptions,
+        });
+        if (report) {
+          fallbackMatch = report;
+          if (report.status === 'unique') {
             repairSteps = patchFailedStepTarget({
               steps: skill.steps,
               failedStepId: failedTraceStep.stepId,
-              target: repairedReport.target,
+              target: report.target,
               targetKey: failed.targetKey,
             });
-            repairReason = `target re-explore resolved by ${repairedReport.strategy}`;
-            fallbackError = state.errorMessage;
+            repairReason = `target re-explore resolved by ${report.strategy}`;
           } else {
-            fallbackError = errorFromMatchReport(repairedReport);
+            fallbackError = errorFromMatchReport(report);
+          }
+        }
+
+        if (!repairSteps?.length && structuredSnapshot) {
+          const repairedTarget = repairBossLikeTargetFromSnapshot({
+            snapshot: structuredSnapshot,
+            failedStepId: failedTraceStep.stepId,
+            targetKey: failed.targetKey,
+            failedTarget,
+          });
+          await fenceTaskStep(task, null);
+          const repairedReport = repairedTarget
+            ? await resolveUniqueRepairTarget({
+                executor: state.executor,
+                target: repairedTarget,
+                options: resolveOptions,
+              })
+            : undefined;
+          if (repairedReport) {
+            fallbackMatch = repairedReport;
+            if (repairedReport.status === 'unique') {
+              repairSteps = patchFailedStepTarget({
+                steps: skill.steps,
+                failedStepId: failedTraceStep.stepId,
+                target: repairedReport.target,
+                targetKey: failed.targetKey,
+              });
+              repairReason = `target re-explore resolved by ${repairedReport.strategy}`;
+              fallbackError = state.errorMessage;
+            } else {
+              fallbackError = errorFromMatchReport(repairedReport);
+            }
           }
         }
       }
-    }
 
-    const fallbackTrace = buildFallbackTraceStep(state, {
-      repairSteps,
-      errorMessage: fallbackError,
-      domSnapshot: fallbackSnapshot,
-      match: fallbackMatch,
-    });
-    return {
-      traceSteps: appendTrace(state, fallbackTrace),
-      route: repairSteps?.length ? 'upgrade' : 'finalize',
-      repairSteps,
-      repairReason,
-      errorMessage: fallbackError,
-    };
+      const fallbackTrace = buildFallbackTraceStep(state, {
+        repairSteps,
+        errorMessage: fallbackError,
+        domSnapshot: fallbackSnapshot,
+        match: fallbackMatch,
+      });
+      return {
+        traceSteps: appendTrace(state, fallbackTrace),
+        route: repairSteps?.length ? 'upgrade' : 'finalize',
+        repairSteps,
+        repairReason,
+        errorMessage: fallbackError,
+      };
+    } catch (error) {
+      return failActiveTaskFromError({
+        task,
+        expectedCurrentStep: null,
+        traceSteps: state.traceSteps,
+        traceStep: buildUnexpectedFailureTrace({
+          stepId: 'fallback_agent',
+          action: 'fallback_agent',
+          stepParams: {
+            failedStepId: state.failedTraceStep?.stepId ?? '',
+            reason: state.onFail?.reason ?? state.errorMessage ?? 'step failed',
+          },
+          error,
+        }),
+        error,
+      });
+    }
   }
 
   async function maybeUpgradeSkillNode(
@@ -457,44 +598,69 @@ function makeGraph(dependencies: Required<PublishingGraphDependencies>) {
   ): Promise<PublishingGraphUpdate> {
     const skill = requireSkill(state);
     const task = requireTask(state);
-    setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'skill_upgrade' });
-    if (!state.repairSteps?.length) {
-      return { route: 'finalize' };
+    try {
+      setExecutorCommandContext(state.executor, { taskId: task.id, stepId: 'skill_upgrade' });
+      if (!state.repairSteps?.length) {
+        return { route: 'finalize' };
+      }
+      await fenceTaskStep(task, null);
+      const nextSkill = await dependencies.createNextSkillVersion({
+        previousSkill: skill,
+        steps: state.repairSteps,
+        meta: {
+          success_rate: 0,
+          usage_count: 0,
+          created_from: 'agent',
+          repaired_from_skill_id: skill.id,
+          repaired_from_version: skill.version,
+          failed_step_id: state.failedTraceStep?.stepId ?? state.currentStepId ?? '',
+          repair_reason:
+            state.repairReason ?? state.onFail?.reason ?? state.errorMessage ?? 'step failed',
+        },
+      });
+      return {
+        traceSteps: appendTrace(
+          state,
+          buildSkillUpgradeTraceStep({ previousSkill: skill, nextSkill }),
+        ),
+        route: 'finalize',
+      };
+    } catch (error) {
+      return failActiveTaskFromError({
+        task,
+        expectedCurrentStep: null,
+        traceSteps: state.traceSteps,
+        traceStep: buildUnexpectedFailureTrace({
+          stepId: 'skill_upgrade',
+          action: 'skill_upgrade',
+          stepParams: {
+            previousSkillId: skill.id,
+            previousVersion: skill.version,
+          },
+          error,
+        }),
+        error,
+      });
     }
-    const nextSkill = await dependencies.createNextSkillVersion({
-      previousSkill: skill,
-      steps: state.repairSteps,
-      meta: {
-        success_rate: 0,
-        usage_count: 0,
-        created_from: 'agent',
-        repaired_from_skill_id: skill.id,
-        repaired_from_version: skill.version,
-        failed_step_id: state.failedTraceStep?.stepId ?? state.currentStepId ?? '',
-        repair_reason:
-          state.repairReason ?? state.onFail?.reason ?? state.errorMessage ?? 'step failed',
-      },
-    });
-    return {
-      traceSteps: appendTrace(
-        state,
-        buildSkillUpgradeTraceStep({ previousSkill: skill, nextSkill }),
-      ),
-      route: 'finalize',
-    };
   }
 
   async function finalizeNode(state: PublishingGraphState): Promise<PublishingGraphUpdate> {
     const task = requireTask(state);
     const skill = requireSkill(state);
     const status = state.status === 'success' ? 'success' : 'failed';
-    await dependencies.completeTask({
+    const completed = await dependencies.completeTask({
       taskId: task.id,
+      userId: task.userId,
+      jobDescriptionId: task.jobDescriptionId,
+      batchId: task.batchId ?? null,
       skillId: skill.id,
       status,
       steps: state.traceSteps,
       errorMessage: status === 'failed' ? (state.errorMessage ?? null) : null,
     });
+    if (!completed) {
+      throw new PublishTaskInactiveError();
+    }
     return { status, route: 'finalize' };
   }
 
@@ -545,6 +711,7 @@ function withDefaultDependencies(
 
 export async function runPublishingAgentGraph(options: {
   jobDescription: JobDescriptionDto;
+  batchId: string;
   settings: PublishJobDescriptionSettings;
   executor: BrowserExecutor;
   target: Record<string, unknown>;
@@ -556,6 +723,7 @@ export async function runPublishingAgentGraph(options: {
   const result = await graph.invoke(
     {
       jobDescription: options.jobDescription,
+      batchId: options.batchId,
       settings: options.settings,
       executor: options.executor,
       credentials: options.credentials,

@@ -72,7 +72,7 @@ async function resolveJobDescriptionId(params: {
     fallbackJobDescriptionId: params.fallbackJobDescriptionId,
     platformJobTitle: params.platformJobTitle,
   });
-  const jobDescriptionId = resolved?.jobDescriptionId ?? params.fallbackJobDescriptionId;
+  const jobDescriptionId = resolved?.jobDescriptionId;
   if (!jobDescriptionId) {
     throw new Error(
       `job description not found for unread message: ${params.message.externalMessageId}`,
@@ -130,11 +130,14 @@ async function processUnreadMessage(params: {
     },
   });
 
-  if (result.outgoingMessage?.deliveryStatus !== 'failed') {
-    await params.adapter.markUnreadMessageProcessed?.(params.message);
-  }
-
   return result;
+}
+
+function candidateMessageAcknowledgementKey(message: UnreadCandidateMessage): string {
+  const browserThreadSelector = message.replyTarget?.browserThreadSelector?.trim();
+  return browserThreadSelector
+    ? `browser-thread:${browserThreadSelector}`
+    : `message:${message.externalMessageId}`;
 }
 
 export async function runCandidateCommunicationSkill(
@@ -162,8 +165,12 @@ export async function runCandidateCommunicationSkill(
         };
       }
 
+      const acknowledgementGroups = new Map<
+        string,
+        { message: UnreadCandidateMessage; allAckable: boolean }
+      >();
       for (const message of unreadMessages) {
-        await processUnreadMessage({
+        const result = await processUnreadMessage({
           userId: params.userId,
           jobDescriptionId: params.jobDescriptionId,
           platform: params.platform,
@@ -173,7 +180,18 @@ export async function runCandidateCommunicationSkill(
           ingestCandidate,
           message,
         });
+        const acknowledgementKey = candidateMessageAcknowledgementKey(message);
+        const acknowledgementGroup = acknowledgementGroups.get(acknowledgementKey);
+        acknowledgementGroups.set(acknowledgementKey, {
+          message,
+          allAckable: Boolean(result.ackable) && (acknowledgementGroup?.allAckable ?? true),
+        });
         processed += 1;
+      }
+      for (const acknowledgementGroup of acknowledgementGroups.values()) {
+        if (acknowledgementGroup.allAckable) {
+          await params.adapter.markUnreadMessageProcessed?.(acknowledgementGroup.message);
+        }
       }
     }
   } catch (error) {

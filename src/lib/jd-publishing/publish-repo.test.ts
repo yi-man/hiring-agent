@@ -26,7 +26,11 @@ jest.mock('@/lib/prisma', () => ({
     jobPublishTask: {
       create: jest.fn(),
       findMany: jest.fn(),
-      update: jest.fn(),
+      updateMany: jest.fn(),
+      groupBy: jest.fn(),
+    },
+    candidateScreeningRun: {
+      groupBy: jest.fn(),
     },
     jobPublishTrace: {
       create: jest.fn(),
@@ -47,7 +51,11 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
     jobPublishTask: {
       create: jest.Mock;
       findMany: jest.Mock;
-      update: jest.Mock;
+      updateMany: jest.Mock;
+      groupBy: jest.Mock;
+    };
+    candidateScreeningRun: {
+      groupBy: jest.Mock;
     };
     jobPublishTrace: {
       create: jest.Mock;
@@ -87,12 +95,21 @@ describe('publish repository', () => {
     prismaMock.publishSkill.updateMany.mockReset();
     prismaMock.$transaction.mockReset();
     prismaMock.$transaction.mockImplementation(async (callback) =>
-      callback({ publishSkill: prismaMock.publishSkill, $executeRaw: prismaMock.$executeRaw }),
+      callback({
+        publishSkill: prismaMock.publishSkill,
+        jobPublishTask: prismaMock.jobPublishTask,
+        jobPublishTrace: prismaMock.jobPublishTrace,
+        $executeRaw: prismaMock.$executeRaw,
+      }),
     );
     prismaMock.$executeRaw.mockReset();
     prismaMock.jobPublishTask.create.mockReset();
     prismaMock.jobPublishTask.findMany.mockReset();
-    prismaMock.jobPublishTask.update.mockReset();
+    prismaMock.jobPublishTask.updateMany.mockReset();
+    prismaMock.jobPublishTask.groupBy.mockReset();
+    prismaMock.jobPublishTask.groupBy.mockResolvedValue([]);
+    prismaMock.candidateScreeningRun.groupBy.mockReset();
+    prismaMock.candidateScreeningRun.groupBy.mockResolvedValue([]);
     prismaMock.jobPublishTrace.create.mockReset();
   });
 
@@ -152,6 +169,24 @@ describe('publish repository', () => {
     });
   });
 
+  it('does not reuse a 0%-successful current publish workflow when an older version succeeded', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(
+      skillRow({ id: 'publish-current-v2', version: 2 }),
+    );
+    prismaMock.jobPublishTask.groupBy.mockResolvedValueOnce([
+      { skillId: 'publish-old-v1', status: 'success', _count: { _all: 3 } },
+      { skillId: 'publish-current-v2', status: 'failed', _count: { _all: 2 } },
+    ]);
+
+    await expect(getActivePublishSkillFromDb('boss-like')).resolves.toBeNull();
+
+    expect(prismaMock.jobPublishTask.groupBy).toHaveBeenCalledWith({
+      by: ['skillId', 'status'],
+      where: { skillId: { in: ['publish-current-v2'] } },
+      _count: { _all: true },
+    });
+  });
+
   it('loads the active workflow for an explicit name and platform', async () => {
     prismaMock.publishSkill.findFirst.mockResolvedValueOnce({
       ...skillRow(),
@@ -201,6 +236,31 @@ describe('publish repository', () => {
         meta: { dsl_version: 'browser-v2', created_from: 'explore' },
       }),
     );
+  });
+
+  it('does not reuse a 0%-successful current screening workflow when an older version succeeded', async () => {
+    prismaMock.publishSkill.findFirst.mockResolvedValueOnce(
+      skillRow({
+        id: 'screen-current-v6',
+        name: 'screen_candidates',
+        version: 6,
+        meta: { dsl_version: 'browser-v2', created_from: 'explore' },
+      }),
+    );
+    prismaMock.candidateScreeningRun.groupBy.mockResolvedValueOnce([
+      { skillId: 'screen-old-v5', status: 'success', _count: { _all: 4 } },
+      { skillId: 'screen-current-v6', status: 'failed', _count: { _all: 1 } },
+    ]);
+
+    await expect(
+      getActiveBrowserV2SkillByName({ name: 'screen_candidates', platform: 'boss-like' }),
+    ).resolves.toBeNull();
+
+    expect(prismaMock.candidateScreeningRun.groupBy).toHaveBeenCalledWith({
+      by: ['skillId', 'status'],
+      where: { skillId: { in: ['screen-current-v6'] } },
+      _count: { _all: true },
+    });
   });
 
   it('allocates browser-v2 v5 after legacy v4', async () => {
@@ -502,6 +562,7 @@ describe('publish repository', () => {
       id: 'task-1',
       userId: 'u1',
       jobDescriptionId: 'jd-1',
+      batchId: 'batch-1',
       skillId: 'boss-like-publish-jd',
       platform: 'boss-like',
       input: { title: '高级前端工程师' },
@@ -516,6 +577,7 @@ describe('publish repository', () => {
     const result = await createPublishTask({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
+      batchId: 'batch-1',
       skillId: 'boss-like-publish-jd',
       platform: 'boss-like',
       input: { title: '高级前端工程师' },
@@ -526,6 +588,7 @@ describe('publish repository', () => {
       data: {
         userId: 'u1',
         jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
         skillId: 'boss-like-publish-jd',
         platform: 'boss-like',
         input: { title: '高级前端工程师' },
@@ -535,24 +598,125 @@ describe('publish repository', () => {
       include: { trace: true },
     });
     expect(result.status).toBe('running');
+    expect(result.batchId).toBe('batch-1');
   });
 
   it('updates the publish task current step while the graph advances', async () => {
-    prismaMock.jobPublishTask.update.mockResolvedValueOnce({ id: 'task-1' });
+    prismaMock.jobPublishTask.updateMany.mockResolvedValueOnce({ count: 1 });
+    const fenceNow = new Date('2026-07-20T10:00:00.000Z');
 
-    await updatePublishTaskCurrentStep({
-      taskId: 'task-1',
-      currentStep: 'fill_title',
-    });
+    await expect(
+      updatePublishTaskCurrentStep({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        expectedCurrentStep: 'open_new_job',
+        currentStep: 'fill_title',
+        now: fenceNow,
+      }),
+    ).resolves.toBe(true);
 
-    expect(prismaMock.jobPublishTask.update).toHaveBeenCalledWith({
-      where: { id: 'task-1' },
+    expect(prismaMock.jobPublishTask.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        status: 'running',
+        currentStep: 'open_new_job',
+        jobDescription: {
+          status: 'publishing',
+          activePublishBatchId: 'batch-1',
+          publishLeaseExpiresAt: { gt: fenceNow },
+        },
+      },
       data: { currentStep: 'fill_title' },
     });
   });
 
-  it('stores task completion and trace steps', async () => {
-    prismaMock.jobPublishTask.update.mockResolvedValueOnce({ id: 'task-1' });
+  it('does not advance a recovered publish task that is no longer running', async () => {
+    prismaMock.jobPublishTask.updateMany.mockResolvedValueOnce({ count: 0 });
+    const fenceNow = new Date('2026-07-20T10:00:00.000Z');
+
+    await expect(
+      updatePublishTaskCurrentStep({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        expectedCurrentStep: 'open_new_job',
+        currentStep: 'fill_title',
+        now: fenceNow,
+      }),
+    ).resolves.toBe(false);
+
+    expect(prismaMock.jobPublishTask.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        status: 'running',
+        currentStep: 'open_new_job',
+        jobDescription: {
+          status: 'publishing',
+          activePublishBatchId: 'batch-1',
+          publishLeaseExpiresAt: { gt: fenceNow },
+        },
+      },
+      data: { currentStep: 'fill_title' },
+    });
+  });
+
+  it('fails closed before advancing a legacy publish task without a batch', async () => {
+    await expect(
+      updatePublishTaskCurrentStep({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: null,
+        expectedCurrentStep: 'open_new_job',
+        currentStep: 'fill_title',
+      }),
+    ).resolves.toBe(false);
+
+    expect(prismaMock.jobPublishTask.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('returns false when the task batch or unexpired JD lease no longer matches', async () => {
+    prismaMock.jobPublishTask.updateMany.mockResolvedValueOnce({ count: 0 });
+    const fenceNow = new Date('2026-07-20T10:00:00.000Z');
+
+    await expect(
+      updatePublishTaskCurrentStep({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        expectedCurrentStep: 'fill_title',
+        currentStep: 'fill_title',
+        now: fenceNow,
+      }),
+    ).resolves.toBe(false);
+
+    expect(prismaMock.jobPublishTask.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: 'task-1',
+        batchId: 'batch-1',
+        jobDescription: {
+          status: 'publishing',
+          activePublishBatchId: 'batch-1',
+          publishLeaseExpiresAt: { gt: fenceNow },
+        },
+      }),
+      data: { currentStep: 'fill_title' },
+    });
+  });
+
+  it('stores task completion and trace steps atomically after winning the CAS', async () => {
+    prismaMock.jobPublishTask.updateMany.mockResolvedValueOnce({ count: 1 });
+    const fenceNow = new Date('2026-07-20T10:00:00.000Z');
     prismaMock.jobPublishTrace.create.mockResolvedValueOnce({
       id: 'trace-1',
       taskId: 'task-1',
@@ -562,17 +726,36 @@ describe('publish repository', () => {
       createdAt: now,
     });
 
-    await completePublishTask({
-      taskId: 'task-1',
-      skillId: 'boss-like-publish-jd',
-      status: 'success',
-      steps: [
-        { stepId: 'open_new_job', action: 'navigate', params: {}, result: { success: true } },
-      ],
-    });
+    await expect(
+      completePublishTask({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        skillId: 'boss-like-publish-jd',
+        status: 'success',
+        steps: [
+          { stepId: 'open_new_job', action: 'navigate', params: {}, result: { success: true } },
+        ],
+        now: fenceNow,
+      }),
+    ).resolves.toBe(true);
 
-    expect(prismaMock.jobPublishTask.update).toHaveBeenCalledWith({
-      where: { id: 'task-1' },
+    expect(prismaMock.jobPublishTask.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        skillId: 'boss-like-publish-jd',
+        status: 'running',
+        currentStep: null,
+        jobDescription: {
+          status: 'publishing',
+          activePublishBatchId: 'batch-1',
+          publishLeaseExpiresAt: { gt: fenceNow },
+        },
+      },
       data: { status: 'success', currentStep: null, errorMessage: null },
     });
     expect(prismaMock.jobPublishTrace.create).toHaveBeenCalledWith({
@@ -587,12 +770,51 @@ describe('publish repository', () => {
     });
   });
 
+  it('does not create a trace after losing the running-to-terminal CAS', async () => {
+    prismaMock.jobPublishTask.updateMany.mockResolvedValueOnce({ count: 0 });
+    const fenceNow = new Date('2026-07-20T10:00:00.000Z');
+
+    await expect(
+      completePublishTask({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        skillId: 'boss-like-publish-jd',
+        status: 'success',
+        steps: [],
+        now: fenceNow,
+      }),
+    ).resolves.toBe(false);
+
+    expect(prismaMock.jobPublishTrace.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before terminal completion when the task has no batch', async () => {
+    await expect(
+      completePublishTask({
+        taskId: 'task-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: null,
+        skillId: 'boss-like-publish-jd',
+        status: 'failed',
+        steps: [],
+        errorMessage: 'legacy task',
+      }),
+    ).resolves.toBe(false);
+
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+    expect(prismaMock.jobPublishTrace.create).not.toHaveBeenCalled();
+  });
+
   it('lists recent publish tasks for the current user and JD', async () => {
     prismaMock.jobPublishTask.findMany.mockResolvedValueOnce([
       {
         id: 'task-1',
         userId: 'u1',
         jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
         skillId: 'boss-like-publish-jd',
         platform: 'boss-like',
         input: { title: '高级前端工程师' },

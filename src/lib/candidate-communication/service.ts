@@ -12,5 +12,8 @@ export async function handleCandidateMessage(params: {
   payload: CandidateMessagePayload;
   dependencies?: CandidateCommunicationGraphDependencyOverrides;
 }): Promise<HandleCandidateMessageResult> {
+  if (params.payload.executeReply && !params.payload.message.externalMessageId?.trim()) {
+    throw new Error('external message id is required before executing a candidate reply');
+  }
   return runCandidateCommunicationGraph(params);
 }

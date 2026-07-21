@@ -21,6 +21,8 @@ const jobDescription: JobDescriptionDto = {
   positionDescription: '负责 Java 微服务和分布式系统',
   salaryRange: null,
   workLocations: [],
+  hiringTarget: 1,
+  onboardedCount: 0,
   tone: 'tech',
   status: 'published',
   content: jdContent,
@@ -102,6 +104,7 @@ const candidateDetail: CandidateScreeningDetailDto = {
     fetchedAt: now,
     createdAt: now,
   },
+  latestPlannedChatRunId: null,
   actionLogs: [],
 };
 

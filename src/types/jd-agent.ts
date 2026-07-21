@@ -5,6 +5,7 @@ export const JD_STATUSES = [
   'ready_to_publish',
   'publishing',
   'published',
+  'filled',
   'publish_failed',
   'offline',
   'archived',
@@ -176,6 +177,8 @@ export type JobDescriptionDto = {
   positionDescription: string;
   salaryRange: string | null;
   workLocations: string[];
+  hiringTarget: number | null;
+  onboardedCount: number;
   tone: JDTone;
   status: JDStatus;
   content: JD;
@@ -201,12 +204,18 @@ export type UpdateJobDescriptionRequest = Partial<{
   positionDescription: string;
   salaryRange: string | null;
   workLocations: string[];
+  hiringTarget: number;
   tone: JDTone;
   status: JDStatus;
   content: JD;
   evaluation: EvaluationResult | null;
   generationMeta: JDAgentResponse['meta'] | null;
 }>;
+
+export type JobDescriptionLifecycleRequest =
+  | { action: 'take_offline' }
+  | { action: 'reopen'; hiringTarget?: number }
+  | { action: 'set_hiring_target'; hiringTarget: number };
 
 export type RegenerateJobDescriptionRequest = {
   currentJd?: JD;

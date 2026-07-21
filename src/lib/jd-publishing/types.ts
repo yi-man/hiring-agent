@@ -164,6 +164,7 @@ export type PublishTaskDto = {
   id: string;
   userId: string;
   jobDescriptionId: string;
+  batchId?: string | null;
   skillId: string;
   platform: PublishPlatform;
   input: Record<string, unknown>;

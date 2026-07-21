@@ -19,7 +19,12 @@ import {
   saveCandidateInterviewFeedback,
   updateJdCandidateProgress,
 } from '@/lib/candidate-screening/client';
-import { CANDIDATE_INTERVIEW_FEEDBACK_STAGES } from '@/lib/candidate-screening/constants';
+import { fetchJobDescription } from '@/lib/jd/client';
+import {
+  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
+  isFinalHiringOutcomeStage,
+  isTerminalCandidateInterviewStage,
+} from '@/lib/candidate-screening/constants';
 import { CANDIDATE_EVALUATION_DIMENSIONS } from '@/lib/candidate-screening/evaluation-dimensions';
 import { getAllowedCandidateInterviewStageTransitions } from '@/lib/candidate-screening/interview-stage';
 import type {
@@ -145,6 +150,7 @@ export function CandidateInterviewDetail({
   const [savingFeedbackStage, setSavingFeedbackStage] =
     useState<CandidateInterviewFeedbackStage | null>(null);
   const [error, setError] = useState('');
+  const [progressNotice, setProgressNotice] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -184,6 +190,7 @@ export function CandidateInterviewDetail({
     if (!candidate) return;
     setIsSavingProgress(true);
     setError('');
+    setProgressNotice('');
     try {
       const updated = await updateJdCandidateProgress(jobDescriptionId, candidateId, {
         interviewStage: stageOverride ?? interviewStage,
@@ -196,6 +203,15 @@ export function CandidateInterviewDetail({
         setEditingStage(nextFeedbackStage(updated.interviewStage, feedbacks));
       } else if (!needsInterviewFeedback(updated.interviewStage)) {
         setEditingStage(null);
+      }
+      if (updated.interviewStage === 'onboarded') {
+        setProgressNotice('已记录候选人入职，JD 招聘进度已更新。');
+        const updatedJobDescription = await fetchJobDescription(jobDescriptionId).catch(() => null);
+        if (updatedJobDescription?.status === 'filled') {
+          setProgressNotice(
+            `已达到招聘目标（已入职 ${updatedJobDescription.onboardedCount} / 目标 ${updatedJobDescription.hiringTarget}），JD 已更新为“已招满”。`,
+          );
+        }
       }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : '保存面试进度失败');
@@ -307,6 +323,13 @@ export function CandidateInterviewDetail({
   const hasInterviewEvidence = feedbacks.length > 0;
   const hasCompleteInterviewEvidence =
     feedbacks.length === CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length;
+  const hasFinalHiringOutcome = isFinalHiringOutcomeStage(candidate.interviewStage);
+  const hasTerminalWorkflow = isTerminalCandidateInterviewStage(candidate.interviewStage);
+  const terminalWorkflowMessage = hasFinalHiringOutcome
+    ? '候选人最终结果已记录，无需再生成录用建议。'
+    : candidate.interviewStage === 'rejected'
+      ? '候选人已淘汰，流程已结束，无需再生成录用建议。'
+      : '候选人已退出，流程已结束，无需再生成录用建议。';
   const decisionButtonLabel = hasCompleteInterviewEvidence ? '生成最终录用建议' : '生成阶段性建议';
   const decisionHref = `/jd-generator/${jobDescriptionId}/candidates/${candidateId}/interview/decision`;
 
@@ -345,6 +368,16 @@ export function CandidateInterviewDetail({
       {error ? (
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
           {error}
+        </div>
+      ) : null}
+
+      {progressNotice ? (
+        <div
+          aria-live="polite"
+          className="border-success/30 bg-success/10 text-success rounded-md border px-4 py-3 text-sm"
+          role="status"
+        >
+          {progressNotice}
         </div>
       ) : null}
 
@@ -496,9 +529,11 @@ export function CandidateInterviewDetail({
                 {pendingStage ? '当前无需评价' : '当前阶段评价已完成'}
               </p>
               <p className="text-muted-foreground mt-1 text-xs">
-                {pendingStage
-                  ? `候选人当前处于“${interviewStageLabels[candidate.interviewStage]}”，进入对应面试阶段后可继续评价。`
-                  : '可以根据完整反馈生成录用建议。'}
+                {hasTerminalWorkflow
+                  ? terminalWorkflowMessage
+                  : pendingStage
+                    ? `候选人当前处于“${interviewStageLabels[candidate.interviewStage]}”，进入对应面试阶段后可继续评价。`
+                    : '可以根据完整反馈生成录用建议。'}
               </p>
             </div>
           )}
@@ -511,7 +546,7 @@ export function CandidateInterviewDetail({
                 <div className="text-sm font-medium">当前面试情况</div>
                 <div aria-label="当前候选人进度">
                   <Chip size="sm" variant="flat">
-                    {candidate.interviewStage}
+                    {interviewStageLabels[candidate.interviewStage]}
                   </Chip>
                 </div>
               </div>
@@ -554,31 +589,39 @@ export function CandidateInterviewDetail({
             </CardBody>
           </Card>
 
-          <Card className="border-border rounded-lg border shadow-none">
-            <CardBody className="space-y-4 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <BrainCircuit className="text-muted-foreground h-4 w-4" aria-hidden />
-                  录用建议
+          {!hasTerminalWorkflow ? (
+            <Card className="border-border rounded-lg border shadow-none">
+              <CardBody className="space-y-4 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <BrainCircuit className="text-muted-foreground h-4 w-4" aria-hidden />
+                    录用建议
+                  </div>
+                  {hasInterviewEvidence ? (
+                    <Button
+                      as={Link}
+                      className="gap-2"
+                      color="primary"
+                      href={decisionHref}
+                      size="sm"
+                    >
+                      {decisionButtonLabel}
+                    </Button>
+                  ) : (
+                    <Button className="gap-2" color="primary" isDisabled size="sm" type="button">
+                      {decisionButtonLabel}
+                    </Button>
+                  )}
                 </div>
-                {hasInterviewEvidence ? (
-                  <Button as={Link} className="gap-2" color="primary" href={decisionHref} size="sm">
-                    {decisionButtonLabel}
-                  </Button>
-                ) : (
-                  <Button className="gap-2" color="primary" isDisabled size="sm" type="button">
-                    {decisionButtonLabel}
-                  </Button>
-                )}
-              </div>
 
-              <p className="text-muted-foreground text-sm leading-6">
-                {hasInterviewEvidence
-                  ? '将在独立执行页加载评价证据、展示计算日志并生成录用建议。'
-                  : '至少完成电话沟通或一轮面试评价后，才能生成阶段性建议。'}
-              </p>
-            </CardBody>
-          </Card>
+                <p className="text-muted-foreground text-sm leading-6">
+                  {hasInterviewEvidence
+                    ? '将在独立执行页加载评价证据、展示计算日志并生成录用建议。'
+                    : '至少完成电话沟通或一轮面试评价后，才能生成阶段性建议。'}
+                </p>
+              </CardBody>
+            </Card>
+          ) : null}
         </aside>
       </div>
     </div>

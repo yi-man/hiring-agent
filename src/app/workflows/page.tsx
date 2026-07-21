@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { Activity, ArrowRight, CheckCircle2, GitBranch, History } from 'lucide-react';
 import { SignInButton } from '@/components/auth/sign-in-button';
 import { getServerAuthSession } from '@/lib/auth/session';
+import { getRecruitmentPlatformLabel } from '@/lib/recruitment-platforms';
 import {
   listLatestActivePublishedWorkflows,
   type PublishedWorkflowSummary,
@@ -21,13 +22,8 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-function readNumberMeta(workflow: PublishedWorkflowSummary, key: string): number | null {
-  const value = workflow.meta?.[key];
-  return typeof value === 'number' ? value : null;
-}
-
 function formatSuccessRate(workflow: PublishedWorkflowSummary): string {
-  const rate = readNumberMeta(workflow, 'success_rate');
+  const rate = workflow.successRate;
   return rate === null ? '暂无' : `${Math.round(rate * 100)}%`;
 }
 
@@ -50,7 +46,7 @@ function SignInPanel() {
 }
 
 function WorkflowListItem({ workflow }: { workflow: PublishedWorkflowSummary }) {
-  const usageCount = readNumberMeta(workflow, 'usage_count');
+  const platformLabel = getRecruitmentPlatformLabel(workflow.platform);
 
   return (
     <Link
@@ -64,14 +60,20 @@ function WorkflowListItem({ workflow }: { workflow: PublishedWorkflowSummary }) 
               <GitBranch className="h-4 w-4" aria-hidden="true" />
             </span>
             <h2 className="text-foreground text-lg font-semibold tracking-normal">
-              {workflow.name}
+              {workflow.name} · {platformLabel}
             </h2>
             <span className="border-border text-muted-foreground rounded-full border px-2 py-0.5 text-xs font-medium">
               v{workflow.version}
             </span>
-            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-              使用中
-            </span>
+            {workflow.successRate === null ? (
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                待验证
+              </span>
+            ) : (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+                使用中
+              </span>
+            )}
           </div>
           <p className="text-muted-foreground mt-3 text-sm leading-6">{workflow.description}</p>
         </div>
@@ -87,7 +89,9 @@ function WorkflowListItem({ workflow }: { workflow: PublishedWorkflowSummary }) 
             <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
             平台
           </div>
-          <div className="text-foreground mt-1 font-medium">{workflow.platform}</div>
+          <div className="text-foreground mt-1 font-medium">
+            {platformLabel}（{workflow.platform}）
+          </div>
         </div>
         <div className="text-sm">
           <div className="text-muted-foreground flex items-center gap-2 text-xs">
@@ -112,9 +116,7 @@ function WorkflowListItem({ workflow }: { workflow: PublishedWorkflowSummary }) 
         </div>
       </div>
 
-      {usageCount !== null ? (
-        <div className="text-muted-foreground mt-4 text-xs">累计使用 {usageCount} 次</div>
-      ) : null}
+      <div className="text-muted-foreground mt-4 text-xs">累计使用 {workflow.usageCount} 次</div>
     </Link>
   );
 }
@@ -140,17 +142,17 @@ export default async function WorkflowsPage() {
               </h1>
             </div>
             <p className="text-muted-foreground text-sm">
-              默认只展示最新使用中的 workflow；历史版本可在详情页查看。
+              默认展示最新有效 workflow；真实成功率为 0% 的流程不会进入列表。
             </p>
           </div>
           <div className="border-border text-muted-foreground rounded-lg border px-3 py-2 text-sm">
-            {workflows.length} 个 active workflow
+            {workflows.length} 个有效 workflow
           </div>
         </div>
 
         {workflows.length === 0 ? (
           <section className="border-border bg-card rounded-lg border px-5 py-12 text-center">
-            <h2 className="text-foreground text-lg font-semibold">暂无使用中的 workflow</h2>
+            <h2 className="text-foreground text-lg font-semibold">暂无有效 workflow</h2>
             <p className="text-muted-foreground mt-2 text-sm">
               当发布技能沉淀为 active 版本后，会自动出现在这里。
             </p>

@@ -20,6 +20,8 @@ function makeJd(overrides: Partial<JobDescriptionDto> = {}): JobDescriptionDto {
     positionDescription: '负责 Java 微服务开发',
     salaryRange: null,
     workLocations: [],
+    hiringTarget: 1,
+    onboardedCount: 0,
     tone: 'formal',
     status: 'published',
     content: {

@@ -165,6 +165,7 @@ export type {
   JDScreeningStatus,
   JDScreeningSummary,
   JDSearchProfile,
+  JobDescriptionLifecycleRequest,
   JobDescriptionDto,
   JobSchema,
   JDTone,

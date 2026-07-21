@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getPublishRun, listPublishRunEvents } from '@/lib/jd-publishing/publish-run-repo';
+import {
+  getPublishRun,
+  listPublishRunEvents,
+  reconcileTerminalPublishRunWithRetry,
+} from '@/lib/jd-publishing/publish-run-repo';
+import { recoverStaleJobDescriptionPublishing } from '@/lib/jd/job-description-repo';
 
 function serverErrorResponse(error: unknown) {
   if (
@@ -22,9 +27,21 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
       return NextResponse.json({ error: 'publish run id is required' }, { status: 400 });
     }
 
-    const run = await getPublishRun({ userId: auth.user.id, runId });
+    let run = await getPublishRun({ userId: auth.user.id, runId });
     if (!run) {
       return NextResponse.json({ error: 'publish run not found' }, { status: 404 });
+    }
+
+    if (run.status === 'success' || run.status === 'failed') {
+      await reconcileTerminalPublishRunWithRetry(run, { maxAttempts: 2 }).catch((error) => {
+        console.error('Failed to self-heal JD status from terminal publish run', { runId, error });
+      });
+    } else {
+      await recoverStaleJobDescriptionPublishing({
+        userId: auth.user.id,
+        id: run.jobDescriptionId,
+      });
+      run = (await getPublishRun({ userId: auth.user.id, runId })) ?? run;
     }
 
     const events = await listPublishRunEvents({

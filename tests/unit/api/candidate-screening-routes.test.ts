@@ -90,6 +90,7 @@ jest.mock('@/lib/candidate-screening/service', () => ({
 }));
 
 jest.mock('@/lib/candidate-screening/repo', () => ({
+  CandidateActionInProgressError: class CandidateActionInProgressError extends Error {},
   listCandidateScreeningRuns: (...args: unknown[]) => listCandidateScreeningRunsMock(...args),
   getCandidateScreeningRun: (...args: unknown[]) => getCandidateScreeningRunMock(...args),
   listCandidateScreeningRunEvents: (...args: unknown[]) =>
@@ -295,6 +296,7 @@ const sampleTrackingOverview: CandidateTrackingOverviewDto = {
 
 const sampleCandidateDetail: CandidateScreeningDetailDto = {
   ...sampleCandidateListItem,
+  latestPlannedChatRunId: 'run-1',
   actionLogs: [
     {
       id: 'action-log-1',
@@ -539,6 +541,47 @@ describe('candidate screening API routes', () => {
 
     expect(response.status).toBe(409);
     expect(body.error).toBe('job description is not eligible for screening');
+    expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
+  });
+
+  it('requires legacy published JDs to set a hiring target before screening', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      ...sampleJobDescription,
+      status: 'published',
+      hiringTarget: null,
+    });
+    const request = jsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs', {
+      platform: 'boss-like',
+    });
+
+    const response = await createScreeningRun(request, {
+      params: params({ id: 'jd-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('hiring target is required before screening');
+    expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start screening after the hiring target has been reached', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      ...sampleJobDescription,
+      status: 'published',
+      hiringTarget: 2,
+      onboardedCount: 2,
+    });
+    const request = jsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs', {
+      platform: 'boss-like',
+    });
+
+    const response = await createScreeningRun(request, {
+      params: params({ id: 'jd-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('hiring target has already been reached');
     expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
   });
 
@@ -897,6 +940,27 @@ describe('candidate screening API routes', () => {
     });
   });
 
+  it('returns the latest planned chat run for a rescreened candidate', async () => {
+    getCandidateScreeningDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      runId: 'run-1',
+      latestPlannedChatRunId: 'run-2',
+    });
+
+    const response = await getJdCandidate({} as Request, {
+      params: params({ id: 'jd-1', candidateId: 'cand-1' }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.candidate).toEqual(
+      expect.objectContaining({
+        runId: 'run-1',
+        latestPlannedChatRunId: 'run-2',
+      }),
+    );
+  });
+
   it('lists structured interview feedback for a scoped candidate', async () => {
     getCandidateScreeningDetailMock.mockResolvedValueOnce(sampleCandidateDetail);
     listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([sampleFeedback]);
@@ -1190,8 +1254,59 @@ describe('candidate screening API routes', () => {
       jobDescriptionId: 'jd-1',
       candidateId: 'cand-1',
       interviewStage: 'contacted',
+      expectedInterviewStage: sampleCandidateDetail.interviewStage,
       notes: 'Invitation sent',
     });
+  });
+
+  it('returns a conflict when candidate progress changes during an update', async () => {
+    const offeredCandidate = { ...sampleCandidateDetail, interviewStage: 'offer' as const };
+    getCandidateScreeningDetailMock
+      .mockResolvedValueOnce(offeredCandidate)
+      .mockResolvedValueOnce({ ...offeredCandidate, interviewStage: 'onboarded' });
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+    updateCandidateInterviewProgressMock.mockResolvedValueOnce(null);
+
+    const response = await updateJdCandidate(
+      jsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', {
+        interviewStage: 'onboarded',
+      }),
+      { params: params({ id: 'jd-1', candidateId: 'cand-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('候选人进度已变化，请刷新后重试');
+    expect(updateCandidateInterviewProgressMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+      interviewStage: 'onboarded',
+      expectedInterviewStage: 'offer',
+    });
+  });
+
+  it('returns a conflict when a running external action blocks a final hiring outcome', async () => {
+    const offeredCandidate = { ...sampleCandidateDetail, interviewStage: 'offer' as const };
+    const { CandidateActionInProgressError } = jest.requireMock(
+      '@/lib/candidate-screening/repo',
+    ) as { CandidateActionInProgressError: new () => Error };
+    getCandidateScreeningDetailMock.mockResolvedValueOnce(offeredCandidate);
+    listCandidateInterviewFeedbacksMock.mockResolvedValueOnce([]);
+    updateCandidateInterviewProgressMock.mockRejectedValueOnce(
+      new CandidateActionInProgressError(),
+    );
+
+    const response = await updateJdCandidate(
+      jsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', {
+        interviewStage: 'onboarded',
+      }),
+      { params: params({ id: 'jd-1', candidateId: 'cand-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('候选人外发动作正在执行，请等待完成后重试');
   });
 
   it('rejects an invalid interview stage jump', async () => {

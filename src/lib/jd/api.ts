@@ -2,6 +2,7 @@ import type {
   CreateJobDescriptionRequest,
   JD,
   JDAgentResponse,
+  JobDescriptionLifecycleRequest,
   JDStatus,
   JDTone,
   RegenerateJobDescriptionRequest,
@@ -36,12 +37,20 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+export function isHiringTarget(value: unknown): value is number {
+  return Number.isInteger(value) && typeof value === 'number' && value >= 1 && value <= 999;
+}
+
 export function isJDTone(value: unknown): value is JDTone {
   return typeof value === 'string' && TONES.includes(value as JDTone);
 }
 
 export function isJDStatus(value: unknown): value is JDStatus {
   return typeof value === 'string' && JD_STATUSES.includes(value as JDStatus);
+}
+
+export function isEditableJobDescriptionStatus(status: string): boolean {
+  return status === 'created' || status === 'ready_to_publish' || status === 'publish_failed';
 }
 
 export function isJDContent(value: unknown): value is JD {
@@ -127,12 +136,21 @@ export function parseUpdateJobDescriptionPayload(
     }
     value.workLocations = workLocations;
   }
+  if (body.hiringTarget !== undefined) {
+    if (!isHiringTarget(body.hiringTarget)) {
+      return { ok: false, error: 'hiringTarget must be an integer between 1 and 999' };
+    }
+    value.hiringTarget = body.hiringTarget;
+  }
   if (body.tone !== undefined) {
     if (!isJDTone(body.tone)) return { ok: false, error: 'tone is invalid' };
     value.tone = body.tone;
   }
   if (body.status !== undefined) {
     if (!isJDStatus(body.status)) return { ok: false, error: 'status is invalid' };
+    if (body.status !== 'ready_to_publish') {
+      return { ok: false, error: 'status can only be set to ready_to_publish' };
+    }
     value.status = body.status;
   }
   if (body.content !== undefined) {
@@ -150,6 +168,41 @@ export function parseUpdateJobDescriptionPayload(
     return { ok: false, error: 'at least one field is required' };
   }
   return { ok: true, value };
+}
+
+export function parseJobDescriptionLifecyclePayload(
+  body: unknown,
+): ValidationResult<JobDescriptionLifecycleRequest> {
+  if (!isRecord(body)) {
+    return { ok: false, error: 'invalid JSON body' };
+  }
+
+  if (body.action === 'take_offline') {
+    return { ok: true, value: { action: 'take_offline' } };
+  }
+  if (body.action === 'reopen') {
+    if (body.hiringTarget !== undefined && !isHiringTarget(body.hiringTarget)) {
+      return { ok: false, error: 'hiringTarget must be an integer between 1 and 999' };
+    }
+    return {
+      ok: true,
+      value:
+        body.hiringTarget === undefined
+          ? { action: 'reopen' }
+          : { action: 'reopen', hiringTarget: body.hiringTarget as number },
+    };
+  }
+  if (body.action === 'set_hiring_target') {
+    if (!isHiringTarget(body.hiringTarget)) {
+      return { ok: false, error: 'hiringTarget must be an integer between 1 and 999' };
+    }
+    return {
+      ok: true,
+      value: { action: 'set_hiring_target', hiringTarget: body.hiringTarget },
+    };
+  }
+
+  return { ok: false, error: 'action is invalid' };
 }
 
 export function parseRegenerateJobDescriptionPayload(

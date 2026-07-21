@@ -15,6 +15,8 @@ const jd = {
   positionDescription: '负责 Java 微服务和高并发系统',
   salaryRange: null,
   workLocations: [],
+  hiringTarget: 1,
+  onboardedCount: 0,
   tone: 'tech',
   status: 'published',
   content: {

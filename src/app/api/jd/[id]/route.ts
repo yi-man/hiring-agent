@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, UnauthorizedError } from '@/lib/auth/session';
-import { getJobDescriptionById, updateMutableJobDescription } from '@/lib/jd/job-description-repo';
+import {
+  getJobDescriptionById,
+  recoverStaleJobDescriptionPublishing,
+  updateMutableJobDescription,
+} from '@/lib/jd/job-description-repo';
 import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
-import { parseUpdateJobDescriptionPayload } from '@/lib/jd/api';
+import { isEditableJobDescriptionStatus, parseUpdateJobDescriptionPayload } from '@/lib/jd/api';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -12,14 +16,18 @@ function conflict(message: string) {
   return NextResponse.json({ error: message }, { status: 409 });
 }
 
-function isPublished(status: string): boolean {
-  return status === 'published';
+function isImmutable(status: string): boolean {
+  return !isEditableJobDescriptionStatus(status);
+}
+
+function immutableConflict(status: string) {
+  return conflict(`${status} job descriptions cannot be modified`);
 }
 
 async function mutableUpdateMissResponse(userId: string, id: string) {
   const latest = await getJobDescriptionById(userId, id);
-  if (latest && isPublished(latest.status)) {
-    return conflict('published job descriptions cannot be modified');
+  if (latest && isImmutable(latest.status)) {
+    return immutableConflict(latest.status);
   }
   return NextResponse.json({ error: 'job description not found' }, { status: 404 });
 }
@@ -44,9 +52,14 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       return badRequest('job description id is required');
     }
 
-    const jobDescription = await getJobDescriptionById(auth.user.id, id);
+    let jobDescription = await getJobDescriptionById(auth.user.id, id);
     if (!jobDescription) {
       return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+    }
+    if (jobDescription.status === 'publishing') {
+      jobDescription =
+        (await recoverStaleJobDescriptionPublishing({ userId: auth.user.id, id })) ??
+        jobDescription;
     }
     const summaries = await listJdScreeningSummaries({
       userId: auth.user.id,
@@ -76,8 +89,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (!current) {
       return NextResponse.json({ error: 'job description not found' }, { status: 404 });
     }
-    if (isPublished(current.status)) {
-      return conflict('published job descriptions cannot be modified');
+    if (isImmutable(current.status)) {
+      return immutableConflict(current.status);
     }
 
     const parsed = parseUpdateJobDescriptionPayload(await request.json());
@@ -85,6 +98,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return badRequest(parsed.error);
     }
     const value = parsed.value;
+    if (
+      value.status === 'ready_to_publish' &&
+      (value.hiringTarget ?? current.hiringTarget) == null
+    ) {
+      return badRequest('hiringTarget is required before ready_to_publish');
+    }
 
     const jobDescription = await updateMutableJobDescription({
       userId: auth.user.id,

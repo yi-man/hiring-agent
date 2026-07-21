@@ -102,6 +102,13 @@ export function parseCandidateMessagePayload(
   }
 
   const externalMessageId = cleanText(body.message.externalMessageId);
+  const executeReply = typeof body.executeReply === 'boolean' ? body.executeReply : true;
+  if (executeReply && !externalMessageId) {
+    return {
+      ok: false,
+      error: 'message.externalMessageId is required when executeReply is true',
+    };
+  }
 
   return {
     ok: true,
@@ -114,7 +121,7 @@ export function parseCandidateMessagePayload(
         externalMessageId: externalMessageId || null,
         receivedAt: receivedAt.value,
       },
-      executeReply: typeof body.executeReply === 'boolean' ? body.executeReply : true,
+      executeReply,
     },
   };
 }

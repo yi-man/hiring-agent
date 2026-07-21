@@ -54,7 +54,9 @@ const workflow: PublishedWorkflow = {
     { id: 'done', type: 'end' as const },
   ],
   stepCount: 2,
-  meta: { usage_count: 12, success_rate: 0.9 },
+  usageCount: 12,
+  successRate: 0.75,
+  meta: { usage_count: 0, success_rate: 0 },
   createdAt: '2026-07-06T08:00:00.000Z',
   updatedAt: '2026-07-07T08:00:00.000Z',
 };
@@ -94,7 +96,8 @@ describe('Workflow detail page', () => {
     );
 
     expect(getPublishedWorkflowDetailMock).toHaveBeenCalledWith('boss-like-publish-jd-v3');
-    expect(screen.getByRole('heading', { name: /publish_jd/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /publish_jd · BOSS-like/i })).toBeInTheDocument();
+    expect(screen.getByText('75%')).toBeInTheDocument();
     const mermaidDiagram = screen.getByTestId('mermaid-diagram');
     expect(mermaidDiagram).toHaveAttribute('data-chart', expect.stringContaining('flowchart TD'));
     expect(screen.queryByText(/flowchart TD/i)).not.toBeInTheDocument();
@@ -104,6 +107,25 @@ describe('Workflow detail page', () => {
       '/workflows/boss-like-publish-jd-v2',
     );
     expect(screen.getByText(/Input Schema/i)).toBeInTheDocument();
+  });
+
+  it('marks an active 0%-successful workflow as invalid everywhere instead of in use', async () => {
+    getServerAuthSessionMock.mockResolvedValueOnce({
+      user: { id: 'u1', username: 'alice', name: 'Alice', email: null, image: null },
+    });
+    const invalidWorkflow = { ...workflow, successRate: 0 };
+    getPublishedWorkflowDetailMock.mockResolvedValueOnce({
+      workflow: invalidWorkflow,
+      versions: [
+        invalidWorkflow,
+        { ...workflow, id: 'boss-like-publish-jd-v2', version: 2, isActive: false },
+      ],
+    });
+
+    render(await WorkflowDetailPage({ params: Promise.resolve({ id: invalidWorkflow.id }) }));
+
+    expect(screen.getAllByText('已失效')).toHaveLength(2);
+    expect(screen.queryByText('使用中')).not.toBeInTheDocument();
   });
 
   it('returns to the originating screening page and preserves it across version navigation', async () => {
