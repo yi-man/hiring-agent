@@ -90,6 +90,10 @@ test.describe('candidate screening UI', () => {
               department: '技术部',
               position: '高级后端工程师',
               positionDescription: '负责 Java 微服务',
+              salaryRange: null,
+              workLocations: [],
+              hiringTarget: 1,
+              onboardedCount: 0,
               tone: 'tech',
               status: 'published',
               content: {
@@ -109,7 +113,7 @@ test.describe('candidate screening UI', () => {
         });
       });
       await page.route('**/api/jd/jd-screening-1/publish', async (route) => {
-        await route.fulfill({ json: { tasks: [] } });
+        await route.fulfill({ json: { tasks: [], runs: [] } });
       });
       await page.route(/\/api\/jd\?status=published$/, async (route) => {
         await route.fulfill({
@@ -121,6 +125,10 @@ test.describe('candidate screening UI', () => {
                 department: '技术部',
                 position: '高级后端工程师',
                 positionDescription: '负责 Java 微服务',
+                salaryRange: null,
+                workLocations: [],
+                hiringTarget: 1,
+                onboardedCount: 0,
                 tone: 'tech',
                 status: 'published',
                 content: {
@@ -439,7 +447,7 @@ test.describe('candidate screening UI', () => {
         'href',
         '/jd-generator/jd-screening-1/candidates?returnTo=%2Fjd-generator%2Fjd-screening-1&returnLabel=%E8%BF%94%E5%9B%9E+JD',
       );
-      await expect(topActions.locator(':scope > *')).toHaveCount(2);
+      await expect(topActions.locator(':scope > *')).toHaveCount(3);
       await expect(page.getByRole('link', { name: /查看执行日志/ })).toHaveCount(0);
 
       await screenedCandidatesLink.click();
@@ -493,6 +501,7 @@ test.describe('candidate screening UI', () => {
 
       await page.goto('/jd-generator');
       await page.getByRole('button', { name: '批量沟通', exact: true }).click();
+      await page.getByRole('button', { name: '开始沟通', exact: true }).click();
 
       expect(communicationRunPayload).toMatchObject({
         mode: 'batch',

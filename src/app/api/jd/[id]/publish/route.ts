@@ -8,7 +8,10 @@ import {
 } from '@/lib/jd/job-description-repo';
 import { parsePublishJobDescriptionPayload } from '@/lib/jd-publishing/publish-payload';
 import { listPublishTasksForJobDescription } from '@/lib/jd-publishing/publish-repo';
-import { reconcilePublishBatchWithRetry } from '@/lib/jd-publishing/publish-run-repo';
+import {
+  listPublishRunsForJobDescription,
+  reconcilePublishBatchWithRetry,
+} from '@/lib/jd-publishing/publish-run-repo';
 import { publishJobDescriptionToBossLike } from '@/lib/jd-publishing/service';
 
 function badRequest(message: string) {
@@ -114,12 +117,19 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 
     await recoverStaleJobDescriptionPublishing({ userId: auth.user.id, id });
 
-    const tasks = await listPublishTasksForJobDescription({
-      userId: auth.user.id,
-      jobDescriptionId: id,
-      limit: 5,
-    });
-    return NextResponse.json({ tasks });
+    const [tasks, runs] = await Promise.all([
+      listPublishTasksForJobDescription({
+        userId: auth.user.id,
+        jobDescriptionId: id,
+        limit: 5,
+      }),
+      listPublishRunsForJobDescription({
+        userId: auth.user.id,
+        jobDescriptionId: id,
+        limit: 5,
+      }),
+    ]);
+    return NextResponse.json({ tasks, runs });
   } catch (error) {
     return serverErrorResponse(error);
   }

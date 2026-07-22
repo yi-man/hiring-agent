@@ -10,7 +10,14 @@ import {
 import { claimJobDescriptionForPublishing } from '@/lib/jd/job-description-repo';
 import { reconcilePublishBatchWithRetry } from '@/lib/jd-publishing/publish-run-repo';
 import { getCompanyProfileForUser } from '@/lib/company-profile/repo';
-import { resolveRecruitmentPlatforms } from '@/lib/recruitment-platforms';
+import {
+  getRecruitmentPlatformLabel,
+  resolveRecruitmentPlatforms,
+} from '@/lib/recruitment-platforms';
+import {
+  findDuplicateRecruitmentPlatformTarget,
+  resolveRecruitmentPlatformRuntimeConfigs,
+} from '@/lib/recruitment-platform-config';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -54,6 +61,15 @@ export async function POST(request: Request) {
     const invalid = parsedSettings.find((parsed) => !parsed.ok);
     if (invalid && !invalid.ok) return badRequest(invalid.error);
     const settings = parsedSettings.flatMap((parsed) => (parsed.ok ? [parsed.value] : []));
+    const runtimeConfigs = await resolveRecruitmentPlatformRuntimeConfigs({
+      userId: auth.user.id,
+      platforms,
+    });
+    const duplicateTarget = findDuplicateRecruitmentPlatformTarget(runtimeConfigs);
+    if (duplicateTarget) {
+      const [first, second] = duplicateTarget.map(getRecruitmentPlatformLabel);
+      return badRequest(`${first}与 ${second} 指向同一招聘站点，请只保留一个平台后再发布`);
+    }
 
     const batchId = randomUUID();
     const claim = await claimJobDescriptionForPublishing({

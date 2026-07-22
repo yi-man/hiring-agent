@@ -167,8 +167,13 @@ type TrackingJobDescriptionRecord = {
   department: string;
   position: string;
   status: string;
+  hiringTarget?: number | null;
   content: unknown;
   updatedAt: Date;
+};
+
+type CandidateTrackingJobRecord = TrackingJobDescriptionRecord & {
+  _count: { candidateScreeningResults: number };
 };
 
 type CandidateWithRelationsRecord = CandidateScreeningResultRecord & {
@@ -369,12 +374,15 @@ export type CandidateTrackingJobDescriptionDto = {
   department: string;
   position: string;
   status: JDStatus;
+  hiringTarget: number | null;
+  onboardedCount: number;
   title: string;
   updatedAt: string;
 };
 
 export type CandidateTrackingJobSummaryDto = {
   jobDescription: CandidateTrackingJobDescriptionDto;
+  hiringGap: number | null;
   totalCandidates: number;
   activeCandidates: number;
   interviewingCandidates: number;
@@ -958,21 +966,27 @@ function readJobTitle(content: unknown, fallback: string): string {
 
 function mapTrackingJobDescription(
   row: TrackingJobDescriptionRecord,
+  onboardedCount = 0,
 ): CandidateTrackingJobDescriptionDto {
   return {
     id: row.id,
     department: row.department,
     position: row.position,
     status: row.status as JDStatus,
+    hiringTarget: row.hiringTarget ?? null,
+    onboardedCount,
     title: readJobTitle(row.content, row.position),
     updatedAt: iso(row.updatedAt),
   };
 }
 
-function mapTrackingCandidate(row: CandidateTrackingRecord): CandidateTrackingCandidateDto {
+function mapTrackingCandidate(
+  row: CandidateTrackingRecord,
+  jobDescription?: CandidateTrackingJobDescriptionDto,
+): CandidateTrackingCandidateDto {
   return {
     ...mapListItem(row),
-    jobDescription: mapTrackingJobDescription(row.jobDescription),
+    jobDescription: jobDescription ?? mapTrackingJobDescription(row.jobDescription),
   };
 }
 
@@ -1611,14 +1625,70 @@ export async function getCandidateTrackingOverview(params: {
   limit?: number;
 }): Promise<CandidateTrackingOverviewDto> {
   const limit = clampListLimit(params.limit);
-  const rows = await prisma.candidateScreeningResult.findMany({
-    where: { userId: params.userId },
-    include: { candidate: true, resume: true, jobDescription: true },
-    orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
-    take: limit,
-  });
-  const candidates = (rows as CandidateTrackingRecord[]).map(mapTrackingCandidate);
+  const [rows, jobRows] = await Promise.all([
+    prisma.candidateScreeningResult.findMany({
+      where: { userId: params.userId },
+      include: { candidate: true, resume: true, jobDescription: true },
+      orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
+      take: limit,
+    }),
+    prisma.jobDescription.findMany({
+      where: {
+        userId: params.userId,
+        status: {
+          in: [
+            'created',
+            'ready_to_publish',
+            'publishing',
+            'published',
+            'filled',
+            'publish_failed',
+            'offline',
+            'archived',
+          ],
+        },
+      },
+      select: {
+        id: true,
+        userId: true,
+        department: true,
+        position: true,
+        status: true,
+        hiringTarget: true,
+        content: true,
+        updatedAt: true,
+        _count: {
+          select: {
+            candidateScreeningResults: { where: { interviewStage: 'onboarded' } },
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    }),
+  ]);
+  const jobDescriptions = (jobRows as CandidateTrackingJobRecord[]).map((row) =>
+    mapTrackingJobDescription(row, row._count.candidateScreeningResults),
+  );
+  const jobDescriptionsById = new Map(jobDescriptions.map((job) => [job.id, job]));
+  const candidates = (rows as CandidateTrackingRecord[]).map((row) =>
+    mapTrackingCandidate(row, jobDescriptionsById.get(row.jobDescription.id)),
+  );
   const jobsById = new Map<string, CandidateTrackingJobSummaryDto>();
+
+  for (const jobDescription of jobDescriptions) {
+    jobsById.set(jobDescription.id, {
+      jobDescription,
+      hiringGap:
+        jobDescription.hiringTarget === null
+          ? null
+          : Math.max(jobDescription.hiringTarget - jobDescription.onboardedCount, 0),
+      totalCandidates: 0,
+      activeCandidates: 0,
+      interviewingCandidates: 0,
+      skippedCandidates: 0,
+      latestCandidateUpdatedAt: jobDescription.updatedAt,
+    });
+  }
 
   for (const candidate of candidates) {
     const current = jobsById.get(candidate.jobDescription.id);
@@ -1635,6 +1705,13 @@ export async function getCandidateTrackingOverview(params: {
 
     jobsById.set(candidate.jobDescription.id, {
       jobDescription: candidate.jobDescription,
+      hiringGap:
+        candidate.jobDescription.hiringTarget === null
+          ? null
+          : Math.max(
+              candidate.jobDescription.hiringTarget - candidate.jobDescription.onboardedCount,
+              0,
+            ),
       totalCandidates: nextTotal,
       activeCandidates: nextActive,
       interviewingCandidates: nextInterviewing,

@@ -147,8 +147,8 @@ describe('JD API helpers', () => {
       error: 'hiringTarget must be an integer between 1 and 999',
     });
     expect(parseJobDescriptionLifecyclePayload({ action: 'archive' })).toEqual({
-      ok: false,
-      error: 'action is invalid',
+      ok: true,
+      value: { action: 'archive' },
     });
   });
 

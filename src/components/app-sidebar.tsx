@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   BrainCircuit,
   Building2,
+  ChartColumn,
   ClipboardList,
   Eye,
   FileCode,
@@ -31,12 +32,19 @@ type AppMenuSection = {
 
 const appMenuSections: AppMenuSection[] = [
   {
+    label: '招聘运营',
     items: [
       {
         label: '工作台',
         description: '招聘运营总览',
         href: '/',
         Icon: LayoutDashboard,
+      },
+      {
+        label: '招聘统计',
+        description: '目标与缺口',
+        href: '/recruitment-stats',
+        Icon: ChartColumn,
       },
     ],
   },

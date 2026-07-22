@@ -157,7 +157,7 @@ describe('job description repository', () => {
   });
 
   it('creates a user-owned JD record and maps json content', async () => {
-    prismaMock.jobDescription.create.mockResolvedValueOnce(row);
+    prismaMock.jobDescription.create.mockResolvedValueOnce({ ...row, hiringTarget: 1 });
 
     const result = await createJobDescription({
       userId: 'u1',
@@ -186,6 +186,9 @@ describe('job description repository', () => {
         generationMeta: sampleMeta,
       }),
     });
+    expect(prismaMock.jobDescription.create.mock.calls[0]?.[0].data).not.toHaveProperty(
+      'hiringTarget',
+    );
     expect(result).toMatchObject({
       id: 'jd-1',
       status: 'created',
@@ -193,7 +196,7 @@ describe('job description repository', () => {
       generationMeta: sampleMeta,
       salaryRange: '30-50K',
       workLocations: ['上海张江', '远程'],
-      hiringTarget: null,
+      hiringTarget: 1,
       onboardedCount: 0,
       updatedAt: '2026-06-25T02:00:00.000Z',
     });
@@ -770,6 +773,57 @@ describe('job description repository', () => {
       where: { id: 'jd-1', userId: 'u1', status: 'published' },
       data: { status: 'offline', activePublishBatchId: null, publishLeaseExpiresAt: null },
     });
+  });
+
+  it('archives an offline JD as a terminal lifecycle state', async () => {
+    prismaMock.jobDescription.findFirst
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'offline',
+        hiringTarget: 2,
+        _count: { candidateScreeningResults: 1 },
+      })
+      .mockResolvedValueOnce({
+        ...row,
+        status: 'archived',
+        hiringTarget: 2,
+        _count: { candidateScreeningResults: 1 },
+      });
+    prismaMock.jobDescription.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await applyJobDescriptionLifecycle({
+      userId: 'u1',
+      id: 'jd-1',
+      request: { action: 'archive' },
+    });
+
+    expect(prismaMock.jobDescription.updateMany).toHaveBeenCalledWith({
+      where: { id: 'jd-1', userId: 'u1', status: 'offline' },
+      data: { status: 'archived', activePublishBatchId: null, publishLeaseExpiresAt: null },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      jobDescription: { status: 'archived' },
+    });
+  });
+
+  it('rejects archiving a JD that is still recruiting', async () => {
+    prismaMock.jobDescription.findFirst.mockResolvedValueOnce({
+      ...row,
+      status: 'published',
+      hiringTarget: 2,
+      _count: { candidateScreeningResults: 1 },
+    });
+
+    await expect(
+      applyJobDescriptionLifecycle({
+        userId: 'u1',
+        id: 'jd-1',
+        request: { action: 'archive' },
+      }),
+    ).resolves.toEqual({ ok: false, reason: 'invalid_transition' });
+    expect(prismaMock.jobDescription.updateMany).not.toHaveBeenCalled();
   });
 
   it('does not close a JD while a candidate outreach action is running', async () => {

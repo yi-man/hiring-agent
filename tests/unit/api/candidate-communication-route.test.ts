@@ -11,6 +11,7 @@ const runCandidateCommunicationSkillMock = jest.fn();
 const executeSingleCandidateActionMock = jest.fn();
 const createCandidateCommunicationRunMock = jest.fn();
 const updateCandidateCommunicationRunMock = jest.fn();
+const resolveRecruitmentPlatformRuntimeConfigsMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -53,6 +54,22 @@ jest.mock('@/lib/candidate-communication/repo', () => ({
     updateCandidateCommunicationRunMock(...args),
 }));
 
+jest.mock('@/lib/recruitment-platform-config', () => ({
+  resolveRecruitmentPlatformRuntimeConfigs: (...args: unknown[]) =>
+    resolveRecruitmentPlatformRuntimeConfigsMock(...args),
+  findDuplicateRecruitmentPlatformTarget: (
+    configs: Array<{ platform: string; siteFingerprint: string }>,
+  ) => {
+    const seen = new Map<string, string>();
+    for (const config of configs) {
+      const existing = seen.get(config.siteFingerprint);
+      if (existing) return [existing, config.platform];
+      seen.set(config.siteFingerprint, config.platform);
+    }
+    return null;
+  },
+}));
+
 function jsonRequest(body: unknown): Request {
   return {
     json: async () => body,
@@ -67,7 +84,15 @@ describe('candidate communication messages route', () => {
     executeSingleCandidateActionMock.mockReset();
     createCandidateCommunicationRunMock.mockReset();
     updateCandidateCommunicationRunMock.mockReset();
+    resolveRecruitmentPlatformRuntimeConfigsMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRecruitmentPlatformRuntimeConfigsMock.mockImplementation(
+      async ({ platforms }: { platforms: string[] }) =>
+        platforms.map((platform) => ({
+          platform,
+          siteFingerprint: `${platform}-site`,
+        })),
+    );
   });
 
   it('ingests a candidate message for the authenticated user', async () => {
@@ -248,6 +273,26 @@ describe('candidate communication messages route', () => {
     });
     expect(body.run.id).toBe('comm-run-1');
     expect(body.run.stats.processed).toBe(2);
+  });
+
+  it('does not run batch communication twice against the same physical site', async () => {
+    resolveRecruitmentPlatformRuntimeConfigsMock.mockResolvedValueOnce([
+      { platform: 'zhilian', siteFingerprint: 'same-site' },
+      { platform: 'boss-like', siteFingerprint: 'same-site' },
+    ]);
+
+    const res = await startCommunicationRun(
+      jsonRequest({
+        mode: 'batch',
+        jobDescriptionId: 'jd-1',
+        platforms: ['zhilian', 'boss-like'],
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe('智联招聘与 BOSS-like 指向同一招聘站点，请只保留一个平台后再沟通');
+    expect(createCandidateCommunicationRunMock).not.toHaveBeenCalled();
   });
 
   it('creates a single-candidate communication run', async () => {

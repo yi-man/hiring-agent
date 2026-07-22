@@ -12,6 +12,7 @@ import {
   STALE_CANDIDATE_ACTION_ERROR_MESSAGE,
   STALE_CANDIDATE_ACTION_TIMEOUT_MS,
   claimCandidateActionLog,
+  getCandidateTrackingOverview,
   updateCandidateActionLog,
   updateCandidateInterviewProgress,
 } from '@/lib/candidate-screening/repo';
@@ -180,6 +181,81 @@ describe('JD hiring lifecycle with real PostgreSQL', () => {
 
   afterAll(async () => {
     await prisma.$disconnect();
+  });
+
+  it('uses the PostgreSQL default hiring target for a new JD', async () => {
+    const fixtureId = randomUUID();
+    const user = await prisma.user.create({
+      data: {
+        username: `jd-default-hiring-target-${fixtureId}`,
+        passwordHash: 'pbkdf2_sha256$fixture',
+        name: 'JD Default Hiring Target User',
+        email: `jd-default-hiring-target-${fixtureId}@example.com`,
+      },
+    });
+    createdUserIds.add(user.id);
+
+    const jobDescription = await createJobDescription({
+      userId: user.id,
+      department: '技术部',
+      position: '高级后端工程师',
+      positionDescription: '负责招聘系统核心服务建设',
+      tone: 'tech',
+      content: sampleJd,
+      evaluation: null,
+      generationMeta: null,
+    });
+
+    expect(jobDescription.hiringTarget).toBe(1);
+    await expect(
+      prisma.jobDescription.findUniqueOrThrow({
+        where: { id: jobDescription.id },
+        select: { hiringTarget: true },
+      }),
+    ).resolves.toEqual({ hiringTarget: 1 });
+  });
+
+  it('includes onboarded counts and recruiting jobs without candidates in the tracking overview', async () => {
+    const fixture = await createHiringFixture({
+      hiringTarget: 2,
+      jobStatus: 'published',
+      interviewStage: 'onboarded',
+    });
+    const emptyJob = await createJobDescription({
+      userId: fixture.userId,
+      department: '数据部',
+      position: '数据工程师',
+      positionDescription: '负责招聘数据平台建设',
+      hiringTarget: 2,
+      tone: 'tech',
+      status: 'published',
+      content: { ...sampleJd, title: '数据工程师' },
+      evaluation: null,
+      generationMeta: null,
+    });
+
+    const overview = await getCandidateTrackingOverview({ userId: fixture.userId });
+
+    expect(overview.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          jobDescription: expect.objectContaining({
+            id: fixture.jobDescriptionId,
+            onboardedCount: 1,
+          }),
+          hiringGap: 1,
+          totalCandidates: 1,
+        }),
+        expect.objectContaining({
+          jobDescription: expect.objectContaining({
+            id: emptyJob.id,
+            onboardedCount: 0,
+          }),
+          hiringGap: 2,
+          totalCandidates: 0,
+        }),
+      ]),
+    );
   });
 
   it('persists the target, counts onboarded candidates live, and requires an explicit reopen', async () => {

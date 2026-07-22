@@ -9,6 +9,7 @@ import {
   initializePublishRun,
   schedulePublishRuns,
 } from '@/lib/jd-publishing/publish-run-service';
+import { resolveRecruitmentPlatformRuntimeConfigs } from '@/lib/recruitment-platform-config';
 import type { JobDescriptionDto } from '@/types';
 
 jest.mock('next/server', () => ({
@@ -46,6 +47,21 @@ jest.mock('@/lib/jd-publishing/publish-run-service', () => ({
   schedulePublishRuns: jest.fn(),
 }));
 
+jest.mock('@/lib/recruitment-platform-config', () => ({
+  resolveRecruitmentPlatformRuntimeConfigs: jest.fn(),
+  findDuplicateRecruitmentPlatformTarget: jest.fn(
+    (configs: Array<{ platform: string; siteFingerprint: string }>) => {
+      const seen = new Map<string, string>();
+      for (const config of configs) {
+        const existing = seen.get(config.siteFingerprint);
+        if (existing) return [existing, config.platform];
+        seen.set(config.siteFingerprint, config.platform);
+      }
+      return null;
+    },
+  ),
+}));
+
 const getCompanyProfileMock = getCompanyProfileForUser as jest.MockedFunction<
   typeof getCompanyProfileForUser
 >;
@@ -63,6 +79,10 @@ const initializePublishRunMock = initializePublishRun as jest.MockedFunction<
 const schedulePublishRunsMock = schedulePublishRuns as jest.MockedFunction<
   typeof schedulePublishRuns
 >;
+const resolveRecruitmentPlatformRuntimeConfigsMock =
+  resolveRecruitmentPlatformRuntimeConfigs as jest.MockedFunction<
+    typeof resolveRecruitmentPlatformRuntimeConfigs
+  >;
 
 function run(platform: string, index: number, batchId = 'batch-1') {
   const timestamp = '2026-07-17T00:00:00.000Z';
@@ -113,6 +133,17 @@ const sampleJobDescription = {
 describe('POST /api/jd/publish-runs', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resolveRecruitmentPlatformRuntimeConfigsMock.mockImplementation(async ({ platforms }) =>
+      platforms.map((platform) => ({
+        platform,
+        baseUrl: `https://${platform}.example.com`,
+        username: 'admin',
+        password: 'secret',
+        variables: {},
+        siteFingerprint: `${platform}-fingerprint`,
+        siteTemplatePlatform: platform,
+      })),
+    );
     claimJobDescriptionForPublishingMock.mockResolvedValue({
       ok: true,
       jobDescription: { ...sampleJobDescription, status: 'publishing' },
@@ -183,6 +214,50 @@ describe('POST /api/jd/publish-runs', () => {
       'boss',
       'liepin',
     ]);
+  });
+
+  it('rejects platforms that resolve to the same physical recruitment site', async () => {
+    resolveRecruitmentPlatformRuntimeConfigsMock.mockResolvedValueOnce([
+      {
+        platform: 'zhilian',
+        baseUrl: 'http://localhost:6183',
+        username: 'admin',
+        password: 'secret',
+        variables: { newJobPath: '/employer/jobs/new' },
+        siteFingerprint: 'same-site',
+        siteTemplatePlatform: 'boss-like',
+      },
+      {
+        platform: 'boss-like',
+        baseUrl: 'http://localhost:6183',
+        username: 'admin',
+        password: 'secret',
+        variables: { newJobPath: '/employer/jobs/new' },
+        siteFingerprint: 'same-site',
+        siteTemplatePlatform: 'boss-like',
+      },
+    ]);
+
+    const response = await POST(
+      new Request('http://localhost/api/jd/publish-runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: 'jd-1',
+          platforms: ['zhilian', 'boss-like'],
+          company: '深海数据',
+          salary: '30-50K',
+          location: '上海',
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('智联招聘与 BOSS-like 指向同一招聘站点，请只保留一个平台后再发布');
+    expect(claimJobDescriptionForPublishingMock).not.toHaveBeenCalled();
+    expect(initializePublishRunMock).not.toHaveBeenCalled();
+    expect(schedulePublishRunsMock).not.toHaveBeenCalled();
   });
 
   it('rejects publishing when the hiring target is not configured', async () => {

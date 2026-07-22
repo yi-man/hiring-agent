@@ -9,6 +9,7 @@ import { CandidateInterviewDetail } from '@/components/candidate-screening/candi
 import { CandidateDecisionRun } from '@/components/candidate-screening/candidate-decision-run';
 import { CandidateScreeningRunLog } from '@/components/candidate-screening/screening-run-log';
 import { CandidateTrackingDashboard } from '@/components/candidate-screening/tracking-dashboard';
+import { RecruitmentStatsPage } from '@/components/dashboard/recruitment-stats-page';
 import type {
   CandidateDto,
   CandidateInterviewFeedbackDto,
@@ -26,6 +27,7 @@ import type { JD, JobDescriptionDto } from '@/types';
 
 const fetchJobDescriptionsMock = jest.fn();
 const fetchJobDescriptionMock = jest.fn();
+const fetchJobDescriptionPublishHistoryMock = jest.fn();
 const fetchJobDescriptionPublishTasksMock = jest.fn();
 const fetchJobDescriptionCreateRunsMock = jest.fn();
 const fetchJobDescriptionRegenerateRunsMock = jest.fn();
@@ -58,6 +60,8 @@ jest.mock('next/navigation', () => ({
 jest.mock('@/lib/jd/client', () => ({
   createJobDescriptionFromInput: jest.fn(),
   fetchJobDescription: (...args: unknown[]) => fetchJobDescriptionMock(...args),
+  fetchJobDescriptionPublishHistory: (...args: unknown[]) =>
+    fetchJobDescriptionPublishHistoryMock(...args),
   fetchJobDescriptionCreateRuns: (...args: unknown[]) => fetchJobDescriptionCreateRunsMock(...args),
   fetchJobDescriptionRegenerateRuns: (...args: unknown[]) =>
     fetchJobDescriptionRegenerateRunsMock(...args),
@@ -733,10 +737,13 @@ const sampleTrackingOverview: CandidateTrackingOverviewDto = {
         department: '技术部',
         position: '高级后端工程师',
         status: 'published',
+        hiringTarget: 3,
+        onboardedCount: 1,
         title: '高级后端工程师',
         updatedAt: now,
       },
       totalCandidates: 2,
+      hiringGap: 2,
       activeCandidates: 1,
       interviewingCandidates: 1,
       skippedCandidates: 1,
@@ -751,6 +758,8 @@ const sampleTrackingOverview: CandidateTrackingOverviewDto = {
         department: '技术部',
         position: '高级后端工程师',
         status: 'published',
+        hiringTarget: 3,
+        onboardedCount: 1,
         title: '高级后端工程师',
         updatedAt: now,
       },
@@ -765,6 +774,7 @@ describe('candidate screening UI', () => {
     mockSearchParams = new URLSearchParams();
     fetchJobDescriptionsMock.mockReset();
     fetchJobDescriptionMock.mockReset();
+    fetchJobDescriptionPublishHistoryMock.mockReset();
     fetchJobDescriptionCreateRunsMock.mockReset();
     fetchJobDescriptionRegenerateRunsMock.mockReset();
     fetchJobDescriptionPublishTasksMock.mockReset();
@@ -815,6 +825,7 @@ describe('candidate screening UI', () => {
     });
     fetchJobDescriptionsMock.mockResolvedValue([sampleJobDescription]);
     fetchJobDescriptionMock.mockResolvedValue(sampleJobDescription);
+    fetchJobDescriptionPublishHistoryMock.mockResolvedValue({ tasks: [], runs: [] });
     fetchJobDescriptionCreateRunsMock.mockResolvedValue([]);
     fetchJobDescriptionRegenerateRunsMock.mockResolvedValue([]);
     fetchJobDescriptionPublishTasksMock.mockResolvedValue([]);
@@ -1472,13 +1483,15 @@ describe('candidate screening UI', () => {
     );
   });
 
-  it('candidate tracking dashboard shows JD summaries and linked candidates', async () => {
+  it('candidate tracking dashboard stays focused on filtering and linked candidates', async () => {
     render(<CandidateTrackingDashboard />);
 
-    expect(await screen.findByText('候选人跟踪')).toBeInTheDocument();
+    expect(await screen.findByText('候选人列表')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '返回 JD 工作台' })).not.toBeInTheDocument();
-    expect(screen.getByText('1 个跟进中')).toBeInTheDocument();
-    expect(screen.getByText('1 个面试中')).toBeInTheDocument();
+    expect(screen.getByLabelText('招聘类型')).toHaveValue('recruiting');
+    expect(screen.queryByLabelText('JD 筛选')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('招聘进度概览')).not.toBeInTheDocument();
+    expect(screen.queryByText('招聘缺口与入职进度')).not.toBeInTheDocument();
     expect(screen.getByText('下周一面')).toBeInTheDocument();
 
     const candidateLink = screen.getByRole('link', { name: /Ada Lovelace/ });
@@ -1486,15 +1499,89 @@ describe('candidate screening UI', () => {
       '/jd-generator/jd-1/candidates/cand-1',
     );
     expectReturnContext(candidateLink.getAttribute('href') ?? '', '/candidates', '返回候选人列表');
-    const scopedListLink = screen.getByRole('button', { name: '查看候选人' });
-    expect(parsedHref(scopedListLink.getAttribute('href') ?? '').pathname).toBe(
-      '/jd-generator/jd-1/candidates',
-    );
-    expectReturnContext(scopedListLink.getAttribute('href') ?? '', '/candidates', '返回候选人列表');
     expect(screen.getByRole('button', { name: '查看原站' })).toHaveAttribute(
       'href',
       '/api/jd/jd-1/candidates/cand-1/original-profile',
     );
+  });
+
+  it('recruitment stats calls out gaps and recruiting jobs without hiring targets', async () => {
+    fetchCandidateTrackingOverviewMock.mockResolvedValueOnce({
+      ...sampleTrackingOverview,
+      jobs: [
+        ...sampleTrackingOverview.jobs,
+        {
+          ...sampleTrackingOverview.jobs[0],
+          jobDescription: {
+            ...sampleTrackingOverview.jobs[0].jobDescription,
+            id: 'jd-without-target',
+            position: '数据工程师',
+            title: '数据工程师',
+            hiringTarget: null,
+            onboardedCount: 0,
+          },
+          hiringGap: null,
+          totalCandidates: 0,
+          activeCandidates: 0,
+          interviewingCandidates: 0,
+          skippedCandidates: 0,
+        },
+        {
+          ...sampleTrackingOverview.jobs[0],
+          jobDescription: {
+            ...sampleTrackingOverview.jobs[0].jobDescription,
+            id: 'jd-filled',
+            status: 'filled',
+            hiringTarget: 1,
+            onboardedCount: 1,
+          },
+          hiringGap: 0,
+          activeCandidates: 7,
+        },
+      ],
+    });
+
+    render(<RecruitmentStatsPage />);
+
+    expect(await screen.findByRole('heading', { name: '招聘统计' })).toBeInTheDocument();
+    expect(await screen.findByText('2 个未招满岗位')).toBeInTheDocument();
+    expect(screen.getByText('还缺 2 人')).toBeInTheDocument();
+    expect(screen.getByText('1 个岗位未设置招聘目标')).toBeInTheDocument();
+    expect(screen.getByText('未设置')).toBeInTheDocument();
+    expect(screen.queryByText('未设置 人')).not.toBeInTheDocument();
+    const activeCandidatesCard = screen.getByText('正在推进').parentElement?.parentElement;
+    expect(activeCandidatesCard).not.toBeNull();
+    expect(within(activeCandidatesCard as HTMLElement).getByText('1 人')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /查看已入职人员，共 2 人/ })).toHaveAttribute(
+      'href',
+      '/candidates?scope=onboarded&recruitmentType=all',
+    );
+  });
+
+  it('candidate list opens the onboarded drill-down from recruitment stats', async () => {
+    mockSearchParams = new URLSearchParams('scope=onboarded&recruitmentType=all');
+    fetchCandidateTrackingOverviewMock.mockResolvedValueOnce({
+      jobs: sampleTrackingOverview.jobs,
+      candidates: [
+        {
+          ...sampleTrackingOverview.candidates[0],
+          id: 'result-onboarded',
+          candidateId: 'cand-onboarded',
+          candidate: {
+            ...sampleCandidate,
+            id: 'cand-onboarded',
+            displayName: 'Onboarded Candidate',
+          },
+          interviewStage: 'onboarded',
+        },
+      ],
+    });
+
+    render(<CandidateTrackingDashboard />);
+
+    expect(screen.getByLabelText('招聘类型')).toHaveValue('all');
+    expect(screen.getByLabelText('跟踪范围')).toHaveValue('onboarded');
+    expect(await screen.findByRole('link', { name: /Onboarded Candidate/ })).toBeInTheDocument();
   });
 
   it('candidate tracking dashboard separates active and ended candidates', async () => {
@@ -1561,6 +1648,11 @@ describe('candidate screening UI', () => {
     expect(screen.queryByRole('link', { name: /Ended Candidate/ })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Offer Candidate/ })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Onboarded Candidate/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('跟踪范围'), { target: { value: 'onboarded' } });
+
+    expect(await screen.findByRole('link', { name: /Onboarded Candidate/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Ended Candidate/ })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('跟踪范围'), { target: { value: 'ended' } });
 

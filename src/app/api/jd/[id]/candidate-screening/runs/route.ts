@@ -8,7 +8,14 @@ import {
 import { createAndStartCandidateScreeningRun } from '@/lib/candidate-screening/service';
 import { getJobDescriptionById } from '@/lib/jd/job-description-repo';
 import { getCompanyProfileForUser } from '@/lib/company-profile/repo';
-import { resolveRecruitmentPlatforms } from '@/lib/recruitment-platforms';
+import {
+  getRecruitmentPlatformLabel,
+  resolveRecruitmentPlatforms,
+} from '@/lib/recruitment-platforms';
+import {
+  findDuplicateRecruitmentPlatformTarget,
+  resolveRecruitmentPlatformRuntimeConfigs,
+} from '@/lib/recruitment-platform-config';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -96,6 +103,17 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         { error: 'hiring target has already been reached' },
         { status: 409 },
       );
+    }
+    if (platforms.length > 1) {
+      const runtimeConfigs = await resolveRecruitmentPlatformRuntimeConfigs({
+        userId: auth.user.id,
+        platforms,
+      });
+      const duplicateTarget = findDuplicateRecruitmentPlatformTarget(runtimeConfigs);
+      if (duplicateTarget) {
+        const [first, second] = duplicateTarget.map(getRecruitmentPlatformLabel);
+        return badRequest(`${first}与 ${second} 指向同一招聘站点，请只保留一个平台后再筛选`);
+      }
     }
 
     const runs = await Promise.all(

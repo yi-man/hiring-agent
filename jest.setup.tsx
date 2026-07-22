@@ -64,6 +64,7 @@ jest.mock('lucide-react', () => ({
   Building2: () => <div data-testid="building2-icon" />,
   Cable: () => <div data-testid="cable-icon" />,
   CalendarCheck2: () => <div data-testid="calendar-check2-icon" />,
+  ChartColumn: () => <div data-testid="chart-column-icon" />,
   CheckCircle2: () => <div data-testid="check-circle2-icon" />,
   CircleOff: () => <div data-testid="circle-off-icon" />,
   ClipboardList: () => <div data-testid="clipboard-list-icon" />,

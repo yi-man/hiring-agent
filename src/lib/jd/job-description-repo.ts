@@ -61,7 +61,7 @@ type CreateJobDescriptionParams = {
   positionDescription: string;
   salaryRange?: string | null;
   workLocations?: string[] | null;
-  hiringTarget?: number | null;
+  hiringTarget?: number;
   tone: JDTone;
   status?: JDStatus;
   content: JD;
@@ -136,7 +136,7 @@ export async function createJobDescription(
         params.workLocations === undefined || params.workLocations === null
           ? Prisma.JsonNull
           : toJson(params.workLocations),
-      hiringTarget: params.hiringTarget ?? null,
+      ...(params.hiringTarget === undefined ? {} : { hiringTarget: params.hiringTarget }),
       tone: params.tone,
       status: params.status ?? 'created',
       content: toJson(params.content),
@@ -690,6 +690,20 @@ export async function applyJobDescriptionLifecycle(params: {
         return { ok: false, reason: 'invalid_transition' };
       }
       status = 'offline';
+    } else if (params.request.action === 'archive') {
+      activePublishBatchId = null;
+      publishLeaseExpiresAt = null;
+      if (
+        current.status === 'archived' &&
+        record.activePublishBatchId === null &&
+        record.publishLeaseExpiresAt === null
+      ) {
+        return { ok: true, changed: false, jobDescription: current };
+      }
+      if (current.status !== 'offline' && current.status !== 'archived') {
+        return { ok: false, reason: 'invalid_transition' };
+      }
+      status = 'archived';
     } else if (params.request.action === 'set_hiring_target') {
       if (!['published', 'filled', 'offline'].includes(current.status)) {
         return { ok: false, reason: 'invalid_transition' };
@@ -727,7 +741,7 @@ export async function applyJobDescriptionLifecycle(params: {
 
     if (
       status !== current.status &&
-      (status === 'filled' || status === 'offline') &&
+      (status === 'filled' || status === 'offline' || status === 'archived') &&
       (await hasRunningCandidateOutreach(tx, {
         userId: params.userId,
         jobDescriptionId: params.id,

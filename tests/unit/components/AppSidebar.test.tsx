@@ -9,6 +9,7 @@ jest.mock('next/navigation', () => ({
 jest.mock('lucide-react', () => ({
   BrainCircuit: () => <svg aria-hidden="true" />,
   Building2: () => <svg aria-hidden="true" />,
+  ChartColumn: () => <svg aria-hidden="true" />,
   ClipboardList: () => <svg aria-hidden="true" />,
   Eye: () => <svg aria-hidden="true" />,
   FileCode: () => <svg aria-hidden="true" />,
@@ -31,6 +32,10 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('link', { name: /候选人列表/ })).toHaveAttribute('href', '/candidates');
     expect(screen.getByRole('link', { name: /简历列表/ })).toHaveAttribute('href', '/resumes');
     expect(screen.getByRole('link', { name: /面试记录/ })).toHaveAttribute('href', '/interviews');
+    expect(screen.getByRole('link', { name: /招聘统计/ })).toHaveAttribute(
+      'href',
+      '/recruitment-stats',
+    );
   });
 
   it('marks resumes as current without marking the JD workspace', () => {

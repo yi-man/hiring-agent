@@ -147,7 +147,7 @@ test.describe('LLM Observability dashboard', () => {
 
     await expect(page.getByText('Today')).toBeVisible();
     await expect(page.getByText('Week')).toBeVisible();
-    await expect(page.getByText('Total')).toBeVisible();
+    await expect(page.getByText('Total', { exact: true })).toBeVisible();
 
     await expect(page.getByPlaceholder('openai')).toBeVisible();
     await expect(page.getByPlaceholder('gpt-4o-mini')).toBeVisible();

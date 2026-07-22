@@ -42,7 +42,7 @@ import type { CompanyProfileDto } from '@/lib/company-profile/types';
 import {
   fetchJobDescriptionCreateRuns,
   fetchJobDescription,
-  fetchJobDescriptionPublishTasks,
+  fetchJobDescriptionPublishHistory,
   fetchJobDescriptionRegenerateRuns,
   fetchJobDescriptions,
   startJobDescriptionCreateRun,
@@ -55,9 +55,11 @@ import {
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
 import { getJobDescriptionDisplayTitle } from '@/lib/jd/display';
 import type { JobDescriptionRegenerateRunDto } from '@/lib/jd/regenerate-run-repo';
+import type { JobDescriptionPublishRunDto } from '@/lib/jd-publishing/publish-run-repo';
 import type { PublishTaskDto, PublishTaskResult } from '@/lib/jd-publishing/types';
 import {
   DEFAULT_RECRUITMENT_PLATFORMS,
+  isRecruitmentPlatform,
   type RecruitmentPlatform,
 } from '@/lib/recruitment-platforms';
 import { JD_STATUSES } from '@/types';
@@ -251,8 +253,13 @@ function parseHiringTarget(value: string): number | null {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999 ? parsed : null;
 }
 
-function hiringTargetInputValue(hiringTarget: number | null | undefined): string {
-  return hiringTarget === null || hiringTarget === undefined ? '' : String(hiringTarget);
+function hiringTargetInputValue(
+  jobDescription: Pick<JobDescriptionDto, 'hiringTarget' | 'status'>,
+): string {
+  if (jobDescription.hiringTarget === null || jobDescription.hiringTarget === undefined) {
+    return isEditableJobDescriptionStatus(jobDescription.status) ? '1' : '';
+  }
+  return String(jobDescription.hiringTarget);
 }
 
 function hasOpenHiringCapacity(
@@ -266,6 +273,26 @@ function hasOpenHiringCapacity(
 
 function isEditableJobDescriptionStatus(status: JDStatus): boolean {
   return status === 'created' || status === 'ready_to_publish' || status === 'publish_failed';
+}
+
+function latestPublishBatchPlatforms(
+  attempts: ReadonlyArray<
+    | Pick<PublishTaskDto, 'batchId' | 'platform' | 'status'>
+    | Pick<JobDescriptionPublishRunDto, 'batchId' | 'platform' | 'status'>
+  >,
+  status: JDStatus,
+): RecruitmentPlatform[] {
+  const latestAttempt = attempts[0];
+  if (!latestAttempt) return [];
+  const latestBatchAttempts = latestAttempt.batchId
+    ? attempts.filter((attempt) => attempt.batchId === latestAttempt.batchId)
+    : [latestAttempt];
+  const completedPlatforms = ['published', 'filled', 'offline', 'archived'].includes(status)
+    ? latestBatchAttempts.filter((attempt) => attempt.status === 'success')
+    : latestBatchAttempts;
+  return [
+    ...new Set(completedPlatforms.map((attempt) => attempt.platform).filter(isRecruitmentPlatform)),
+  ];
 }
 
 function StatusChip({ status }: { status: JDStatus }) {
@@ -1208,13 +1235,18 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     setIsLoading(true);
     setError('');
     try {
-      const [data, tasks, companySettings, creationRuns, regenerationRuns] = await Promise.all([
-        fetchJobDescription(jobDescriptionId),
-        fetchJobDescriptionPublishTasks(jobDescriptionId).catch(() => []),
-        fetchCompanySettings().catch(() => ({ profile: null, platforms: [] })),
-        fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
-        fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
-      ]);
+      const [data, publishHistory, companySettings, creationRuns, regenerationRuns] =
+        await Promise.all([
+          fetchJobDescription(jobDescriptionId),
+          fetchJobDescriptionPublishHistory(jobDescriptionId).catch(() => ({
+            tasks: [],
+            runs: [],
+          })),
+          fetchCompanySettings().catch(() => ({ profile: null, platforms: [] })),
+          fetchJobDescriptionCreateRuns({ jobDescriptionId, limit: 3 }).catch(() => []),
+          fetchJobDescriptionRegenerateRuns(jobDescriptionId, { limit: 3 }).catch(() => []),
+        ]);
+      const { tasks, runs: publishRuns } = publishHistory;
       const { profile, platforms } = companySettings;
       setJobDescription(data);
       setForm(jdToForm(data.content));
@@ -1226,16 +1258,30 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setCompanyProfile(profile);
       setAvailablePlatforms(platforms);
       const defaultPlatforms = profile?.supportedPlatforms ?? DEFAULT_RECRUITMENT_PLATFORMS;
-      setPublishPlatforms(defaultPlatforms);
-      setScreeningPlatforms(defaultPlatforms);
+      const actualPublishPlatforms = latestPublishBatchPlatforms(
+        publishRuns.length > 0 ? publishRuns : tasks,
+        data.status,
+      );
+      setPublishPlatforms(
+        actualPublishPlatforms.length > 0 ? actualPublishPlatforms : defaultPlatforms,
+      );
+      setScreeningPlatforms(
+        data.status === 'published' && actualPublishPlatforms.length > 0
+          ? actualPublishPlatforms
+          : defaultPlatforms,
+      );
       setPublishCompany(profile?.name ?? '');
       setPublishSalary(data.salaryRange ?? '');
-      setHiringTargetInput(hiringTargetInputValue(data.hiringTarget));
+      setHiringTargetInput(hiringTargetInputValue(data));
+      const availableLocationLabels = profile?.locations.map((location) => location.label) ?? [];
+      const validSavedLocations = data.workLocations.filter((location) =>
+        availableLocationLabels.includes(location),
+      );
       setSelectedPublishLocations(
-        data.workLocations.length > 0
-          ? data.workLocations
-          : profile?.locations[0]?.label
-            ? [profile.locations[0].label]
+        validSavedLocations.length > 0
+          ? validSavedLocations
+          : availableLocationLabels[0]
+            ? [availableLocationLabels[0]]
             : [],
       );
     } catch (e) {
@@ -1341,7 +1387,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         setJobDescription(latest);
         setForm(jdToForm(latest.content));
         setStatus(latest.status);
-        setHiringTargetInput(hiringTargetInputValue(latest.hiringTarget));
+        setHiringTargetInput(hiringTargetInputValue(latest));
       } catch {
         // Keep the actionable publish error when refreshing the latest JD also fails.
       }
@@ -1359,7 +1405,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       const updated = await updateJobDescriptionLifecycle(jobDescription.id, payload);
       setJobDescription(updated);
       setStatus(updated.status);
-      setHiringTargetInput(hiringTargetInputValue(updated.hiringTarget));
+      setHiringTargetInput(hiringTargetInputValue(updated));
     } catch (e) {
       setError(e instanceof Error ? e.message : '更新招聘状态失败');
     } finally {
@@ -1555,6 +1601,18 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                   : jobDescription.hiringTarget === null
                     ? '设置人数并在系统内重新开放'
                     : '提高人数并在系统内重新开放'}
+            </Button>
+          ) : null}
+          {status === 'offline' ? (
+            <Button
+              className="gap-2"
+              disableRipple
+              isDisabled={isUpdatingLifecycle}
+              type="button"
+              variant="bordered"
+              onClick={() => void handleLifecycleUpdate({ action: 'archive' })}
+            >
+              {lifecycleAction === 'archive' ? '处理中' : '归档 JD'}
             </Button>
           ) : null}
           {canStartCandidateScreening ? (
