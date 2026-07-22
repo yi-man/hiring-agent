@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { defineConfig, devices } from '@playwright/test';
 import { loadRepoEnv } from './tests/e2e-playwright/load-repo-env';
 
@@ -6,6 +7,9 @@ loadRepoEnv(process.cwd());
 const isGithubActions = process.env.GITHUB_ACTIONS === 'true';
 /** 显式开启才复用 3100（例如已手动 bun run dev）；默认 false 避免误判导致不拉起服务 */
 const reuseDevServer = process.env.PLAYWRIGHT_REUSE_DEV_SERVER === 'true';
+const browserAutomationInternalToken =
+  process.env.BROWSER_AUTOMATION_INTERNAL_TOKEN?.trim() || randomBytes(32).toString('hex');
+process.env.BROWSER_AUTOMATION_INTERNAL_TOKEN = browserAutomationInternalToken;
 
 /**
  * 真实 LLM E2E：不设 OPENAI_API_KEY 时 jd-generator-real 用例会 skip。
@@ -43,6 +47,10 @@ export default defineConfig({
     url: 'http://127.0.0.1:3100/api/health',
     reuseExistingServer: reuseDevServer,
     timeout: 960_000,
-    env: { ...process.env, NODE_ENV: 'development' },
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      BROWSER_AUTOMATION_INTERNAL_TOKEN: browserAutomationInternalToken,
+    },
   },
 });
