@@ -296,7 +296,33 @@
     return 0;
   }
 
-  function scoreCandidate(candidate, target, action) {
+  function semanticProximityName(element, target) {
+    if (target?.kind !== 'field') return '';
+
+    const fieldSelector =
+      'input:not([type="hidden"]),textarea,select,[contenteditable="true"],[role="textbox"]';
+    let container = element.parentElement;
+    while (container && container !== document.body) {
+      const fields = Array.from(container.querySelectorAll(fieldSelector));
+      if (fields.length === 1 && fields[0] === element) {
+        const anchor = Array.from(container.querySelectorAll('label,[aria-label],span,p')).find(
+          (candidate) => {
+            if (candidate === element || candidate.contains(element)) return false;
+            const name = candidate.getAttribute('aria-label') || candidate.textContent || '';
+            return textScore(name, target.name, target.exact) > 0;
+          },
+        );
+        if (anchor) {
+          return cleanText(anchor.getAttribute('aria-label') || anchor.textContent || '');
+        }
+      }
+      if (container.matches('form,section,dialog,[role="dialog"]')) break;
+      container = container.parentElement;
+    }
+    return '';
+  }
+
+  function scoreCandidate(candidate, target, action, semanticName) {
     let score = 0;
     const strategies = [];
     const stableAttrs = target.stableAttrs || {};
@@ -328,7 +354,11 @@
       ['testid', candidate.testId],
     ].map(([strategy, value]) => [strategy, textScore(value, target.name, target.exact)]);
     const best = nameScores.sort((a, b) => b[1] - a[1])[0];
-    if (best?.[1]) {
+    const semanticScore = textScore(semanticName, target.name, target.exact);
+    if (semanticScore > (best?.[1] || 0)) {
+      score += semanticScore;
+      strategies.push('semantic_proximity');
+    } else if (best?.[1]) {
       score += best[1];
       strategies.push(best[0]);
     }
@@ -347,7 +377,12 @@
     const scored = elementsForTarget(target, action)
       .map((element) => {
         const candidate = candidateFromElement(element);
-        const score = scoreCandidate(candidate, target, action);
+        const score = scoreCandidate(
+          candidate,
+          target,
+          action,
+          semanticProximityName(element, target),
+        );
         return { element, candidate, score: score.score, strategies: score.strategies };
       })
       .filter((item) => item.score > 0)

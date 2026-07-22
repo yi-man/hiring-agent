@@ -50,7 +50,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await browser.close();
+  if (browser) await browser.close();
 });
 
 describe('Chrome extension content script resolver', () => {
@@ -109,11 +109,104 @@ describe('Chrome extension content script resolver', () => {
             match: expect.objectContaining({
               status: 'unique',
               chosen: expect.objectContaining({ accessibleName: '公司名称 *' }),
+              strategiesTried: expect.not.arrayContaining(['semantic_proximity']),
             }),
           }),
         );
         await expect(page.locator('input').nth(0).inputValue()).resolves.toBe('');
         await expect(page.locator('input').nth(1).inputValue()).resolves.toBe('弈曼科技');
+      },
+    );
+  });
+
+  it('resolves a field from a label above a nested control container', async () => {
+    await withContentScriptPage(
+      `
+        <main>
+          <form>
+            <div>
+              <label>技能标签</label>
+              <input type="hidden" name="form-token" value="token" />
+              <div>
+                <input placeholder="输入技能后按回车添加" />
+                <button type="button">添加</button>
+              </div>
+            </div>
+          </form>
+        </main>
+      `,
+      async (page) => {
+        const command: BrowserCommand = {
+          id: 'cmd-keyword',
+          taskId: 'task-1',
+          stepId: 'add_keywords',
+          action: 'fill',
+          target: {
+            kind: 'field',
+            role: 'textbox',
+            name: '技能标签',
+            exact: true,
+          },
+          params: { value: 'TypeScript' },
+          timeoutMs: 1_000,
+        };
+
+        await expect(runCommand(page, command)).resolves.toEqual(
+          expect.objectContaining({
+            commandId: command.id,
+            success: true,
+            match: expect.objectContaining({
+              status: 'unique',
+              strategy: 'semantic_proximity',
+            }),
+          }),
+        );
+        await expect(page.getByPlaceholder('输入技能后按回车添加').inputValue()).resolves.toBe(
+          'TypeScript',
+        );
+      },
+    );
+  });
+
+  it('does not use field semantic proximity for a non-field target', async () => {
+    await withContentScriptPage(
+      `
+        <main>
+          <form>
+            <div>
+              <label>技能标签</label>
+              <div><input placeholder="输入技能后按回车添加" /></div>
+            </div>
+          </form>
+        </main>
+      `,
+      async (page) => {
+        const command: BrowserCommand = {
+          id: 'cmd-non-field',
+          taskId: 'task-1',
+          stepId: 'invalid_fill_target',
+          action: 'fill',
+          target: {
+            kind: 'button',
+            role: 'button',
+            name: '技能标签',
+            exact: true,
+          },
+          params: { value: 'TypeScript' },
+          timeoutMs: 1_000,
+        };
+
+        await expect(runCommand(page, command)).resolves.toEqual(
+          expect.objectContaining({
+            commandId: command.id,
+            success: false,
+            match: expect.objectContaining({
+              status: 'low_confidence',
+              strategiesTried: expect.not.arrayContaining(['semantic_proximity']),
+            }),
+          }),
+        );
+        await expect(page.getByPlaceholder('输入技能后按回车添加').inputValue()).resolves.toBe('');
       },
     );
   });
