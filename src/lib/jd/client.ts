@@ -251,12 +251,25 @@ export async function publishJobDescriptionResource(
 }
 
 export async function fetchJobDescriptionPublishTasks(id: string): Promise<PublishTaskDto[]> {
+  return (await fetchJobDescriptionPublishHistory(id)).tasks;
+}
+
+export async function fetchJobDescriptionPublishHistory(id: string): Promise<{
+  tasks: PublishTaskDto[];
+  runs: JobDescriptionPublishRunDto[];
+}> {
   const response = await fetch(`/api/jd/${id}/publish`);
-  const data = await readJson<{ tasks?: PublishTaskDto[] }>(response);
+  const data = await readJson<{
+    tasks?: PublishTaskDto[];
+    runs?: JobDescriptionPublishRunDto[];
+  }>(response);
   if (!response.ok || !Array.isArray(data.tasks)) {
     throw new Error(data.error || '加载发布记录失败');
   }
-  return data.tasks;
+  return {
+    tasks: data.tasks,
+    runs: Array.isArray(data.runs) ? data.runs : [],
+  };
 }
 
 export async function startJobDescriptionPublishRun(

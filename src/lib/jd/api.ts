@@ -180,6 +180,9 @@ export function parseJobDescriptionLifecyclePayload(
   if (body.action === 'take_offline') {
     return { ok: true, value: { action: 'take_offline' } };
   }
+  if (body.action === 'archive') {
+    return { ok: true, value: { action: 'archive' } };
+  }
   if (body.action === 'reopen') {
     if (body.hiringTarget !== undefined && !isHiringTarget(body.hiringTarget)) {
       return { ok: false, error: 'hiringTarget must be an integer between 1 and 999' };

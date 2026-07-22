@@ -214,6 +214,7 @@ export type UpdateJobDescriptionRequest = Partial<{
 
 export type JobDescriptionLifecycleRequest =
   | { action: 'take_offline' }
+  | { action: 'archive' }
   | { action: 'reopen'; hiringTarget?: number }
   | { action: 'set_hiring_target'; hiringTarget: number };
 

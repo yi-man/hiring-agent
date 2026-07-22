@@ -250,6 +250,47 @@ describe('candidate communication messages route', () => {
     expect(body.run.stats.processed).toBe(2);
   });
 
+  it('runs communication independently for distinct platform ids', async () => {
+    createCandidateCommunicationRunMock.mockImplementation(async ({ platform }) => ({
+      id: `comm-run-${platform}`,
+      userId: 'user-1',
+      jobDescriptionId: 'jd-1',
+      candidateId: null,
+      platform,
+      mode: 'batch',
+      status: 'running',
+      stats: null,
+      errorMessage: null,
+      startedAt: '2026-07-06T01:00:00.000Z',
+      finishedAt: null,
+      createdAt: '2026-07-06T01:00:00.000Z',
+      updatedAt: '2026-07-06T01:00:00.000Z',
+    }));
+    runCandidateCommunicationSkillMock.mockResolvedValue({
+      status: 'success',
+      stoppedReason: 'no_unread_messages',
+      processed: 0,
+      failed: 0,
+      passes: 1,
+    });
+    updateCandidateCommunicationRunMock.mockResolvedValue(null);
+    const res = await startCommunicationRun(
+      jsonRequest({
+        mode: 'batch',
+        jobDescriptionId: 'jd-1',
+        platforms: ['zhilian', 'boss-like'],
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(202);
+    expect(body.runs.map((item: { platform: string }) => item.platform)).toEqual([
+      'zhilian',
+      'boss-like',
+    ]);
+    expect(createCandidateCommunicationRunMock).toHaveBeenCalledTimes(2);
+  });
+
   it('creates a single-candidate communication run', async () => {
     createCandidateCommunicationRunMock.mockResolvedValue({
       id: 'comm-run-single',

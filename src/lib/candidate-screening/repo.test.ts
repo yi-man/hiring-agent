@@ -30,6 +30,9 @@ import {
 } from './repo';
 
 type PrismaMock = {
+  jobDescription: {
+    findMany: jest.Mock;
+  };
   candidate: {
     findFirst: jest.Mock;
     upsert: jest.Mock;
@@ -80,6 +83,9 @@ type PrismaMock = {
 
 jest.mock('@/lib/prisma', () => ({
   prisma: {
+    jobDescription: {
+      findMany: jest.fn(),
+    },
     candidate: {
       findFirst: jest.fn(),
       upsert: jest.fn(),
@@ -240,6 +246,8 @@ function mockScreeningResult(overrides: Record<string, unknown> = {}) {
 
 describe('candidate screening repository', () => {
   beforeEach(() => {
+    prismaMock.jobDescription.findMany.mockReset();
+    prismaMock.jobDescription.findMany.mockResolvedValue([]);
     prismaMock.candidate.findFirst.mockReset();
     prismaMock.candidate.upsert.mockReset();
     prismaMock.candidateResume.create.mockReset();
@@ -644,6 +652,25 @@ describe('candidate screening repository', () => {
   });
 
   it('builds a cross-JD candidate tracking overview scoped to user', async () => {
+    prismaMock.jobDescription.findMany.mockResolvedValueOnce([
+      {
+        ...mockJobDescription({
+          position: '高级后端工程师',
+          content: { title: '高级后端工程师' },
+          hiringTarget: 3,
+        }),
+        _count: { candidateScreeningResults: 1 },
+      },
+      {
+        ...mockJobDescription({
+          id: 'jd-2',
+          position: '数据工程师',
+          content: { title: '数据工程师' },
+          hiringTarget: 2,
+        }),
+        _count: { candidateScreeningResults: 0 },
+      },
+    ]);
     prismaMock.candidateScreeningResult.findMany.mockResolvedValueOnce([
       {
         id: 'result-1',
@@ -695,6 +722,7 @@ describe('candidate screening repository', () => {
           positionDescription: 'Build backend services',
           tone: 'tech',
           status: 'published',
+          hiringTarget: 3,
           content: { title: '高级后端工程师' },
           evaluation: null,
           generationMeta: null,
@@ -752,6 +780,7 @@ describe('candidate screening repository', () => {
           positionDescription: 'Build backend services',
           tone: 'tech',
           status: 'published',
+          hiringTarget: 3,
           content: { title: '高级后端工程师' },
           evaluation: null,
           generationMeta: null,
@@ -769,6 +798,32 @@ describe('candidate screening repository', () => {
       orderBy: [{ updatedAt: 'desc' }, { finalScore: 'desc' }],
       take: 100,
     });
+    expect(prismaMock.jobDescription.findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'u1',
+        status: {
+          in: [
+            'created',
+            'ready_to_publish',
+            'publishing',
+            'published',
+            'filled',
+            'publish_failed',
+            'offline',
+            'archived',
+          ],
+        },
+      },
+      select: expect.objectContaining({
+        hiringTarget: true,
+        _count: {
+          select: {
+            candidateScreeningResults: { where: { interviewStage: 'onboarded' } },
+          },
+        },
+      }),
+      orderBy: { updatedAt: 'desc' },
+    });
     expect(overview.jobs).toEqual([
       {
         jobDescription: {
@@ -776,13 +831,34 @@ describe('candidate screening repository', () => {
           department: '技术部',
           position: '高级后端工程师',
           status: 'published',
+          hiringTarget: 3,
+          onboardedCount: 1,
           title: '高级后端工程师',
           updatedAt: updatedAt.toISOString(),
         },
+        hiringGap: 2,
         totalCandidates: 2,
         activeCandidates: 1,
         interviewingCandidates: 1,
         skippedCandidates: 1,
+        latestCandidateUpdatedAt: updatedAt.toISOString(),
+      },
+      {
+        jobDescription: {
+          id: 'jd-2',
+          department: '技术部',
+          position: '数据工程师',
+          status: 'published',
+          hiringTarget: 2,
+          onboardedCount: 0,
+          title: '数据工程师',
+          updatedAt: updatedAt.toISOString(),
+        },
+        hiringGap: 2,
+        totalCandidates: 0,
+        activeCandidates: 0,
+        interviewingCandidates: 0,
+        skippedCandidates: 0,
         latestCandidateUpdatedAt: updatedAt.toISOString(),
       },
     ]);

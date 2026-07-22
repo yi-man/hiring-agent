@@ -148,7 +148,7 @@ describe('published workflow repository', () => {
     );
   });
 
-  it('keeps an untried active workflow pending validation instead of treating it as 0%', async () => {
+  it('lists an explored active workflow whose generated skill has not completed yet', async () => {
     prismaMock.publishSkill.findMany
       .mockResolvedValueOnce([skillRow({ id: 'untried-workflow-v1' })])
       .mockResolvedValueOnce([
@@ -188,7 +188,7 @@ describe('published workflow repository', () => {
     await expect(listLatestActivePublishedWorkflows()).resolves.toEqual([]);
   });
 
-  it('keeps an untried current active workflow pending when an older version failed', async () => {
+  it('lists an agent-generated repair separately from its older version usage', async () => {
     prismaMock.publishSkill.findMany
       .mockResolvedValueOnce([
         skillRow({

@@ -97,7 +97,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         { status: 409 },
       );
     }
-
     const runs = await Promise.all(
       requests.map((screeningRequest) =>
         createAndStartCandidateScreeningRun({

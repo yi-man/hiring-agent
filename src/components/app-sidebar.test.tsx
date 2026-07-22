@@ -20,6 +20,10 @@ describe('AppSidebar', () => {
     expect(menu.closest('aside')).toHaveClass('lg:border-r');
 
     expect(screen.getByRole('link', { name: /^工作台(?:\s|$)/i })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: /招聘统计/i })).toHaveAttribute(
+      'href',
+      '/recruitment-stats',
+    );
     expect(screen.getByRole('link', { name: /智能对话/i })).toHaveAttribute('href', '/chat');
     expect(screen.getByRole('link', { name: /知识库/i })).toHaveAttribute('href', '/knowledge');
     expect(screen.getByRole('link', { name: /JD 工作台/i })).toHaveAttribute(
@@ -49,14 +53,19 @@ describe('AppSidebar', () => {
 
     const menuText = menu.textContent ?? '';
 
+    const operationsSectionIndex = menuText.indexOf('招聘运营');
     const recruitingSectionIndex = menuText.indexOf('招聘流程');
     const automationSectionIndex = menuText.indexOf('知识与自动化');
     const systemSectionIndex = menuText.indexOf('系统');
+    expect(operationsSectionIndex).toBeGreaterThan(-1);
+    expect(recruitingSectionIndex).toBeGreaterThan(operationsSectionIndex);
     expect(recruitingSectionIndex).toBeGreaterThan(-1);
     expect(automationSectionIndex).toBeGreaterThan(recruitingSectionIndex);
     expect(systemSectionIndex).toBeGreaterThan(automationSectionIndex);
 
-    expect(menuText.indexOf('工作台')).toBeLessThan(recruitingSectionIndex);
+    expect(menuText.indexOf('工作台')).toBeGreaterThan(operationsSectionIndex);
+    expect(menuText.indexOf('招聘统计')).toBeGreaterThan(menuText.indexOf('工作台'));
+    expect(menuText.indexOf('招聘统计')).toBeLessThan(recruitingSectionIndex);
 
     expect(menuText.indexOf('JD 工作台')).toBeGreaterThan(recruitingSectionIndex);
     expect(menuText.indexOf('候选人列表')).toBeLessThan(menuText.indexOf('面试记录'));
@@ -94,6 +103,17 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('link', { name: /^工作台(?:\s|$)/i })).toHaveAttribute(
       'aria-current',
       'page',
+    );
+  });
+
+  it('highlights recruitment stats without marking the dashboard', () => {
+    (usePathname as jest.Mock).mockReturnValue('/recruitment-stats');
+
+    render(<AppSidebar />);
+
+    expect(screen.getByRole('link', { name: /招聘统计/i })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /^工作台(?:\s|$)/i })).not.toHaveAttribute(
+      'aria-current',
     );
   });
 });

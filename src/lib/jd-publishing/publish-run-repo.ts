@@ -173,6 +173,19 @@ export async function getPublishRun(params: {
   return row ? mapRun(row) : null;
 }
 
+export async function listPublishRunsForJobDescription(params: {
+  userId: string;
+  jobDescriptionId: string;
+  limit?: number;
+}): Promise<JobDescriptionPublishRunDto[]> {
+  const rows = await prisma.jobDescriptionPublishRun.findMany({
+    where: { userId: params.userId, jobDescriptionId: params.jobDescriptionId },
+    orderBy: { createdAt: 'desc' },
+    take: Math.max(1, Math.min(20, Math.trunc(params.limit ?? 5))),
+  });
+  return rows.map(mapRun);
+}
+
 export async function updatePublishRun(
   params: UpdatePublishRunParams,
 ): Promise<JobDescriptionPublishRunDto | null> {

@@ -13,6 +13,7 @@ export const metadata: Metadata = {
 
 const footerLinks = [
   { name: '工作台', href: '/' },
+  { name: '招聘统计', href: '/recruitment-stats' },
   { name: '对话', href: '/chat' },
   { name: 'JD 工作台', href: '/jd-generator' },
   { name: 'Workflow 学习', href: '/workflow-learning' },

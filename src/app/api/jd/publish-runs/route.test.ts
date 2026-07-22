@@ -63,7 +63,6 @@ const initializePublishRunMock = initializePublishRun as jest.MockedFunction<
 const schedulePublishRunsMock = schedulePublishRuns as jest.MockedFunction<
   typeof schedulePublishRuns
 >;
-
 function run(platform: string, index: number, batchId = 'batch-1') {
   const timestamp = '2026-07-17T00:00:00.000Z';
   return {
@@ -183,6 +182,60 @@ describe('POST /api/jd/publish-runs', () => {
       'boss',
       'liepin',
     ]);
+  });
+
+  it('publishes once per distinct platform id and deduplicates repeated ids', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/jd/publish-runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: 'jd-1',
+          platforms: ['zhilian', 'boss-like', 'zhilian'],
+          company: '深海数据',
+          salary: '30-50K',
+          location: '上海',
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(202);
+    expect(body.runs.map((item: { platform: string }) => item.platform)).toEqual([
+      'zhilian',
+      'boss-like',
+    ]);
+    expect(claimJobDescriptionForPublishingMock).toHaveBeenCalledTimes(1);
+    expect(initializePublishRunMock).toHaveBeenCalledTimes(2);
+    expect(schedulePublishRunsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish the same JD again after it has been published', async () => {
+    claimJobDescriptionForPublishingMock.mockResolvedValueOnce({
+      ok: false,
+      reason: 'conflict',
+      conflict: 'job description cannot be published from status published',
+    });
+
+    const response = await POST(
+      new Request('http://localhost/api/jd/publish-runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: 'jd-1',
+          platform: 'boss',
+          company: '深海数据',
+          salary: '30-50K',
+          location: '上海',
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe('job description cannot be published from status published');
+    expect(initializePublishRunMock).not.toHaveBeenCalled();
+    expect(schedulePublishRunsMock).not.toHaveBeenCalled();
   });
 
   it('rejects publishing when the hiring target is not configured', async () => {

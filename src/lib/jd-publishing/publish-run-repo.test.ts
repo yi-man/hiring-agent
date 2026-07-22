@@ -2,6 +2,7 @@
 
 import { reconcileJobDescriptionPublishResult } from '@/lib/jd/job-description-repo';
 import {
+  listPublishRunsForJobDescription,
   reconcilePublishBatchWithRetry,
   reconcileTerminalPublishRunWithRetry,
   updatePublishRun,
@@ -11,6 +12,7 @@ import {
 jest.mock('@/lib/prisma', () => ({
   prisma: {
     jobDescriptionPublishRun: {
+      findMany: jest.fn(),
       findFirst: jest.fn(),
       updateMany: jest.fn(),
     },
@@ -26,6 +28,7 @@ const reconcileMock = reconcileJobDescriptionPublishResult as jest.MockedFunctio
 const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
   prisma: {
     jobDescriptionPublishRun: {
+      findMany: jest.Mock;
       findFirst: jest.Mock;
       updateMany: jest.Mock;
     };
@@ -60,8 +63,27 @@ const terminalRunRecord = {
 
 describe('publish run compare-and-set updates', () => {
   beforeEach(() => {
+    prismaMock.jobDescriptionPublishRun.findMany.mockReset();
     prismaMock.jobDescriptionPublishRun.findFirst.mockReset();
     prismaMock.jobDescriptionPublishRun.updateMany.mockReset();
+  });
+
+  it('lists the latest publish runs for one JD', async () => {
+    prismaMock.jobDescriptionPublishRun.findMany.mockResolvedValueOnce([terminalRunRecord]);
+
+    await expect(
+      listPublishRunsForJobDescription({
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        limit: 5,
+      }),
+    ).resolves.toEqual([terminalRun]);
+
+    expect(prismaMock.jobDescriptionPublishRun.findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', jobDescriptionId: 'jd-1' },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
   });
 
   it('updates a run only from the required expected status', async () => {

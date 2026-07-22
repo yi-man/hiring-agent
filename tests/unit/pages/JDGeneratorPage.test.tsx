@@ -582,8 +582,8 @@ describe('JD pages', () => {
 
     expect(await screen.findByDisplayValue('深海数据')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: '远程' })).toBeChecked();
-    expect(screen.getByLabelText('招聘人数')).toHaveValue(null);
-    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+    expect(screen.getByLabelText('招聘人数')).toHaveValue(1);
+    expect(screen.getByRole('button', { name: '发布' })).toBeEnabled();
     fireEvent.change(screen.getByLabelText('招聘人数'), { target: { value: '4' } });
     fireEvent.change(screen.getByLabelText('发布薪资范围'), { target: { value: '30-50K' } });
     fireEvent.click(screen.getByRole('button', { name: '发布' }));
@@ -625,7 +625,60 @@ describe('JD pages', () => {
     });
   });
 
-  it('validates the hiring target before publishing', async () => {
+  it('does not publish a stale JD location that is absent from company settings', async () => {
+    const staleLocationJob = { ...sampleJobDescription, workLocations: ['上海'] };
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: staleLocationJob }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ profile: sampleCompanyProfile }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobDescription: {
+            ...staleLocationJob,
+            status: 'ready_to_publish',
+            hiringTarget: 1,
+            workLocations: ['上海张江'],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ run: { id: 'run-1' } }),
+      });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    expect(await screen.findByRole('checkbox', { name: '上海张江' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: expect.stringContaining('"workLocations":["上海张江"]'),
+        }),
+      );
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/publish-runs',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"location":"上海张江"'),
+        }),
+      );
+    });
+  });
+
+  it('defaults the hiring target to one and validates changes before publishing', async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
@@ -651,8 +704,8 @@ describe('JD pages', () => {
     render(<JDDetailView jobDescriptionId="jd-1" />);
 
     const hiringTarget = await screen.findByLabelText('招聘人数');
-    expect(hiringTarget).toHaveValue(null);
-    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+    expect(hiringTarget).toHaveValue(1);
+    expect(screen.getByRole('button', { name: '发布' })).toBeEnabled();
     fireEvent.change(hiringTarget, { target: { value: '1000' } });
 
     expect(screen.getByText('招聘人数需为 1 到 999 的整数。')).toBeInTheDocument();
@@ -989,6 +1042,49 @@ describe('JD pages', () => {
     });
   });
 
+  it('archives an offline JD', async () => {
+    const offlineJob = {
+      ...screenedJobDescription,
+      status: 'offline' as const,
+      hiringTarget: 3,
+      onboardedCount: 1,
+    };
+    const archivedJob = { ...offlineJob, status: 'archived' as const };
+    (global.fetch as jest.Mock).mockImplementation(
+      async (url: string, options?: { method?: string }) => {
+        if (url === '/api/jd/jd-1/lifecycle' && options?.method === 'POST') {
+          return { ok: true, json: async () => ({ jobDescription: archivedJob }) };
+        }
+        if (url === '/api/jd/jd-1') {
+          return { ok: true, json: async () => ({ jobDescription: offlineJob }) };
+        }
+        if (url === '/api/company-profile') {
+          return { ok: true, json: async () => ({ profile: sampleCompanyProfile }) };
+        }
+        if (url === '/api/jd/jd-1/publish') {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: true, json: async () => ({ runs: [] }) };
+      },
+    );
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '归档 JD' }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/jd/jd-1/lifecycle',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ action: 'archive' }),
+        }),
+      );
+    });
+    expect(await screen.findByText('已归档')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '归档 JD' })).not.toBeInTheDocument();
+  });
+
   it.each(['publishing', 'archived'] as const)(
     'does not show a publish action for %s JD details',
     async (nonEditableStatus) => {
@@ -1109,6 +1205,153 @@ describe('JD pages', () => {
 
     expect(screen.queryByRole('button', { name: '保存修改' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发布到 Boss-like' })).not.toBeInTheDocument();
+  });
+
+  it('shows the platforms from the latest successful publish batch after publishing', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobDescription: screenedJobDescription }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          tasks: [
+            {
+              id: 'task-1',
+              userId: 'u1',
+              jobDescriptionId: 'jd-1',
+              batchId: 'batch-1',
+              skillId: 'boss-like-publish-jd-v1',
+              platform: 'boss-like',
+              input: {},
+              currentStep: null,
+              status: 'success',
+              errorMessage: null,
+              trace: null,
+              createdAt: '2026-07-22T02:00:00.000Z',
+              updatedAt: '2026-07-22T02:01:00.000Z',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          profile: {
+            ...sampleCompanyProfile,
+            supportedPlatforms: ['zhilian', 'boss-like'],
+          },
+          platforms: [
+            {
+              id: 'zhilian',
+              label: '智联招聘',
+              shortLabel: '智联招聘',
+              description: '智联招聘企业端',
+              kind: 'production',
+              defaultBaseUrl: 'https://zhilian.example',
+              defaultVariables: {},
+            },
+            {
+              id: 'boss-like',
+              label: 'BOSS-like（本地）',
+              shortLabel: 'BOSS-like',
+              description: '本地招聘站点',
+              kind: 'local',
+              defaultBaseUrl: 'http://localhost:6183',
+              defaultVariables: {},
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ runs: [] }) });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    await screen.findByText('本次发布平台');
+    const publishPlatformGroup = within(
+      screen.getAllByRole('group', { name: '本次发布平台' }).at(-1)!,
+    );
+    const zhilian = publishPlatformGroup.getByRole('checkbox', { name: /智联招聘/ });
+    const bossLike = publishPlatformGroup.getByRole('checkbox', { name: /BOSS-like/ });
+    expect(zhilian).not.toBeChecked();
+    expect(bossLike).toBeChecked();
+    expect(zhilian).toBeDisabled();
+    expect(bossLike).toBeDisabled();
+
+    const screeningPlatformGroup = within(
+      screen.getAllByRole('group', { name: '本次筛选平台' }).at(-1)!,
+    );
+    expect(screeningPlatformGroup.getByRole('checkbox', { name: /智联招聘/ })).not.toBeChecked();
+    expect(screeningPlatformGroup.getByRole('checkbox', { name: /BOSS-like/ })).toBeChecked();
+  });
+
+  it('keeps the failed platform selected for a retry', async () => {
+    const failedJob = {
+      ...sampleJobDescription,
+      status: 'publish_failed' as const,
+      hiringTarget: 1,
+    };
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/jd/jd-1') {
+        return { ok: true, json: async () => ({ jobDescription: failedJob }) };
+      }
+      if (url === '/api/jd/jd-1/publish') {
+        return {
+          ok: true,
+          json: async () => ({
+            tasks: [],
+            runs: [
+              {
+                id: 'run-1',
+                batchId: 'batch-1',
+                platform: 'boss',
+                status: 'failed',
+              },
+            ],
+          }),
+        };
+      }
+      if (url === '/api/company-profile') {
+        return {
+          ok: true,
+          json: async () => ({
+            profile: { ...sampleCompanyProfile, supportedPlatforms: ['boss-like'] },
+            platforms: [
+              {
+                id: 'boss',
+                label: 'BOSS 直聘',
+                shortLabel: 'BOSS 直聘',
+                description: 'BOSS 直聘企业端',
+                kind: 'production',
+                defaultBaseUrl: 'https://www.zhipin.com',
+                defaultVariables: {},
+              },
+              {
+                id: 'boss-like',
+                label: 'BOSS-like（本地）',
+                shortLabel: 'BOSS-like',
+                description: '本地招聘站点',
+                kind: 'local',
+                defaultBaseUrl: 'http://localhost:6183',
+                defaultVariables: {},
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ runs: [] }) };
+    });
+
+    render(<JDDetailView jobDescriptionId="jd-1" />);
+
+    await screen.findByText('本次发布平台');
+    const publishPlatformGroup = within(
+      screen.getAllByRole('group', { name: '本次发布平台' }).at(-1)!,
+    );
+    expect(publishPlatformGroup.getByRole('checkbox', { name: /BOSS 直聘/ })).toBeChecked();
+    expect(publishPlatformGroup.getByRole('checkbox', { name: /BOSS-like/ })).not.toBeChecked();
   });
 
   it('blocks further screening for a legacy published JD until its hiring target is set', async () => {

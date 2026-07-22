@@ -495,6 +495,31 @@ describe('candidate screening API routes', () => {
     });
   });
 
+  it('screens independently for distinct platform ids', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce(sampleJobDescription);
+    createAndStartCandidateScreeningRunMock.mockImplementation(async ({ request }) => ({
+      ...sampleRun,
+      id: `run-${request.platform}`,
+      platform: request.platform,
+      mode: request.mode,
+    }));
+    const response = await createScreeningRun(
+      jsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs', {
+        platforms: ['zhilian', 'boss-like'],
+        mode: 'execution',
+      }),
+      { params: params({ id: 'jd-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(202);
+    expect(body.runs.map((item: { platform: string }) => item.platform)).toEqual([
+      'zhilian',
+      'boss-like',
+    ]);
+    expect(createAndStartCandidateScreeningRunMock).toHaveBeenCalledTimes(2);
+  });
+
   it('returns 400 when create run receives malformed JSON', async () => {
     const request = malformedJsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs');
 

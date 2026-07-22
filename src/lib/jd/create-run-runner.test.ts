@@ -166,7 +166,7 @@ describe('JD create run runner', () => {
       positionDescription: '负责招聘工作台体验',
       salaryRange: '25-40K',
       workLocations: ['上海'],
-      hiringTarget: null,
+      hiringTarget: 1,
       onboardedCount: 0,
       tone: 'tech',
       status: 'created',

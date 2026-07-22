@@ -4,6 +4,7 @@
 import { GET, POST } from './route';
 import { publishJobDescriptionToBossLike } from '@/lib/jd-publishing/service';
 import { listPublishTasksForJobDescription } from '@/lib/jd-publishing/publish-repo';
+import { listPublishRunsForJobDescription } from '@/lib/jd-publishing/publish-run-repo';
 import type { JD, JobDescriptionDto } from '@/types';
 
 const requireAuthMock = jest.fn();
@@ -15,6 +16,8 @@ const listPublishTasksForJobDescriptionMock =
   listPublishTasksForJobDescription as jest.MockedFunction<
     typeof listPublishTasksForJobDescription
   >;
+const listPublishRunsForJobDescriptionMock =
+  listPublishRunsForJobDescription as jest.MockedFunction<typeof listPublishRunsForJobDescription>;
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -48,6 +51,7 @@ jest.mock('@/lib/jd/job-description-repo', () => ({
 jest.mock('@/lib/jd-publishing/publish-run-repo', () => ({
   reconcilePublishBatchWithRetry: (...args: unknown[]) =>
     reconcilePublishBatchWithRetryMock(...args),
+  listPublishRunsForJobDescription: jest.fn(),
 }));
 
 jest.mock('@/lib/jd-publishing/service', () => ({
@@ -98,6 +102,7 @@ describe('POST /api/jd/[id]/publish', () => {
     runWithJobDescriptionPublishLeaseMock.mockReset();
     reconcilePublishBatchWithRetryMock.mockReset();
     listPublishTasksForJobDescriptionMock.mockReset();
+    listPublishRunsForJobDescriptionMock.mockReset();
     publishJobDescriptionToBossLikeMock.mockReset();
 
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
@@ -150,6 +155,24 @@ describe('POST /api/jd/[id]/publish', () => {
         updatedAt: '2026-06-26T00:00:01.000Z',
       },
     ]);
+    listPublishRunsForJobDescriptionMock.mockResolvedValueOnce([
+      {
+        id: 'run-1',
+        userId: 'u1',
+        jobDescriptionId: 'jd-1',
+        batchId: 'batch-1',
+        platform: 'boss-like',
+        status: 'success',
+        currentStage: 'completed',
+        errorMessage: null,
+        publishTaskId: 'task-1',
+        skillId: 'boss-like-publish-jd',
+        startedAt: '2026-06-26T00:00:00.000Z',
+        finishedAt: '2026-06-26T00:00:01.000Z',
+        createdAt: '2026-06-26T00:00:00.000Z',
+        updatedAt: '2026-06-26T00:00:01.000Z',
+      },
+    ]);
 
     const response = await GET(new Request('http://localhost/api/jd/jd-1/publish'), {
       params: Promise.resolve({ id: 'jd-1' }),
@@ -158,7 +181,13 @@ describe('POST /api/jd/[id]/publish', () => {
 
     expect(response.status).toBe(200);
     expect(body.tasks).toHaveLength(1);
+    expect(body.runs).toHaveLength(1);
     expect(listPublishTasksForJobDescriptionMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      limit: 5,
+    });
+    expect(listPublishRunsForJobDescriptionMock).toHaveBeenCalledWith({
       userId: 'u1',
       jobDescriptionId: 'jd-1',
       limit: 5,

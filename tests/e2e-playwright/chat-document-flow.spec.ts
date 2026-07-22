@@ -117,8 +117,6 @@ test.describe('Chat: new conversation, upload markdown, send message (real strea
         `stream failed: HTTP ${streamResp.status()} ${(await streamResp.text().catch(() => '')).slice(0, 500)}`,
       ).toBeTruthy();
 
-      await expect(page.getByRole('button', { name: '发送' })).toBeEnabled({ timeout: 120_000 });
-
       await expect(page.getByText('请求失败')).toHaveCount(0);
       await expect(page.getByText('document is not ready')).toHaveCount(0);
 
@@ -130,6 +128,9 @@ test.describe('Chat: new conversation, upload markdown, send message (real strea
       expect(reply.length, `assistant reply too short: ${JSON.stringify(reply)}`).toBeGreaterThan(
         8,
       );
+
+      await page.getByPlaceholder('发消息…').fill('继续');
+      await expect(page.getByRole('button', { name: '发送' })).toBeEnabled({ timeout: 120_000 });
     } finally {
       await cleanupSeededUser(seeded.userId);
     }

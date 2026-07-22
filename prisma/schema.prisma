@@ -139,7 +139,7 @@ model JobDescription {
   status                         String                          @default("created")
   salaryRange                    String?                         @map("salary_range")
   workLocations                  Json?                           @map("work_locations")
-  hiringTarget                   Int?                            @map("hiring_target")
+  hiringTarget                   Int?                            @default(1) @map("hiring_target")
   activePublishBatchId           String?                         @map("active_publish_batch_id")
   publishLeaseExpiresAt          DateTime?                       @map("publish_lease_expires_at")
   content                        Json
