@@ -14,14 +14,7 @@ import {
 import { executeSingleCandidateAction } from '@/lib/candidate-screening/runner';
 import { runUnreadCandidateCommunicationSkill } from '@/lib/candidate-communication/skill-service';
 import { getCompanyProfileForUser } from '@/lib/company-profile/repo';
-import {
-  getRecruitmentPlatformLabel,
-  resolveRecruitmentPlatforms,
-} from '@/lib/recruitment-platforms';
-import {
-  findDuplicateRecruitmentPlatformTarget,
-  resolveRecruitmentPlatformRuntimeConfigs,
-} from '@/lib/recruitment-platform-config';
+import { resolveRecruitmentPlatforms } from '@/lib/recruitment-platforms';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -195,17 +188,6 @@ export async function POST(request: Request) {
     const invalid = parsedPayloads.find((parsed) => !parsed.ok);
     if (invalid && !invalid.ok) return badRequest(invalid.error);
     const payloads = parsedPayloads.flatMap((parsed) => (parsed.ok ? [parsed.value] : []));
-    if (platforms.length > 1) {
-      const runtimeConfigs = await resolveRecruitmentPlatformRuntimeConfigs({
-        userId: auth.user.id,
-        platforms,
-      });
-      const duplicateTarget = findDuplicateRecruitmentPlatformTarget(runtimeConfigs);
-      if (duplicateTarget) {
-        const [first, second] = duplicateTarget.map(getRecruitmentPlatformLabel);
-        return badRequest(`${first}与 ${second} 指向同一招聘站点，请只保留一个平台后再沟通`);
-      }
-    }
     const runs = await Promise.all(payloads.map((payload) => executeRun(auth.user.id, payload)));
     return NextResponse.json({ run: runs[0], runs }, { status: 202 });
   } catch (error) {

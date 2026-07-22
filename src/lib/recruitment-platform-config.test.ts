@@ -1,9 +1,7 @@
 import {
   createSiteFingerprint,
-  findDuplicateRecruitmentPlatformTarget,
   listRecruitmentPlatformMetadata,
   resolveRecruitmentPlatformRuntimeConfig,
-  resolveRecruitmentPlatformRuntimeConfigs,
 } from './recruitment-platform-config';
 import { decryptPlatformPassword } from './platform-credentials';
 
@@ -102,55 +100,5 @@ describe('recruitment platform configuration', () => {
       }),
       siteTemplatePlatform: 'boss-like',
     });
-  });
-
-  it('loads multiple platform targets with one catalog and profile query', async () => {
-    prismaMock.companyProfile.findUnique.mockResolvedValueOnce({
-      recruitmentPlatforms: [
-        {
-          platformId: 'zhilian',
-          baseUrl: 'http://localhost:6183',
-          username: 'admin',
-          passwordEncrypted: 'ciphertext',
-          variables: {},
-        },
-      ],
-    });
-    decryptPlatformPasswordMock.mockReturnValueOnce('boss123');
-
-    const result = await resolveRecruitmentPlatformRuntimeConfigs({
-      userId: 'u1',
-      platforms: ['zhilian', 'boss-like'],
-    });
-
-    expect(result.map((config) => config.platform)).toEqual(['zhilian', 'boss-like']);
-    expect(result[0]?.siteFingerprint).toBe(result[1]?.siteFingerprint);
-    expect(prismaMock.recruitmentPlatform.findMany).toHaveBeenCalledTimes(1);
-    expect(prismaMock.companyProfile.findUnique).toHaveBeenCalledTimes(1);
-  });
-
-  it('identifies the first pair of platforms that target the same site', () => {
-    const duplicate = findDuplicateRecruitmentPlatformTarget([
-      {
-        platform: 'zhilian',
-        baseUrl: 'http://localhost:6183',
-        username: 'admin',
-        password: 'boss123',
-        variables: {},
-        siteFingerprint: 'same-site',
-        siteTemplatePlatform: 'boss-like',
-      },
-      {
-        platform: 'boss-like',
-        baseUrl: 'http://localhost:6183',
-        username: 'admin',
-        password: 'boss123',
-        variables: {},
-        siteFingerprint: 'same-site',
-        siteTemplatePlatform: 'boss-like',
-      },
-    ]);
-
-    expect(duplicate).toEqual(['zhilian', 'boss-like']);
   });
 });

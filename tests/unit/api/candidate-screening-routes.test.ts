@@ -53,7 +53,6 @@ const executeScreeningRunActionsMock = jest.fn();
 const listCandidateResumeLibraryMock = jest.fn();
 const listCandidateInterviewRecordsMock = jest.fn();
 const resolveRecruitmentPlatformRuntimeConfigMock = jest.fn();
-const resolveRecruitmentPlatformRuntimeConfigsMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -121,19 +120,6 @@ jest.mock('@/lib/candidate-screening/runner', () => ({
 jest.mock('@/lib/recruitment-platform-config', () => ({
   resolveRecruitmentPlatformRuntimeConfig: (...args: unknown[]) =>
     resolveRecruitmentPlatformRuntimeConfigMock(...args),
-  resolveRecruitmentPlatformRuntimeConfigs: (...args: unknown[]) =>
-    resolveRecruitmentPlatformRuntimeConfigsMock(...args),
-  findDuplicateRecruitmentPlatformTarget: (
-    configs: Array<{ platform: string; siteFingerprint: string }>,
-  ) => {
-    const seen = new Map<string, string>();
-    for (const config of configs) {
-      const existing = seen.get(config.siteFingerprint);
-      if (existing) return [existing, config.platform];
-      seen.set(config.siteFingerprint, config.platform);
-    }
-    return null;
-  },
 }));
 
 const now = '2026-06-29T00:00:00.000Z';
@@ -466,7 +452,6 @@ describe('candidate screening API routes', () => {
     listCandidateResumeLibraryMock.mockReset();
     listCandidateInterviewRecordsMock.mockReset();
     resolveRecruitmentPlatformRuntimeConfigMock.mockReset();
-    resolveRecruitmentPlatformRuntimeConfigsMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
     listCandidateScreeningRunEventsMock.mockResolvedValue([]);
     resolveRecruitmentPlatformRuntimeConfigMock.mockResolvedValue({
@@ -478,18 +463,6 @@ describe('candidate screening API routes', () => {
       siteFingerprint: 'site-1',
       siteTemplatePlatform: 'boss-like',
     });
-    resolveRecruitmentPlatformRuntimeConfigsMock.mockImplementation(
-      async ({ platforms }: { platforms: string[] }) =>
-        platforms.map((platform) => ({
-          platform,
-          baseUrl: `https://${platform}.test`,
-          username: '',
-          password: '',
-          variables: {},
-          siteFingerprint: `${platform}-site`,
-          siteTemplatePlatform: platform,
-        })),
-    );
   });
 
   it('creates a screening run for an owned published JD', async () => {
@@ -522,19 +495,14 @@ describe('candidate screening API routes', () => {
     });
   });
 
-  it('does not screen the same physical recruitment site twice', async () => {
+  it('screens independently for distinct platform ids', async () => {
     getJobDescriptionByIdMock.mockResolvedValueOnce(sampleJobDescription);
-    resolveRecruitmentPlatformRuntimeConfigsMock.mockResolvedValueOnce([
-      {
-        platform: 'zhilian',
-        siteFingerprint: 'same-site',
-      },
-      {
-        platform: 'boss-like',
-        siteFingerprint: 'same-site',
-      },
-    ]);
-
+    createAndStartCandidateScreeningRunMock.mockImplementation(async ({ request }) => ({
+      ...sampleRun,
+      id: `run-${request.platform}`,
+      platform: request.platform,
+      mode: request.mode,
+    }));
     const response = await createScreeningRun(
       jsonRequest('http://localhost/api/jd/jd-1/candidate-screening/runs', {
         platforms: ['zhilian', 'boss-like'],
@@ -544,9 +512,12 @@ describe('candidate screening API routes', () => {
     );
     const body = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(body.error).toBe('智联招聘与 BOSS-like 指向同一招聘站点，请只保留一个平台后再筛选');
-    expect(createAndStartCandidateScreeningRunMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(202);
+    expect(body.runs.map((item: { platform: string }) => item.platform)).toEqual([
+      'zhilian',
+      'boss-like',
+    ]);
+    expect(createAndStartCandidateScreeningRunMock).toHaveBeenCalledTimes(2);
   });
 
   it('returns 400 when create run receives malformed JSON', async () => {

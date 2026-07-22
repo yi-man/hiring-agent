@@ -130,10 +130,10 @@ function resolveRuntimeConfig(params: {
   };
 }
 
-export async function resolveRecruitmentPlatformRuntimeConfigs(params: {
+export async function resolveRecruitmentPlatformRuntimeConfig(params: {
   userId: string;
-  platforms: readonly RecruitmentPlatform[];
-}): Promise<RecruitmentPlatformRuntimeConfig[]> {
+  platform: RecruitmentPlatform;
+}): Promise<RecruitmentPlatformRuntimeConfig> {
   const [platforms, profile] = await Promise.all([
     listRecruitmentPlatformMetadata(),
     prisma.companyProfile.findUnique({
@@ -142,33 +142,11 @@ export async function resolveRecruitmentPlatformRuntimeConfigs(params: {
     }),
   ]);
   const companyConfigs = (profile?.recruitmentPlatforms ?? []) as CompanyRecruitmentPlatformRow[];
-  return params.platforms.map((platform) =>
-    resolveRuntimeConfig({ platform, platforms, companyConfigs }),
-  );
-}
-
-export async function resolveRecruitmentPlatformRuntimeConfig(params: {
-  userId: string;
-  platform: RecruitmentPlatform;
-}): Promise<RecruitmentPlatformRuntimeConfig> {
-  const [config] = await resolveRecruitmentPlatformRuntimeConfigs({
-    userId: params.userId,
-    platforms: [params.platform],
+  return resolveRuntimeConfig({
+    platform: params.platform,
+    platforms,
+    companyConfigs,
   });
-  if (!config) throw new Error(`recruitment platform is not configured: ${params.platform}`);
-  return config;
-}
-
-export function findDuplicateRecruitmentPlatformTarget(
-  configs: readonly RecruitmentPlatformRuntimeConfig[],
-): [RecruitmentPlatform, RecruitmentPlatform] | null {
-  const platformByFingerprint = new Map<string, RecruitmentPlatform>();
-  for (const config of configs) {
-    const existing = platformByFingerprint.get(config.siteFingerprint);
-    if (existing) return [existing, config.platform];
-    platformByFingerprint.set(config.siteFingerprint, config.platform);
-  }
-  return null;
 }
 
 export function toJsonRecord(value: Record<string, string>): Prisma.InputJsonValue {
