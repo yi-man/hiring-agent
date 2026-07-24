@@ -1,6 +1,5 @@
 import {
   CANDIDATE_INTERVIEW_FEEDBACK_DECISIONS,
-  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
   CANDIDATE_SCREENING_INTERVIEW_STAGES,
   DEFAULT_MAX_CHAT_ACTIONS,
   DEFAULT_MAX_COLLECT_ACTIONS,
@@ -62,10 +61,7 @@ function isCandidateInterviewStage(value: unknown): value is CandidateInterviewS
 function isCandidateInterviewFeedbackStage(
   value: unknown,
 ): value is CandidateInterviewFeedbackStage {
-  return (
-    typeof value === 'string' &&
-    CANDIDATE_INTERVIEW_FEEDBACK_STAGES.includes(value as CandidateInterviewFeedbackStage)
-  );
+  return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 128;
 }
 
 function isCandidateInterviewFeedbackDecision(
@@ -237,6 +233,32 @@ export function parseUpdateCandidateProgressPayload(
       return { ok: false, error: 'notes must be a string' };
     }
     value.notes = cleanText(body.notes);
+  }
+
+  if (body.interviewAssignments !== undefined) {
+    if (!Array.isArray(body.interviewAssignments)) {
+      return { ok: false, error: 'interviewAssignments must be an array' };
+    }
+    const interviewAssignments: NonNullable<
+      UpdateCandidateProgressRequest['interviewAssignments']
+    > = [];
+    const stages = new Set<string>();
+    for (const assignment of body.interviewAssignments) {
+      if (!isRecord(assignment)) {
+        return { ok: false, error: 'interview assignment is invalid' };
+      }
+      const stage = cleanText(assignment.stage);
+      const interviewer = cleanText(assignment.interviewer);
+      if (!stage || stage.length > 128 || !interviewer || interviewer.length > 100) {
+        return { ok: false, error: 'interview assignment is invalid' };
+      }
+      if (stages.has(stage)) {
+        return { ok: false, error: 'interview assignment stage is duplicated' };
+      }
+      stages.add(stage);
+      interviewAssignments.push({ stage, interviewer });
+    }
+    value.interviewAssignments = interviewAssignments;
   }
 
   if (Object.keys(value).length === 0) {

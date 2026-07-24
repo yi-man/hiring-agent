@@ -1,4 +1,5 @@
 import type { RecruitmentPlatform } from '@/lib/recruitment-platforms';
+import type { CandidateInterviewAssignment } from '@/lib/interviews/types';
 
 export type CandidateScreeningPlatform = RecruitmentPlatform;
 export type CandidateScreeningMode = 'dry_run' | 'execution';
@@ -39,11 +40,7 @@ export type CandidateInterviewStage =
   | 'not_joined'
   | 'rejected'
   | 'withdrawn';
-export type CandidateInterviewFeedbackStage =
-  | 'phone_screen'
-  | 'first_interview'
-  | 'second_interview'
-  | 'final_interview';
+export type CandidateInterviewFeedbackStage = string;
 export type CandidateInterviewFeedbackDecision = 'pass' | 'reject' | 'hold';
 export type CandidateEvaluationDimensionKey =
   | 'core_competency'
@@ -177,6 +174,7 @@ export type ExecuteActionsRequest = {
 export type UpdateCandidateProgressRequest = {
   interviewStage?: CandidateInterviewStage;
   notes?: string;
+  interviewAssignments?: CandidateInterviewAssignment[];
 };
 
 export type UpsertCandidateInterviewFeedbackRequest = {

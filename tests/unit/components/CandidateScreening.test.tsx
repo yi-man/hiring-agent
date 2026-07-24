@@ -1968,7 +1968,7 @@ describe('candidate screening UI', () => {
       ...sampleCandidateListItem,
       interviewStage: 'onboarded',
     });
-    fetchJobDescriptionMock.mockResolvedValueOnce({
+    fetchJobDescriptionMock.mockResolvedValueOnce(sampleJobDescription).mockResolvedValueOnce({
       ...sampleJobDescription,
       status: 'filled',
       hiringTarget: 1,
@@ -2083,6 +2083,57 @@ describe('candidate screening UI', () => {
         }),
       ),
     );
+  });
+
+  it('uses the JD interview process and saves the next-round interviewer before feedback', async () => {
+    fetchJobDescriptionMock.mockResolvedValueOnce({
+      ...sampleJobDescription,
+      interviewProcess: {
+        id: 'engineering',
+        positionType: '技术岗位',
+        stages: [
+          {
+            id: 'technical',
+            name: '技术面',
+            purpose: '验证专业能力与问题解决方法',
+            sortOrder: 0,
+          },
+          {
+            id: 'manager',
+            name: '主管面',
+            purpose: '确认岗位动机与协作方式',
+            sortOrder: 1,
+          },
+        ],
+      },
+    });
+    fetchJdCandidateDetailMock.mockResolvedValueOnce({
+      ...sampleCandidateDetail,
+      interviewStage: 'interviewing',
+      interviewAssignments: [],
+    });
+    fetchCandidateInterviewFeedbacksMock.mockResolvedValueOnce([samplePhoneScreenFeedback]);
+    updateJdCandidateProgressMock.mockResolvedValueOnce({
+      ...sampleCandidateListItem,
+      interviewStage: 'interviewing',
+      interviewAssignments: [{ stage: 'technical', interviewer: 'Ada Lovelace' }],
+    });
+
+    render(<CandidateInterviewDetail jobDescriptionId="jd-1" candidateId="cand-1" />);
+
+    expect(await screen.findByText('下一轮安排 · 技术面')).toBeInTheDocument();
+    expect(screen.getAllByText('验证专业能力与问题解决方法').length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText('下一轮面试官'), {
+      target: { value: 'Ada Lovelace' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存面试安排' }));
+
+    await waitFor(() =>
+      expect(updateJdCandidateProgressMock).toHaveBeenCalledWith('jd-1', 'cand-1', {
+        interviewAssignments: [{ stage: 'technical', interviewer: 'Ada Lovelace' }],
+      }),
+    );
+    expect(screen.getByLabelText('技术面面试官')).toHaveValue('Ada Lovelace');
   });
 
   it('interview detail closes pending evaluation after leaving the interviewing stage', async () => {

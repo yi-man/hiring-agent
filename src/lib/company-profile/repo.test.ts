@@ -3,6 +3,7 @@ import {
   updateCompanyRecruitmentPlatformsForUser,
   upsertCompanyProfileForUser,
 } from '@/lib/company-profile/repo';
+import { backfillMissingJobDescriptionInterviewProcesses } from '@/lib/jd/interview-process-backfill';
 
 jest.mock('@/lib/prisma', () => ({
   prisma: {
@@ -43,6 +44,10 @@ jest.mock('@/lib/recruitment-platform-config', () => ({
   toJsonRecord: (value: unknown) => value,
 }));
 
+jest.mock('@/lib/jd/interview-process-backfill', () => ({
+  backfillMissingJobDescriptionInterviewProcesses: jest.fn(),
+}));
+
 const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
   prisma: {
     $transaction: jest.Mock;
@@ -58,11 +63,28 @@ const { prisma: prismaMock } = jest.requireMock('@/lib/prisma') as {
   };
 };
 
+const backfillMissingJobDescriptionInterviewProcessesMock =
+  backfillMissingJobDescriptionInterviewProcesses as jest.MockedFunction<
+    typeof backfillMissingJobDescriptionInterviewProcesses
+  >;
+
+const technicalInterviewProcess = {
+  id: 'technical',
+  positionType: '技术研发类',
+  autoMatch: {
+    departments: ['技术部'],
+    positionKeywords: ['工程师'],
+    isFallback: false,
+  },
+  stages: [{ id: 'technical', name: '技术面', purpose: '验证技术能力', sortOrder: 0 }],
+};
+
 const profileRow = {
   id: 'profile-1',
   userId: 'u1',
   name: '深海数据',
   supportedPlatforms: ['boss', 'liepin'],
+  interviewProcesses: [],
   createdAt: new Date('2026-07-06T01:00:00.000Z'),
   updatedAt: new Date('2026-07-06T02:00:00.000Z'),
   locations: [
@@ -99,6 +121,12 @@ describe('company profile repository', () => {
     prismaMock.companyProfile.upsert.mockReset();
     prismaMock.companyRecruitmentPlatform.upsert.mockReset();
     prismaMock.companyRecruitmentPlatform.deleteMany.mockReset();
+    backfillMissingJobDescriptionInterviewProcessesMock.mockReset();
+    backfillMissingJobDescriptionInterviewProcessesMock.mockResolvedValue({
+      scannedCount: 0,
+      matchedCount: 0,
+      updatedCount: 0,
+    });
     prismaMock.$transaction.mockReset();
     prismaMock.$transaction.mockImplementation((callback: (tx: typeof prismaMock) => unknown) =>
       callback(prismaMock),
@@ -123,6 +151,7 @@ describe('company profile repository', () => {
       name: '深海数据',
       supportedPlatforms: ['boss', 'liepin'],
       platformConfigs: [],
+      interviewProcesses: [],
       locations: [
         {
           id: 'loc-1',
@@ -190,6 +219,7 @@ describe('company profile repository', () => {
         userId: 'u1',
         name: '深海数据',
         supportedPlatforms: ['boss', 'liepin'],
+        interviewProcesses: [],
         locations: {
           create: [
             {
@@ -251,5 +281,28 @@ describe('company profile repository', () => {
         }),
       }),
     );
+  });
+
+  it('backfills historical JDs when interview process templates are saved', async () => {
+    prismaMock.companyProfile.findUnique.mockResolvedValueOnce(profileRow);
+    prismaMock.companyProfile.upsert.mockResolvedValueOnce({ id: 'profile-1' });
+    prismaMock.companyProfile.findUniqueOrThrow.mockResolvedValueOnce({
+      ...profileRow,
+      interviewProcesses: [technicalInterviewProcess],
+    });
+
+    await upsertCompanyProfileForUser({
+      userId: 'u1',
+      name: '深海数据',
+      supportedPlatforms: ['boss', 'liepin'],
+      locations: [{ kind: 'office', label: '上海张江', city: '上海', address: '博云路 2 号' }],
+      interviewProcesses: [technicalInterviewProcess],
+    });
+
+    expect(backfillMissingJobDescriptionInterviewProcessesMock).toHaveBeenCalledWith({
+      client: prismaMock,
+      userId: 'u1',
+      interviewProcesses: [technicalInterviewProcess],
+    });
   });
 });

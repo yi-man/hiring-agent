@@ -68,6 +68,107 @@ describe('company profile API helpers', () => {
     ]);
   });
 
+  it('parses position-specific interview processes with ordered round responsibilities', () => {
+    expect(
+      parseCompanyProfilePayload({
+        name: '深海数据',
+        locations: [{ kind: 'remote' }],
+        interviewProcesses: [
+          {
+            id: 'engineering',
+            positionType: '技术岗位',
+            autoMatch: {
+              departments: [' 技术部 ', '研发部', '技术部'],
+              positionKeywords: [' 前端 ', '后端'],
+              isFallback: true,
+            },
+            stages: [
+              { id: 'technical', name: '技术面', purpose: '验证专业能力与问题解决方法' },
+              { id: 'manager', name: '主管面', purpose: '确认协作方式与岗位动机' },
+            ],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        interviewProcesses: [
+          {
+            id: 'engineering',
+            positionType: '技术岗位',
+            autoMatch: {
+              departments: ['技术部', '研发部'],
+              positionKeywords: ['前端', '后端'],
+              isFallback: true,
+            },
+            stages: [
+              {
+                id: 'technical',
+                name: '技术面',
+                purpose: '验证专业能力与问题解决方法',
+                sortOrder: 0,
+              },
+              {
+                id: 'manager',
+                name: '主管面',
+                purpose: '确认协作方式与岗位动机',
+                sortOrder: 1,
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it('rejects duplicated position types and interview processes without rounds', () => {
+    const base = { name: '深海数据', locations: [{ kind: 'remote' }] };
+
+    expect(
+      parseCompanyProfilePayload({
+        ...base,
+        interviewProcesses: [{ id: 'one', positionType: '技术岗位', stages: [] }],
+      }),
+    ).toEqual({ ok: false, error: 'each interview process must contain at least one stage' });
+    expect(
+      parseCompanyProfilePayload({
+        ...base,
+        interviewProcesses: [
+          {
+            id: 'one',
+            positionType: '技术岗位',
+            stages: [{ id: 'one-round', name: '技术面', purpose: '验证专业能力' }],
+          },
+          {
+            id: 'two',
+            positionType: '技术岗位',
+            stages: [{ id: 'two-round', name: '主管面', purpose: '确认岗位动机' }],
+          },
+        ],
+      }),
+    ).toEqual({ ok: false, error: 'interview process position type is duplicated' });
+
+    expect(
+      parseCompanyProfilePayload({
+        ...base,
+        interviewProcesses: [
+          {
+            id: 'one',
+            positionType: '技术岗位',
+            autoMatch: { isFallback: true },
+            stages: [{ id: 'one-round', name: '技术面', purpose: '验证专业能力' }],
+          },
+          {
+            id: 'two',
+            positionType: '行政岗位',
+            autoMatch: { isFallback: true },
+            stages: [{ id: 'two-round', name: '部门面', purpose: '验证岗位匹配' }],
+          },
+        ],
+      }),
+    ).toEqual({ ok: false, error: 'only one fallback interview process is allowed' });
+  });
+
   it('parses connection settings for any available platform', () => {
     expect(
       parseCompanyRecruitmentPlatformsPayload(

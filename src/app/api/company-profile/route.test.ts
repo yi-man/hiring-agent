@@ -61,6 +61,7 @@ const profile = {
   name: '深海数据',
   supportedPlatforms: ['boss' as const, 'liepin' as const],
   platformConfigs: [],
+  interviewProcesses: [],
   locations: [
     {
       id: 'loc-1',

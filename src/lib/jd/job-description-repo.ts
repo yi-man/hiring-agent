@@ -14,6 +14,8 @@ import type {
   JDTone,
   JobDescriptionDto,
 } from '@/types';
+import { normalizeInterviewProcess } from '@/lib/interviews/process';
+import type { InterviewProcess } from '@/lib/interviews/types';
 
 type JobDescriptionRecord = {
   id: string;
@@ -31,6 +33,7 @@ type JobDescriptionRecord = {
   content: unknown;
   evaluation: unknown | null;
   generationMeta: unknown | null;
+  interviewProcess: unknown | null;
   createdAt: Date;
   updatedAt: Date;
   _count?: { candidateScreeningResults: number };
@@ -67,6 +70,7 @@ type CreateJobDescriptionParams = {
   content: JD;
   evaluation: EvaluationResult | null;
   generationMeta: JDAgentResponse['meta'] | null;
+  interviewProcess?: InterviewProcess | null;
 };
 
 export type UpdateJobDescriptionParams = {
@@ -83,6 +87,7 @@ export type UpdateJobDescriptionParams = {
   content?: JD;
   evaluation?: EvaluationResult | null;
   generationMeta?: JDAgentResponse['meta'] | null;
+  interviewProcess?: InterviewProcess | null;
 };
 
 function toJson(value: unknown): Prisma.InputJsonValue {
@@ -117,6 +122,7 @@ function mapRow(row: JobDescriptionRecord): JobDescriptionDto {
     content: row.content as JD,
     evaluation: row.evaluation ? (row.evaluation as EvaluationResult) : null,
     generationMeta: row.generationMeta ? (row.generationMeta as JDAgentResponse['meta']) : null,
+    interviewProcess: normalizeInterviewProcess(row.interviewProcess),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -142,6 +148,7 @@ export async function createJobDescription(
       content: toJson(params.content),
       evaluation: toNullableJson(params.evaluation),
       generationMeta: toNullableJson(params.generationMeta),
+      interviewProcess: toNullableJson(params.interviewProcess ?? null),
     },
   });
   return mapRow(row);
@@ -214,6 +221,9 @@ function buildUpdateData(
   if (params.evaluation !== undefined) data.evaluation = toNullableJson(params.evaluation);
   if (params.generationMeta !== undefined) {
     data.generationMeta = toNullableJson(params.generationMeta);
+  }
+  if (params.interviewProcess !== undefined) {
+    data.interviewProcess = toNullableJson(params.interviewProcess);
   }
   return data;
 }

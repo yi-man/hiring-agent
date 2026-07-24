@@ -10,6 +10,11 @@ import {
   normalizeRecruitmentPlatforms,
 } from '@/lib/recruitment-platforms';
 import { isRecruitmentPlatform } from '@/lib/recruitment-platforms';
+import type {
+  InterviewProcess,
+  InterviewProcessAutoMatch,
+  InterviewProcessStage,
+} from '@/lib/interviews/types';
 
 type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -89,6 +94,81 @@ function parsePlatformConfig(value: unknown): CompanyRecruitmentPlatformInput | 
     ...(value.clearPassword === true ? { clearPassword: true } : {}),
     variables,
   };
+}
+
+function parseInterviewStage(value: unknown, sortOrder: number): InterviewProcessStage | null {
+  if (!isRecord(value)) return null;
+  const id = cleanText(value.id);
+  const name = cleanText(value.name);
+  const purpose = cleanText(value.purpose);
+  if (!id || !name || !purpose) return null;
+  return { id, name, purpose, sortOrder };
+}
+
+function parseInterviewAutoMatch(value: unknown): InterviewProcessAutoMatch | null {
+  if (value === undefined) {
+    return { departments: [], positionKeywords: [], isFallback: false };
+  }
+  if (!isRecord(value)) return null;
+  const cleanList = (items: unknown) => {
+    if (items === undefined) return [];
+    if (!Array.isArray(items)) return null;
+    return items
+      .map(cleanText)
+      .filter(Boolean)
+      .filter((item, index, values) => values.indexOf(item) === index);
+  };
+  const departments = cleanList(value.departments);
+  const positionKeywords = cleanList(value.positionKeywords);
+  if (!departments || !positionKeywords) return null;
+  return {
+    departments,
+    positionKeywords,
+    isFallback: value.isFallback === true,
+  };
+}
+
+function parseInterviewProcess(value: unknown): ValidationResult<InterviewProcess> {
+  if (!isRecord(value)) return { ok: false, error: 'interview process is invalid' };
+  const id = cleanText(value.id);
+  const positionType = cleanText(value.positionType);
+  if (!id || !positionType) return { ok: false, error: 'interview process is invalid' };
+  const autoMatch = parseInterviewAutoMatch(value.autoMatch);
+  if (!autoMatch) return { ok: false, error: 'interview process auto match rule is invalid' };
+  if (!Array.isArray(value.stages) || value.stages.length === 0) {
+    return { ok: false, error: 'each interview process must contain at least one stage' };
+  }
+  const stages = value.stages.map(parseInterviewStage);
+  if (stages.some((stage) => stage === null)) {
+    return { ok: false, error: 'interview process stage is invalid' };
+  }
+  const normalizedStages = stages as InterviewProcessStage[];
+  if (new Set(normalizedStages.map((stage) => stage.id)).size !== normalizedStages.length) {
+    return { ok: false, error: 'interview process stage is duplicated' };
+  }
+  return { ok: true, value: { id, positionType, autoMatch, stages: normalizedStages } };
+}
+
+function parseInterviewProcesses(value: unknown): ValidationResult<InterviewProcess[]> {
+  if (!Array.isArray(value)) {
+    return { ok: false, error: 'interview processes must be an array' };
+  }
+  const processes: InterviewProcess[] = [];
+  for (const item of value) {
+    const parsed = parseInterviewProcess(item);
+    if (!parsed.ok) return parsed;
+    processes.push(parsed.value);
+  }
+  if (new Set(processes.map((process) => process.id)).size !== processes.length) {
+    return { ok: false, error: 'interview process is duplicated' };
+  }
+  if (new Set(processes.map((process) => process.positionType)).size !== processes.length) {
+    return { ok: false, error: 'interview process position type is duplicated' };
+  }
+  if (processes.filter((process) => process.autoMatch?.isFallback).length > 1) {
+    return { ok: false, error: 'only one fallback interview process is allowed' };
+  }
+  return { ok: true, value: processes };
 }
 
 export function normalizeCompanyWorkLocations(
@@ -178,6 +258,12 @@ export function parseCompanyProfilePayload(
     return { ok: false, error: 'at least one work location is required' };
   }
 
+  const interviewProcesses =
+    body.interviewProcesses === undefined
+      ? undefined
+      : parseInterviewProcesses(body.interviewProcesses);
+  if (interviewProcesses && !interviewProcesses.ok) return interviewProcesses;
+
   return {
     ok: true,
     value: {
@@ -185,6 +271,7 @@ export function parseCompanyProfilePayload(
       supportedPlatforms,
       ...(body.platformConfigs !== undefined ? { platformConfigs } : {}),
       locations: normalized,
+      ...(interviewProcesses ? { interviewProcesses: interviewProcesses.value } : {}),
     },
   };
 }

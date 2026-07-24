@@ -36,6 +36,7 @@
     "obs:realtime": "bun run obs:run -- realtime",
     "obs:retention": "bun run obs:run -- retention",
     "candidate-screening:calibration": "bunx tsx src/scripts/candidate-screening-calibration.ts",
+    "jd:backfill-interview-processes": "bunx tsx src/scripts/backfill-jd-interview-processes.ts",
     "validation:resume-scoring": "bunx tsx src/scripts/validation-resume-scoring.ts",
     "validation:hiring-decision": "bunx tsx src/scripts/validation-hiring-decision.ts",
     "validation:jd-evaluate": "bunx tsx src/scripts/validation-jd-evaluate.ts",

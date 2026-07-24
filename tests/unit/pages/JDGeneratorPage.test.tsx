@@ -312,6 +312,9 @@ describe('JD pages', () => {
       expect(companyName).toHaveValue('深海数据');
     });
     expect(companyName).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('面试流程')).toHaveValue('auto');
+    expect(screen.getByText('按部门“技术部”匹配')).toBeInTheDocument();
+    expect(screen.getByText(/技术研发类：技术初面/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('部门'), { target: { value: '技术部' } });
     fireEvent.change(screen.getByLabelText('职位'), { target: { value: '前端工程师' } });
     fireEvent.change(screen.getByLabelText('薪资范围'), { target: { value: '30-50K' } });
@@ -584,6 +587,9 @@ describe('JD pages', () => {
     expect(screen.getByRole('checkbox', { name: '远程' })).toBeChecked();
     expect(screen.getByLabelText('招聘人数')).toHaveValue(1);
     expect(screen.getByRole('button', { name: '发布' })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('发布面试流程'), {
+      target: { value: 'default-administration' },
+    });
     fireEvent.change(screen.getByLabelText('招聘人数'), { target: { value: '4' } });
     fireEvent.change(screen.getByLabelText('发布薪资范围'), { target: { value: '30-50K' } });
     fireEvent.click(screen.getByRole('button', { name: '发布' }));
@@ -599,6 +605,7 @@ describe('JD pages', () => {
             salaryRange: '30-50K',
             workLocations: ['上海张江', '远程'],
             content: sampleJobDescription.content,
+            interviewProcessId: 'default-administration',
           }),
         }),
       );

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { usePathname } from 'next/navigation';
 import { AppSidebar } from '@/components/app-sidebar';
 
@@ -11,13 +11,14 @@ describe('AppSidebar', () => {
     (usePathname as jest.Mock).mockReturnValue('/jd-generator/new');
   });
 
-  it('renders a management-style feature menu outside the header', () => {
+  it('renders the main navigation without a redundant feature-menu heading', () => {
     render(<AppSidebar />);
 
-    const menu = screen.getByRole('navigation', { name: '功能菜单' });
+    const menu = screen.getByRole('navigation', { name: '主导航' });
     expect(menu).toBeInTheDocument();
     expect(menu.closest('aside')).toHaveClass('lg:w-64');
     expect(menu.closest('aside')).toHaveClass('lg:border-r');
+    expect(screen.queryByText('功能菜单')).not.toBeInTheDocument();
 
     expect(screen.getByRole('link', { name: /^工作台(?:\s|$)/i })).toHaveAttribute('href', '/');
     expect(screen.getByRole('link', { name: /招聘统计/i })).toHaveAttribute(
@@ -46,10 +47,7 @@ describe('AppSidebar', () => {
       'href',
       '/settings/company',
     );
-    expect(screen.getByRole('link', { name: /招聘平台/i })).toHaveAttribute(
-      'href',
-      '/settings/recruitment-platforms',
-    );
+    expect(screen.queryByRole('link', { name: /招聘平台/i })).not.toBeInTheDocument();
 
     const menuText = menu.textContent ?? '';
 
@@ -80,6 +78,27 @@ describe('AppSidebar', () => {
     expect(menuText.indexOf('Workflow 学习')).toBeLessThan(systemSectionIndex);
 
     expect(menuText.indexOf('LLM 可观测')).toBeGreaterThan(systemSectionIndex);
+  });
+
+  it('keeps the complete feature menu reachable at mobile and desktop breakpoints', () => {
+    render(<AppSidebar />);
+
+    const toggle = screen.getByRole('button', { name: '展开主导航' });
+    const menu = screen.getByRole('navigation', { name: '主导航' });
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(menu).toHaveClass('hidden');
+    expect(menu).toHaveClass('lg:flex');
+    expect(menu).toHaveClass('lg:overflow-y-auto');
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAccessibleName('收起主导航');
+    expect(menu).toHaveClass('flex');
+    expect(menu).not.toHaveClass('hidden');
+    expect(screen.getByRole('link', { name: /公司设置/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /招聘平台/i })).not.toBeInTheDocument();
   });
 
   it('highlights the active route branch', () => {
@@ -115,5 +134,13 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('link', { name: /^工作台(?:\s|$)/i })).not.toHaveAttribute(
       'aria-current',
     );
+  });
+
+  it('highlights company settings for nested settings pages', () => {
+    (usePathname as jest.Mock).mockReturnValue('/settings/company/recruitment-platforms');
+
+    render(<AppSidebar />);
+
+    expect(screen.getByRole('link', { name: /公司设置/i })).toHaveAttribute('aria-current', 'page');
   });
 });

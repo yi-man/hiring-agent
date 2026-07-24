@@ -68,6 +68,7 @@ model CompanyProfile {
   userId               String                       @unique @map("user_id")
   name                 String
   supportedPlatforms   String[]                     @default(["boss-like"]) @map("supported_platforms")
+  interviewProcesses   Json                         @default("[]") @map("interview_processes")
   createdAt            DateTime                     @default(now()) @map("created_at")
   updatedAt            DateTime                     @updatedAt @map("updated_at")
   user                 User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -145,6 +146,7 @@ model JobDescription {
   content                        Json
   evaluation                     Json?
   generationMeta                 Json?                           @map("generation_meta")
+  interviewProcess               Json?                           @map("interview_process")
   createdAt                      DateTime                        @default(now()) @map("created_at")
   updatedAt                      DateTime                        @updatedAt @map("updated_at")
   user                           User                            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -181,6 +183,7 @@ model JobDescriptionCreateRun {
   tone                String                         @default("tech")
   salaryRange         String                         @map("salary_range")
   workLocations       Json                           @map("work_locations")
+  interviewProcess    Json?                          @map("interview_process")
   status              String                         @default("pending")
   currentStage        String?                        @map("current_stage")
   errorMessage        String?                        @map("error_message")
@@ -649,32 +652,33 @@ model CandidateScreeningRunEvent {
 }
 
 model CandidateScreeningResult {
-  id               String                @id @default(uuid())
-  userId           String                @map("user_id")
-  runId            String                @map("run_id")
-  jobDescriptionId String                @map("job_description_id")
-  candidateId      String                @map("candidate_id")
-  resumeId         String?               @map("resume_id")
-  source           String
-  tags             Json
-  scoreDetail      Json                  @map("score_detail")
-  finalScore       Float                 @map("final_score")
-  rank             Int
-  decisionAction   String                @map("decision_action")
-  decisionPriority String                @map("decision_priority")
-  decisionReason   String                @map("decision_reason")
-  actionPlan       Json?                 @map("action_plan")
-  actionStatus     String                @default("planned") @map("action_status")
-  interviewStage   String                @default("screened") @map("interview_stage")
-  notes            String?
-  createdAt        DateTime              @default(now()) @map("created_at")
-  updatedAt        DateTime              @updatedAt @map("updated_at")
-  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
-  run              CandidateScreeningRun @relation(fields: [runId, userId, jobDescriptionId], references: [id, userId, jobDescriptionId], onDelete: Cascade, onUpdate: Restrict)
-  jobDescription   JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
-  candidate        Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
-  resume           CandidateResume?      @relation(fields: [resumeId, candidateId, userId], references: [id, candidateId, userId], onDelete: Restrict, onUpdate: Restrict)
-  actionLogs       CandidateActionLog[]
+  id                   String                @id @default(uuid())
+  userId               String                @map("user_id")
+  runId                String                @map("run_id")
+  jobDescriptionId     String                @map("job_description_id")
+  candidateId          String                @map("candidate_id")
+  resumeId             String?               @map("resume_id")
+  source               String
+  tags                 Json
+  scoreDetail          Json                  @map("score_detail")
+  finalScore           Float                 @map("final_score")
+  rank                 Int
+  decisionAction       String                @map("decision_action")
+  decisionPriority     String                @map("decision_priority")
+  decisionReason       String                @map("decision_reason")
+  actionPlan           Json?                 @map("action_plan")
+  actionStatus         String                @default("planned") @map("action_status")
+  interviewStage       String                @default("screened") @map("interview_stage")
+  interviewAssignments Json                  @default("[]") @map("interview_assignments")
+  notes                String?
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  run                  CandidateScreeningRun @relation(fields: [runId, userId, jobDescriptionId], references: [id, userId, jobDescriptionId], onDelete: Cascade, onUpdate: Restrict)
+  jobDescription       JobDescription        @relation(fields: [jobDescriptionId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  candidate            Candidate             @relation(fields: [candidateId, userId], references: [id, userId], onDelete: Cascade, onUpdate: Restrict)
+  resume               CandidateResume?      @relation(fields: [resumeId, candidateId, userId], references: [id, candidateId, userId], onDelete: Restrict, onUpdate: Restrict)
+  actionLogs           CandidateActionLog[]
 
   @@unique([id, userId], map: "candidate_screening_results_id_user_id_key")
   @@unique([id, userId, runId, jobDescriptionId, candidateId], map: "candidate_screening_results_id_user_run_jd_candidate_key")

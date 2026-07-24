@@ -453,6 +453,7 @@ describe('candidate screening API routes', () => {
     listCandidateInterviewRecordsMock.mockReset();
     resolveRecruitmentPlatformRuntimeConfigMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
+    getJobDescriptionByIdMock.mockResolvedValue(sampleJobDescription);
     listCandidateScreeningRunEventsMock.mockResolvedValue([]);
     resolveRecruitmentPlatformRuntimeConfigMock.mockResolvedValue({
       platform: 'boss-like',
@@ -1282,6 +1283,75 @@ describe('candidate screening API routes', () => {
       expectedInterviewStage: sampleCandidateDetail.interviewStage,
       notes: 'Invitation sent',
     });
+  });
+
+  it('saves interviewers only for rounds in the JD interview process', async () => {
+    const jobDescription = {
+      ...sampleJobDescription,
+      interviewProcess: {
+        id: 'engineering',
+        positionType: '技术岗位',
+        stages: [
+          {
+            id: 'technical',
+            name: '技术面',
+            purpose: '验证专业能力',
+            sortOrder: 0,
+          },
+        ],
+      },
+    };
+    const updatedResult: CandidateScreeningResultDto = {
+      ...sampleResult,
+      interviewAssignments: [{ stage: 'technical', interviewer: 'Grace Hopper' }],
+    };
+    getJobDescriptionByIdMock.mockResolvedValueOnce(jobDescription);
+    updateCandidateInterviewProgressMock.mockResolvedValueOnce(updatedResult);
+
+    const response = await updateJdCandidate(
+      jsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', {
+        interviewAssignments: [{ stage: 'technical', interviewer: ' Grace Hopper ' }],
+      }),
+      { params: params({ id: 'jd-1', candidateId: 'cand-1' }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateCandidateInterviewProgressMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'cand-1',
+      interviewAssignments: [{ stage: 'technical', interviewer: 'Grace Hopper' }],
+    });
+  });
+
+  it('rejects an interview assignment outside the JD interview process', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      ...sampleJobDescription,
+      interviewProcess: {
+        id: 'engineering',
+        positionType: '技术岗位',
+        stages: [
+          {
+            id: 'technical',
+            name: '技术面',
+            purpose: '验证专业能力',
+            sortOrder: 0,
+          },
+        ],
+      },
+    });
+
+    const response = await updateJdCandidate(
+      jsonRequest('http://localhost/api/jd/jd-1/candidates/cand-1', {
+        interviewAssignments: [{ stage: 'unknown-round', interviewer: 'Grace Hopper' }],
+      }),
+      { params: params({ id: 'jd-1', candidateId: 'cand-1' }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('interview assignment stage is invalid');
+    expect(updateCandidateInterviewProgressMock).not.toHaveBeenCalled();
   });
 
   it('returns a conflict when candidate progress changes during an update', async () => {

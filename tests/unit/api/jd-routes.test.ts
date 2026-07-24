@@ -16,6 +16,8 @@ const reconcileJobDescriptionPublishingForUserMock = jest.fn();
 const updateJobDescriptionMock = jest.fn();
 const updateMutableJobDescriptionMock = jest.fn();
 const listJdScreeningSummariesMock = jest.fn();
+const autoMatchInterviewProcessMock = jest.fn();
+const getInterviewProcessMock = jest.fn();
 
 jest.mock('next/server', () => ({
   NextResponse: {
@@ -66,6 +68,12 @@ jest.mock('@/lib/jd/screening-summary', () => ({
   }),
 }));
 
+jest.mock('@/lib/company-profile/repo', () => ({
+  getAutoMatchedCompanyInterviewProcessForUser: (...args: unknown[]) =>
+    autoMatchInterviewProcessMock(...args),
+  getCompanyInterviewProcessForUser: (...args: unknown[]) => getInterviewProcessMock(...args),
+}));
+
 const runJDAgentMock = runJDAgent as jest.MockedFunction<typeof runJDAgent>;
 
 const sampleJd: JD = {
@@ -101,6 +109,17 @@ const sampleAgentResponse = {
   },
 };
 
+const technicalInterviewProcess = {
+  id: 'default-technical',
+  positionType: '技术研发类',
+  autoMatch: {
+    departments: ['技术部'],
+    positionKeywords: ['前端'],
+    isFallback: false,
+  },
+  stages: [{ id: 'technical', name: '技术面', purpose: '验证专业能力', sortOrder: 0 }],
+};
+
 describe('JD resource routes', () => {
   beforeEach(() => {
     requireAuthMock.mockReset();
@@ -113,11 +132,14 @@ describe('JD resource routes', () => {
     updateJobDescriptionMock.mockReset();
     updateMutableJobDescriptionMock.mockReset();
     listJdScreeningSummariesMock.mockReset();
+    autoMatchInterviewProcessMock.mockReset();
+    getInterviewProcessMock.mockReset();
     runJDAgentMock.mockReset();
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
     reconcileJobDescriptionPublishingForUserMock.mockResolvedValue(0);
     listJdScreeningSummariesMock.mockResolvedValue({});
     runJDAgentMock.mockResolvedValue(sampleAgentResponse);
+    autoMatchInterviewProcessMock.mockResolvedValue(technicalInterviewProcess);
   });
 
   it('lists current user job descriptions', async () => {
@@ -221,6 +243,7 @@ describe('JD resource routes', () => {
         workLocations: ['上海张江', '远程'],
         content: sampleJd,
         generationMeta: sampleAgentResponse.meta,
+        interviewProcess: technicalInterviewProcess,
       }),
     );
   });
@@ -317,6 +340,47 @@ describe('JD resource routes', () => {
         hiringTarget: 2,
         content: { ...sampleJd, summary: '手动调整后的 JD' },
       }),
+    );
+  });
+
+  it('auto-matches and snapshots the interview process before publishing', async () => {
+    getJobDescriptionByIdMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'created',
+      department: '技术部',
+      position: '前端工程师',
+      positionDescription: '负责核心系统建设',
+      hiringTarget: null,
+      content: sampleJd,
+    });
+    updateMutableJobDescriptionMock.mockResolvedValueOnce({
+      id: 'jd-1',
+      status: 'ready_to_publish',
+      interviewProcess: technicalInterviewProcess,
+    });
+
+    const response = await patchJd(
+      new Request('http://localhost/api/jd/jd-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'ready_to_publish',
+          hiringTarget: 1,
+          interviewProcessId: null,
+        }),
+      }),
+      { params: Promise.resolve({ id: 'jd-1' }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(autoMatchInterviewProcessMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      department: '技术部',
+      position: '前端工程师',
+      positionDescription: '负责核心系统建设',
+    });
+    expect(updateMutableJobDescriptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ interviewProcess: technicalInterviewProcess }),
     );
   });
 

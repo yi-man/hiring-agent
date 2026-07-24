@@ -42,6 +42,48 @@ describe('candidate interview stage transitions', () => {
     });
   });
 
+  it('completes formal interviews using the configured two-round process', () => {
+    const stages = [
+      { id: 'technical', name: '技术面', purpose: '验证专业能力', sortOrder: 0 },
+      { id: 'manager', name: '主管面', purpose: '确认岗位动机', sortOrder: 1 },
+    ];
+    const feedbacks = [feedback('technical', 'pass'), feedback('manager', 'pass')];
+
+    expect(
+      validateCandidateInterviewStageTransition(
+        'interviewing',
+        'interview_completed',
+        feedbacks,
+        stages,
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it('requires configured rounds in order and reports their configured names', () => {
+    const stages = [
+      { id: 'portfolio', name: '作品评审', purpose: '验证专业产出', sortOrder: 0 },
+      { id: 'culture', name: '文化面', purpose: '确认价值观与动机', sortOrder: 1 },
+    ];
+    const phoneScreenFeedbacks = [feedback('phone_screen')];
+
+    expect(
+      validateCandidateInterviewFeedbackStage(
+        'interviewing',
+        'culture',
+        phoneScreenFeedbacks,
+        stages,
+      ),
+    ).toEqual({ ok: false, error: '当前应先完成作品评审评价' });
+    expect(
+      validateCandidateInterviewFeedbackStage(
+        'interviewing',
+        'portfolio',
+        phoneScreenFeedbacks,
+        stages,
+      ),
+    ).toEqual({ ok: true });
+  });
+
   it('requires a passed phone screen before formal interviews', () => {
     expect(getAllowedCandidateInterviewStageTransitions('phone_screen', [])).not.toContain(
       'interviewing',

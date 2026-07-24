@@ -91,9 +91,19 @@ export function parseCreateJobDescriptionPayload(
     return { ok: false, error: 'at least one work location is required' };
   }
 
+  const interviewProcessId = cleanText(body.interviewProcessId) || undefined;
+
   return {
     ok: true,
-    value: { department, position, positionDescription, salaryRange, workLocations, tone },
+    value: {
+      department,
+      position,
+      positionDescription,
+      salaryRange,
+      workLocations,
+      tone,
+      ...(interviewProcessId ? { interviewProcessId } : {}),
+    },
   };
 }
 
@@ -162,6 +172,17 @@ export function parseUpdateJobDescriptionPayload(
   }
   if (body.generationMeta !== undefined) {
     value.generationMeta = body.generationMeta as JDAgentResponse['meta'] | null;
+  }
+  if (body.interviewProcessId !== undefined) {
+    if (body.interviewProcessId === null) {
+      value.interviewProcessId = null;
+    } else {
+      const interviewProcessId = cleanText(body.interviewProcessId);
+      if (!interviewProcessId) {
+        return { ok: false, error: 'interviewProcessId must not be empty' };
+      }
+      value.interviewProcessId = interviewProcessId;
+    }
   }
 
   if (Object.keys(value).length === 0) {

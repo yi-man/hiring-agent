@@ -160,6 +160,7 @@ export async function runJobDescriptionCreateRun({
       content: agentResponse.jd,
       evaluation: agentResponse.evaluation,
       generationMeta: agentResponse.meta,
+      interviewProcess: run.interviewProcess,
     });
     await recordEvent({
       run,

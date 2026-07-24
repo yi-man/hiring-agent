@@ -1,3 +1,5 @@
+import type { InterviewProcess } from '@/lib/interviews/types';
+
 export type JDTone = 'startup' | 'tech' | 'formal';
 
 export const JD_STATUSES = [
@@ -184,6 +186,7 @@ export type JobDescriptionDto = {
   content: JD;
   evaluation: EvaluationResult | null;
   generationMeta: JDAgentResponse['meta'] | null;
+  interviewProcess?: InterviewProcess | null;
   screeningSummary?: JDScreeningSummary;
   createdAt: string;
   updatedAt: string;
@@ -196,6 +199,7 @@ export type CreateJobDescriptionRequest = {
   salaryRange: string;
   workLocations: string[];
   tone?: JDTone;
+  interviewProcessId?: string;
 };
 
 export type UpdateJobDescriptionRequest = Partial<{
@@ -210,6 +214,7 @@ export type UpdateJobDescriptionRequest = Partial<{
   content: JD;
   evaluation: EvaluationResult | null;
   generationMeta: JDAgentResponse['meta'] | null;
+  interviewProcessId: string | null;
 }>;
 
 export type JobDescriptionLifecycleRequest =

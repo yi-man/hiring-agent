@@ -6,16 +6,19 @@ import {
 import { runJobDescriptionCreateRun } from './create-run-runner';
 import { scheduleBackgroundTask } from './background';
 import type { CreateJobDescriptionRequest } from '@/types';
+import type { InterviewProcess } from '@/lib/interviews/types';
 
 export async function createAndStartJobDescriptionCreateRun(params: {
   userId: string;
   request: CreateJobDescriptionRequest;
+  interviewProcess?: InterviewProcess | null;
 }): Promise<JobDescriptionCreateRunDto> {
   const run = await createJobDescriptionCreateRun({
     userId: params.userId,
     request: params.request,
     status: 'pending',
     currentStage: 'queued',
+    ...(params.interviewProcess === undefined ? {} : { interviewProcess: params.interviewProcess }),
   });
 
   await createJobDescriptionCreateRunEvent({
@@ -29,6 +32,7 @@ export async function createAndStartJobDescriptionCreateRun(params: {
       position: params.request.position,
       salaryRange: params.request.salaryRange,
       workLocations: params.request.workLocations,
+      ...(params.interviewProcess ? { interviewProcess: params.interviewProcess } : {}),
     },
   });
 

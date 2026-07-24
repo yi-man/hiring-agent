@@ -117,6 +117,18 @@ describe('JD API helpers', () => {
       ok: true,
       value: { hiringTarget: 12 },
     });
+    expect(parseUpdateJobDescriptionPayload({ interviewProcessId: null })).toEqual({
+      ok: true,
+      value: { interviewProcessId: null },
+    });
+    expect(parseUpdateJobDescriptionPayload({ interviewProcessId: ' technical ' })).toEqual({
+      ok: true,
+      value: { interviewProcessId: 'technical' },
+    });
+    expect(parseUpdateJobDescriptionPayload({ interviewProcessId: ' ' })).toEqual({
+      ok: false,
+      error: 'interviewProcessId must not be empty',
+    });
   });
 
   it('parses lifecycle actions and validates hiring targets', () => {

@@ -5,10 +5,7 @@ import Link from 'next/link';
 import { ListFilter, RefreshCw } from 'lucide-react';
 import { Button, Chip } from '@/components/ui';
 import { fetchCandidateInterviewRecords } from '@/lib/candidate-screening/client';
-import {
-  CANDIDATE_INTERVIEW_FEEDBACK_DECISIONS,
-  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
-} from '@/lib/candidate-screening/constants';
+import { CANDIDATE_INTERVIEW_FEEDBACK_DECISIONS } from '@/lib/candidate-screening/constants';
 import type { CandidateInterviewRecordDto } from '@/lib/candidate-screening/repo';
 import { getCandidateEvaluationDimension } from '@/lib/candidate-screening/evaluation-dimensions';
 import type {
@@ -16,6 +13,7 @@ import type {
   CandidateInterviewFeedbackStage,
 } from '@/lib/candidate-screening/types';
 import { withReturnTarget } from '@/lib/navigation/return-url';
+import { getInterviewStageLabel } from '@/lib/interviews/process';
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -97,6 +95,16 @@ export function InterviewRecordList() {
       }),
     [decision, jobDescriptionId, records, stage],
   );
+  const stageOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const record of records) {
+      byId.set(
+        record.stage,
+        getInterviewStageLabel(record.stage, record.jobDescription.interviewProcess),
+      );
+    }
+    return [...byId.entries()];
+  }, [records]);
 
   return (
     <div className="space-y-4">
@@ -155,9 +163,9 @@ export function InterviewRecordList() {
               }
             >
               <option value="">全部阶段</option>
-              {CANDIDATE_INTERVIEW_FEEDBACK_STAGES.map((option) => (
-                <option key={option} value={option}>
-                  {option}
+              {stageOptions.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
                 </option>
               ))}
             </select>
@@ -241,7 +249,7 @@ export function InterviewRecordList() {
                     </div>
                   </div>
                   <Chip size="sm" variant="flat">
-                    {record.stage}
+                    {getInterviewStageLabel(record.stage, record.jobDescription.interviewProcess)}
                   </Chip>
                   <div className="font-mono text-lg font-semibold">{record.rating}/5</div>
                   <Chip size="sm" variant="flat">

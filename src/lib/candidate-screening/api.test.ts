@@ -78,6 +78,25 @@ describe('candidate screening API parsing', () => {
     });
   });
 
+  it('parses planned interviewers for current and upcoming rounds', () => {
+    expect(
+      parseUpdateCandidateProgressPayload({
+        interviewAssignments: [
+          { stage: 'technical', interviewer: ' Grace Hopper ' },
+          { stage: 'manager', interviewer: ' Alan Turing ' },
+        ],
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        interviewAssignments: [
+          { stage: 'technical', interviewer: 'Grace Hopper' },
+          { stage: 'manager', interviewer: 'Alan Turing' },
+        ],
+      },
+    });
+  });
+
   it('exports stable stage and decision constants', () => {
     expect(CANDIDATE_SCREENING_RUN_STAGES).toContain('searching_live');
     expect(CANDIDATE_SCREENING_INTERVIEW_STAGES).toContain('interviewing');

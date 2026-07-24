@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Menu, X } from 'lucide-react';
+import { UserRound, X } from 'lucide-react';
 import { SignInButton } from '@/components/auth/sign-in-button';
 import { UserMenu } from '@/components/auth/user-menu';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
@@ -106,16 +106,21 @@ export function Navbar() {
               size="sm"
               variant="light"
               className="ml-2"
-              aria-label="菜单"
+              aria-controls="mobile-account-menu"
+              aria-expanded={isMenuOpen}
+              aria-label={isMenuOpen ? '关闭账户菜单' : '打开账户菜单'}
             >
-              {isMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+              {isMenuOpen ? <X className="h-5 w-5" /> : <UserRound className="h-5 w-5" />}
             </Button>
           </div>
         </div>
       </div>
 
       {isMenuOpen && (
-        <div className="animate-in slide-in-from-top-10 border-border bg-background/90 border-b backdrop-blur-lg duration-300 md:hidden">
+        <div
+          id="mobile-account-menu"
+          className="animate-in slide-in-from-top-10 border-border bg-background/90 border-b backdrop-blur-lg duration-300 md:hidden"
+        >
           <div className="space-y-1 px-2 pt-2 pb-3 sm:px-3">
             {status === 'authenticated' ? (
               <div className="px-4 py-3">

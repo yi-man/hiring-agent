@@ -9,6 +9,10 @@ import {
 } from '@/lib/jd/job-description-repo';
 import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { composeJDJobInput, isJDStatus, parseCreateJobDescriptionPayload } from '@/lib/jd/api';
+import {
+  getAutoMatchedCompanyInterviewProcessForUser,
+  getCompanyInterviewProcessForUser,
+} from '@/lib/company-profile/repo';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -83,6 +87,21 @@ export async function POST(request: Request) {
       return badRequest(parsed.error);
     }
     const value = parsed.value;
+    const interviewProcess = value.interviewProcessId
+      ? await getCompanyInterviewProcessForUser(auth.user.id, value.interviewProcessId)
+      : await getAutoMatchedCompanyInterviewProcessForUser({
+          userId: auth.user.id,
+          department: value.department,
+          position: value.position,
+          positionDescription: value.positionDescription,
+        });
+    if (!interviewProcess) {
+      return badRequest(
+        value.interviewProcessId
+          ? 'interview process is invalid'
+          : 'no interview process matched this job',
+      );
+    }
 
     const agentResponse = await runJDAgent(
       {
@@ -104,6 +123,7 @@ export async function POST(request: Request) {
       content: agentResponse.jd,
       evaluation: agentResponse.evaluation,
       generationMeta: agentResponse.meta,
+      interviewProcess,
     });
 
     return NextResponse.json({ jobDescription }, { status: 201 });

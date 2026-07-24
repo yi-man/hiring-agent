@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Cable, CheckCircle2, CircleOff, Globe2, Save, ShieldCheck } from 'lucide-react';
+import { RecruitmentPlatformSelector } from '@/components/recruitment-platform-selector';
 import { Button } from '@/components/ui';
 import {
   fetchCompanySettings,
+  saveCompanyProfile,
   saveCompanyRecruitmentPlatforms,
 } from '@/lib/company-profile/client';
 import type {
@@ -51,6 +53,7 @@ function createPlatformDrafts(
 export function RecruitmentPlatformSettingsPage() {
   const [profile, setProfile] = useState<CompanyProfileDto | null>(null);
   const [platforms, setPlatforms] = useState<RecruitmentPlatformMetadataDto[]>([]);
+  const [supportedPlatforms, setSupportedPlatforms] = useState<RecruitmentPlatform[]>([]);
   const [drafts, setDrafts] = useState<Partial<Record<RecruitmentPlatform, PlatformConfigDraft>>>(
     {},
   );
@@ -70,6 +73,7 @@ export function RecruitmentPlatformSettingsPage() {
         if (!isActive) return;
         setProfile(settings.profile);
         setPlatforms(settings.platforms);
+        setSupportedPlatforms(settings.profile?.supportedPlatforms ?? []);
         setDrafts(createPlatformDrafts(settings.platforms, settings.profile));
       } catch (e) {
         if (isActive) setError(e instanceof Error ? e.message : '加载招聘平台失败');
@@ -127,10 +131,22 @@ export function RecruitmentPlatformSettingsPage() {
     setMessage('');
     setError('');
     try {
+      if (!profile) throw new Error('请先完成公司设置');
+      const savedProfile = await saveCompanyProfile({
+        name: profile.name,
+        supportedPlatforms,
+        locations: profile.locations.map(({ kind, label, city, address }) => ({
+          kind,
+          label,
+          city,
+          address,
+        })),
+      });
       const saved = await saveCompanyRecruitmentPlatforms(buildPlatformConfigs());
       setProfile(saved);
+      setSupportedPlatforms(savedProfile.supportedPlatforms);
       setDrafts(createPlatformDrafts(platforms, saved));
-      setMessage('平台连接已保存');
+      setMessage('招聘平台已保存');
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存招聘平台失败');
     } finally {
@@ -142,7 +158,7 @@ export function RecruitmentPlatformSettingsPage() {
     return <div className="text-muted-foreground py-12 text-center text-sm">正在加载招聘平台…</div>;
   }
 
-  const enabledPlatforms = new Set(profile?.supportedPlatforms ?? []);
+  const enabledPlatforms = new Set(supportedPlatforms);
 
   return (
     <div className="space-y-5">
@@ -201,6 +217,18 @@ export function RecruitmentPlatformSettingsPage() {
         </div>
       ) : (
         <>
+          <section className="border-border rounded-xl border p-5">
+            <RecruitmentPlatformSelector
+              label="启用的招聘平台"
+              platforms={platforms}
+              value={supportedPlatforms}
+              onChange={setSupportedPlatforms}
+            />
+            {supportedPlatforms.length === 0 ? (
+              <p className="text-destructive mt-2 text-xs">请至少选择一个招聘平台。</p>
+            ) : null}
+          </section>
+
           <div className="grid gap-4 xl:grid-cols-2">
             {platforms.map((metadata) => {
               const isEnabled = enabledPlatforms.has(metadata.id);
@@ -315,7 +343,7 @@ export function RecruitmentPlatformSettingsPage() {
             <div className="flex items-start gap-3">
               <ShieldCheck className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" aria-hidden />
               <p className="text-muted-foreground text-xs leading-5">
-                密码会加密保存且不会回显。是否默认启用在公司设置维护；修改地址后，下一次任务会按新站点指纹重新匹配
+                密码会加密保存且不会回显。修改平台地址后，下一次任务会按新站点指纹重新匹配 Workflow
                 Skill。
               </p>
             </div>
@@ -323,12 +351,12 @@ export function RecruitmentPlatformSettingsPage() {
               className="shrink-0 gap-2"
               color="primary"
               disableRipple
-              isDisabled={isSaving || platforms.length === 0}
+              isDisabled={isSaving || platforms.length === 0 || supportedPlatforms.length === 0}
               type="button"
               onClick={() => void handleSave()}
             >
               <Save className="h-4 w-4" aria-hidden />
-              {isSaving ? '保存中' : '保存平台连接'}
+              {isSaving ? '保存中' : '保存招聘平台'}
             </Button>
           </div>
         </>

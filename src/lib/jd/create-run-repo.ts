@@ -1,6 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import type { CreateJobDescriptionRequest, JDTone } from '@/types';
+import { normalizeInterviewProcess } from '@/lib/interviews/process';
+import type { InterviewProcess } from '@/lib/interviews/types';
 
 export type JobDescriptionCreateRunStatus = 'pending' | 'running' | 'success' | 'failed';
 export type JobDescriptionCreateRunStage =
@@ -20,6 +22,7 @@ type JobDescriptionCreateRunRecord = {
   positionDescription: string;
   salaryRange: string;
   workLocations: unknown;
+  interviewProcess: unknown | null;
   tone: string;
   status: string;
   currentStage: string | null;
@@ -50,6 +53,7 @@ export type JobDescriptionCreateRunDto = {
   positionDescription: string;
   salaryRange: string;
   workLocations: string[];
+  interviewProcess?: InterviewProcess | null;
   tone: JDTone;
   status: JobDescriptionCreateRunStatus;
   currentStage: JobDescriptionCreateRunStage | null;
@@ -74,6 +78,7 @@ export type JobDescriptionCreateRunEventDto = {
 export type CreateJobDescriptionCreateRunParams = {
   userId: string;
   request: CreateJobDescriptionRequest;
+  interviewProcess?: InterviewProcess | null;
   status?: JobDescriptionCreateRunStatus;
   currentStage?: JobDescriptionCreateRunStage | null;
 };
@@ -166,6 +171,7 @@ function mapRun(row: JobDescriptionCreateRunRecord): JobDescriptionCreateRunDto 
     positionDescription: row.positionDescription,
     salaryRange: row.salaryRange,
     workLocations: normalizeWorkLocations(row.workLocations),
+    interviewProcess: normalizeInterviewProcess(row.interviewProcess),
     tone: normalizeTone(row.tone),
     status: normalizeStatus(row.status),
     currentStage: normalizeStage(row.currentStage),
@@ -201,6 +207,7 @@ export async function createJobDescriptionCreateRun(
       positionDescription: params.request.positionDescription,
       salaryRange: params.request.salaryRange,
       workLocations: toJson(params.request.workLocations),
+      interviewProcess: toNullableJson(params.interviewProcess ?? null),
       tone: params.request.tone ?? 'tech',
       status: params.status ?? 'pending',
       currentStage: params.currentStage ?? null,

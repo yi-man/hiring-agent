@@ -15,6 +15,7 @@ import {
   getCandidateScreeningDetail,
   getCandidateScreeningRun,
   getCandidateTrackingOverview,
+  listCandidateInterviewFeedbacks,
   listCandidateInterviewRecords,
   listCandidateResumeLibrary,
   listCandidateScreeningRunEvents,
@@ -1276,6 +1277,37 @@ describe('candidate screening repository', () => {
         },
       ],
     });
+  });
+
+  it('keeps phone screening before configured interview rounds', async () => {
+    const feedback = (stage: string) => ({
+      id: `feedback-${stage}`,
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+      stage,
+      interviewer: 'Grace Hopper',
+      rating: 4,
+      dimensionRatings: [],
+      pros: [],
+      cons: [],
+      decision: 'pass',
+      notes: null,
+      createdAt,
+      updatedAt,
+    });
+    prismaMock.candidateInterviewFeedback.findMany.mockResolvedValueOnce([
+      feedback('technical'),
+      feedback('phone_screen'),
+    ]);
+
+    const feedbacks = await listCandidateInterviewFeedbacks({
+      userId: 'u1',
+      jobDescriptionId: 'jd-1',
+      candidateId: 'candidate-1',
+    });
+
+    expect(feedbacks.map((item) => item.stage)).toEqual(['phone_screen', 'technical']);
   });
 
   it('upserts candidates by user, platform, and identity hash', async () => {

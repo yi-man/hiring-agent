@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { vectorToPgLiteral } from '@/lib/rag/knowledge-repo';
 import type { JDStatus } from '@/types';
+import { normalizeInterviewAssignments, normalizeInterviewProcess } from '@/lib/interviews/process';
+import type { CandidateInterviewAssignment, InterviewProcess } from '@/lib/interviews/types';
 import {
   isCandidateOutreachAllowedJobStatus,
   isTerminalCandidateInterviewStage,
@@ -120,6 +122,7 @@ type CandidateScreeningResultRecord = {
   actionPlan: unknown | null;
   actionStatus: string;
   interviewStage: string;
+  interviewAssignments?: unknown;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -169,6 +172,7 @@ type TrackingJobDescriptionRecord = {
   status: string;
   hiringTarget?: number | null;
   content: unknown;
+  interviewProcess?: unknown | null;
   updatedAt: Date;
 };
 
@@ -290,6 +294,7 @@ export type CandidateScreeningResultDto = {
   actionPlan: CandidateActionPlan | null;
   actionStatus: CandidateActionStatus;
   interviewStage: CandidateInterviewStage;
+  interviewAssignments?: CandidateInterviewAssignment[];
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -378,6 +383,7 @@ export type CandidateTrackingJobDescriptionDto = {
   onboardedCount: number;
   title: string;
   updatedAt: string;
+  interviewProcess?: InterviewProcess | null;
 };
 
 export type CandidateTrackingJobSummaryDto = {
@@ -551,6 +557,7 @@ export type UpdateCandidateProgressRepoParams = {
   interviewStage?: CandidateInterviewStage;
   expectedInterviewStage?: CandidateInterviewStage;
   notes?: string | null;
+  interviewAssignments?: CandidateInterviewAssignment[];
 };
 
 export class CandidateActionInProgressError extends Error {
@@ -880,6 +887,7 @@ function mapScreeningResult(row: CandidateScreeningResultRecord): CandidateScree
     actionPlan: row.actionPlan ? (row.actionPlan as CandidateActionPlan) : null,
     actionStatus: row.actionStatus as CandidateActionStatus,
     interviewStage: row.interviewStage as CandidateInterviewStage,
+    interviewAssignments: normalizeInterviewAssignments(row.interviewAssignments),
     notes: row.notes,
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
@@ -968,6 +976,7 @@ function mapTrackingJobDescription(
   row: TrackingJobDescriptionRecord,
   onboardedCount = 0,
 ): CandidateTrackingJobDescriptionDto {
+  const interviewProcess = normalizeInterviewProcess(row.interviewProcess);
   return {
     id: row.id,
     department: row.department,
@@ -977,6 +986,7 @@ function mapTrackingJobDescription(
     onboardedCount,
     title: readJobTitle(row.content, row.position),
     updatedAt: iso(row.updatedAt),
+    ...(interviewProcess ? { interviewProcess } : {}),
   };
 }
 
@@ -1754,6 +1764,9 @@ export async function updateCandidateInterviewProgress(
   const data: Prisma.CandidateScreeningResultUpdateManyMutationInput = {};
   if (nextInterviewStage !== undefined) data.interviewStage = nextInterviewStage;
   if (params.notes !== undefined) data.notes = params.notes;
+  if (params.interviewAssignments !== undefined) {
+    data.interviewAssignments = toJson(params.interviewAssignments);
+  }
 
   const scopedWhere = {
     userId: params.userId,
@@ -1791,6 +1804,9 @@ export async function updateCandidateInterviewProgressInTransaction(
     interviewStage: nextInterviewStage,
   };
   if (params.notes !== undefined) data.notes = params.notes;
+  if (params.interviewAssignments !== undefined) {
+    data.interviewAssignments = toJson(params.interviewAssignments);
+  }
   const scopedWhere = {
     userId: params.userId,
     jobDescriptionId: params.jobDescriptionId,
@@ -1975,9 +1991,11 @@ function sortInterviewFeedbacks(
   left: CandidateInterviewFeedbackDto,
   right: CandidateInterviewFeedbackDto,
 ): number {
+  const leftIndex = interviewFeedbackStageOrder.indexOf(left.stage);
+  const rightIndex = interviewFeedbackStageOrder.indexOf(right.stage);
   return (
-    interviewFeedbackStageOrder.indexOf(left.stage) -
-    interviewFeedbackStageOrder.indexOf(right.stage)
+    (leftIndex === -1 ? interviewFeedbackStageOrder.length : leftIndex) -
+    (rightIndex === -1 ? interviewFeedbackStageOrder.length : rightIndex)
   );
 }
 

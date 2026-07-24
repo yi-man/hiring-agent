@@ -8,6 +8,9 @@ import {
   listCandidateInterviewFeedbacks,
   updateCandidateInterviewProgress,
 } from '@/lib/candidate-screening/repo';
+import { getJobDescriptionById } from '@/lib/jd/job-description-repo';
+import { getFormalInterviewStages, getRequiredInterviewStages } from '@/lib/interviews/process';
+import type { InterviewProcessStage } from '@/lib/interviews/types';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -93,6 +96,7 @@ export async function PATCH(
     }
 
     let expectedInterviewStage: NonNullable<typeof parsed.value.interviewStage> | undefined;
+    let requiredInterviewStages: InterviewProcessStage[] | null = null;
     if (parsed.value.interviewStage !== undefined) {
       const current = await getCandidateScreeningDetail({
         userId: auth.user.id,
@@ -106,17 +110,41 @@ export async function PATCH(
         );
       }
       expectedInterviewStage = current.interviewStage;
-      const feedbacks = await listCandidateInterviewFeedbacks({
-        userId: auth.user.id,
-        jobDescriptionId: id,
-        candidateId,
-      });
+      const [feedbacks, jobDescription] = await Promise.all([
+        listCandidateInterviewFeedbacks({
+          userId: auth.user.id,
+          jobDescriptionId: id,
+          candidateId,
+        }),
+        getJobDescriptionById(auth.user.id, id),
+      ]);
+      if (!jobDescription) {
+        return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+      }
+      requiredInterviewStages = getRequiredInterviewStages(jobDescription.interviewProcess);
       const transition = validateCandidateInterviewStageTransition(
         current.interviewStage,
         parsed.value.interviewStage,
         feedbacks,
+        getFormalInterviewStages(jobDescription.interviewProcess),
       );
       if (!transition.ok) return conflict(transition.error);
+    }
+
+    if (parsed.value.interviewAssignments !== undefined) {
+      if (!requiredInterviewStages) {
+        const jobDescription = await getJobDescriptionById(auth.user.id, id);
+        if (!jobDescription) {
+          return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+        }
+        requiredInterviewStages = getRequiredInterviewStages(jobDescription.interviewProcess);
+      }
+      const allowedStages = new Set(requiredInterviewStages.map((stage) => stage.id));
+      if (
+        parsed.value.interviewAssignments.some((assignment) => !allowedStages.has(assignment.stage))
+      ) {
+        return badRequest('interview assignment stage is invalid');
+      }
     }
 
     let candidate;
