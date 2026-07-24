@@ -1,3 +1,6 @@
+import type { InterviewProcess } from '@/lib/interviews/types';
+import type { RecruitmentPlatform } from '@/lib/recruitment-platforms';
+
 export type CompanyWorkLocationKind = 'office' | 'remote';
 
 export type CompanyWorkLocationInput = {
@@ -40,6 +43,7 @@ export type CompanyProfileDto = {
   supportedPlatforms: RecruitmentPlatform[];
   platformConfigs?: CompanyRecruitmentPlatformDto[];
   locations: CompanyWorkLocationDto[];
+  interviewProcesses?: InterviewProcess[];
   createdAt: string;
   updatedAt: string;
 };
@@ -50,10 +54,10 @@ export type UpsertCompanyProfileParams = {
   supportedPlatforms: RecruitmentPlatform[];
   platformConfigs?: CompanyRecruitmentPlatformInput[];
   locations: CompanyWorkLocationInput[];
+  interviewProcesses?: InterviewProcess[];
 };
 
 export type UpdateCompanyRecruitmentPlatformsParams = {
   userId: string;
   platformConfigs: CompanyRecruitmentPlatformInput[];
 };
-import type { RecruitmentPlatform } from '@/lib/recruitment-platforms';

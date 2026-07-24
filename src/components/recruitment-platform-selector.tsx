@@ -33,7 +33,7 @@ export function RecruitmentPlatformSelector({
   return (
     <fieldset className="space-y-2" disabled={disabled}>
       <legend className="text-foreground text-sm font-medium">{label}</legend>
-      <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label={label}>
+      <div className="grid gap-2 sm:grid-cols-2">
         {visiblePlatforms.map((platform) => {
           const selected = value.includes(platform.id);
           return (

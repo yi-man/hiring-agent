@@ -10,17 +10,14 @@ import {
   fetchJdCandidateDetail,
 } from '@/lib/candidate-screening/client';
 import { fetchJobDescription } from '@/lib/jd/client';
-import { CANDIDATE_INTERVIEW_FEEDBACK_STAGES } from '@/lib/candidate-screening/constants';
 import { getCandidateEvaluationDimension } from '@/lib/candidate-screening/evaluation-dimensions';
 import type {
   CandidateDecisionResultDto,
   CandidateInterviewFeedbackDto,
   CandidateScreeningDetailDto,
 } from '@/lib/candidate-screening/repo';
-import {
-  feedbackDecisionLabels,
-  feedbackStageLabels,
-} from '@/components/candidate-screening/interview-display';
+import { feedbackDecisionLabels } from '@/components/candidate-screening/interview-display';
+import { getInterviewStageLabel, getRequiredInterviewStages } from '@/lib/interviews/process';
 
 type DecisionRunStatus = 'running' | 'success' | 'failed';
 type DecisionRunLogLevel = 'info' | 'success' | 'error';
@@ -110,10 +107,11 @@ export function CandidateDecisionRun({
         ]);
         if (!active) return;
         setCandidate(nextCandidate);
+        const requiredInterviewStages = getRequiredInterviewStages(jobDescription.interviewProcess);
         appendLog(
           'success',
           '面试上下文加载完成',
-          `${nextCandidate.candidate.displayName} · ${feedbacks.length}/${CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length} 轮评价`,
+          `${nextCandidate.candidate.displayName} · ${feedbacks.length}/${requiredInterviewStages.length} 轮评价`,
           {
             defaultExpanded: true,
             sections: [
@@ -162,8 +160,8 @@ export function CandidateDecisionRun({
               {
                 title: '评价证据上下文',
                 rows: feedbacks.map((feedback) => ({
-                  label: feedbackStageLabels[feedback.stage],
-                  value: `${feedbackStageLabels[feedback.stage]} · ${feedback.rating}/5 · ${feedbackDecisionLabels[feedback.decision]} · 维度证据：${formatFeedbackDimensionRatings(feedback)}${feedback.pros.length > 0 ? ` · 优势：${feedback.pros.join('、')}` : ''}${feedback.cons.length > 0 ? ` · 待确认：${feedback.cons.join('、')}` : ''}${feedback.notes ? ` · 备注：${feedback.notes}` : ''}`,
+                  label: getInterviewStageLabel(feedback.stage, jobDescription.interviewProcess),
+                  value: `${getInterviewStageLabel(feedback.stage, jobDescription.interviewProcess)} · ${feedback.rating}/5 · ${feedbackDecisionLabels[feedback.decision]} · 维度证据：${formatFeedbackDimensionRatings(feedback)}${feedback.pros.length > 0 ? ` · 优势：${feedback.pros.join('、')}` : ''}${feedback.cons.length > 0 ? ` · 待确认：${feedback.cons.join('、')}` : ''}${feedback.notes ? ` · 备注：${feedback.notes}` : ''}`,
                 })),
               },
             ],
@@ -175,15 +173,15 @@ export function CandidateDecisionRun({
         }
 
         const completedStages = new Set(feedbacks.map((feedback) => feedback.stage));
-        const missingStages = CANDIDATE_INTERVIEW_FEEDBACK_STAGES.filter(
-          (stage) => !completedStages.has(stage),
+        const missingStages = requiredInterviewStages.filter(
+          (stage) => !completedStages.has(stage.id),
         );
         appendLog(
           'success',
           '结构化证据校验完成',
           missingStages.length === 0
-            ? '电话沟通、一面、二面、终面评价完整'
-            : `缺少：${missingStages.map((stage) => feedbackStageLabels[stage]).join('、')}`,
+            ? `${requiredInterviewStages.map((stage) => stage.name).join('、')}评价完整`
+            : `缺少：${missingStages.map((stage) => stage.name).join('、')}`,
         );
 
         appendLog('info', '计算录用建议', '按统一岗位胜任力维度汇总简历、沟通与各轮面试证据');

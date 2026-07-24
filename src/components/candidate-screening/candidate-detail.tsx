@@ -21,7 +21,6 @@ import {
 } from '@/lib/candidate-screening/client';
 import {
   isCandidateOutreachAllowedJobStatus,
-  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
   isTerminalCandidateInterviewStage,
 } from '@/lib/candidate-screening/constants';
 import type {
@@ -33,12 +32,10 @@ import {
   getReturnTarget,
   withReturnTarget,
 } from '@/lib/navigation/return-url';
-import {
-  feedbackStageLabels,
-  interviewStageLabels,
-} from '@/components/candidate-screening/interview-display';
+import { interviewStageLabels } from '@/components/candidate-screening/interview-display';
 import { fetchJobDescription } from '@/lib/jd/client';
-import type { JDStatus } from '@/types';
+import type { JobDescriptionDto } from '@/types';
+import { getInterviewStageLabel, getRequiredInterviewStages } from '@/lib/interviews/process';
 
 export function CandidateDetail({
   jobDescriptionId,
@@ -61,7 +58,7 @@ export function CandidateDetail({
     label: '返回候选人详情',
   };
   const [candidate, setCandidate] = useState<CandidateScreeningDetailDto | null>(null);
-  const [jobDescriptionStatus, setJobDescriptionStatus] = useState<JDStatus | null>(null);
+  const [jobDescription, setJobDescription] = useState<JobDescriptionDto | null>(null);
   const [feedbacks, setFeedbacks] = useState<CandidateInterviewFeedbackDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isStartingCommunication, setIsStartingCommunication] = useState(false);
@@ -86,7 +83,7 @@ export function CandidateDetail({
         if (cancelled) return;
         setCandidate(nextCandidate);
         setFeedbacks(nextFeedbacks);
-        setJobDescriptionStatus(jobDescription.status);
+        setJobDescription(jobDescription);
       } catch (loadError) {
         if (cancelled) return;
         setError(loadError instanceof Error ? loadError.message : '加载候选人详情失败');
@@ -140,13 +137,14 @@ export function CandidateDetail({
   }
 
   const completedFeedbackStages = new Set(feedbacks.map((feedback) => feedback.stage));
+  const requiredInterviewStages = getRequiredInterviewStages(jobDescription?.interviewProcess);
   const interviewHref = withReturnTarget(
     `/jd-generator/${jobDescriptionId}/candidates/${candidateId}/interview`,
     detailReturnTarget,
   );
   const canStartSingleCommunication =
-    jobDescriptionStatus !== null &&
-    isCandidateOutreachAllowedJobStatus(jobDescriptionStatus) &&
+    jobDescription !== null &&
+    isCandidateOutreachAllowedJobStatus(jobDescription.status) &&
     !isTerminalCandidateInterviewStage(candidate.interviewStage) &&
     candidate.actionPlan?.action === 'chat' &&
     candidate.latestPlannedChatRunId !== null;
@@ -281,26 +279,31 @@ export function CandidateDetail({
               </div>
               <div>
                 <p className="text-foreground text-sm font-medium">
-                  已完成 {feedbacks.length} / {CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length} 轮评价
+                  已完成{' '}
+                  {
+                    requiredInterviewStages.filter((stage) => completedFeedbackStages.has(stage.id))
+                      .length
+                  }{' '}
+                  / {requiredInterviewStages.length} 轮评价
                 </p>
                 <p className="text-muted-foreground mt-1 text-xs leading-5">
                   {candidate.notes || '暂无面试备注'}
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {CANDIDATE_INTERVIEW_FEEDBACK_STAGES.map((stage) => {
-                  const isCompleted = completedFeedbackStages.has(stage);
+                {requiredInterviewStages.map((stage) => {
+                  const isCompleted = completedFeedbackStages.has(stage.id);
                   return (
                     <div
-                      key={stage}
+                      key={stage.id}
                       className="border-border bg-muted/20 flex min-h-16 flex-col justify-between rounded-md border p-2.5"
                     >
                       <span className="text-muted-foreground text-xs">
-                        {feedbackStageLabels[stage]}
+                        {getInterviewStageLabel(stage.id, jobDescription?.interviewProcess)}
                       </span>
                       <span className="text-foreground mt-2 flex items-center gap-1 text-xs font-medium">
                         {isCompleted ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
-                        {feedbackStageLabels[stage]}
+                        {getInterviewStageLabel(stage.id, jobDescription?.interviewProcess)}
                         {isCompleted ? '已评价' : '待评价'}
                       </span>
                     </div>

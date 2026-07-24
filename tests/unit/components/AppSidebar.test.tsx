@@ -10,6 +10,7 @@ jest.mock('lucide-react', () => ({
   BrainCircuit: () => <svg aria-hidden="true" />,
   Building2: () => <svg aria-hidden="true" />,
   ChartColumn: () => <svg aria-hidden="true" />,
+  ChevronDown: () => <svg aria-hidden="true" />,
   ClipboardList: () => <svg aria-hidden="true" />,
   Eye: () => <svg aria-hidden="true" />,
   FileCode: () => <svg aria-hidden="true" />,

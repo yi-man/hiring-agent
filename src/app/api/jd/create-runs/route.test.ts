@@ -8,6 +8,10 @@ import {
   listJobDescriptionCreateRuns,
 } from '@/lib/jd/create-run-repo';
 import type { JobDescriptionCreateRunDto } from '@/lib/jd/create-run-repo';
+import {
+  getAutoMatchedCompanyInterviewProcessForUser,
+  getCompanyInterviewProcessForUser,
+} from '@/lib/company-profile/repo';
 
 const requireAuthMock = jest.fn();
 
@@ -40,6 +44,11 @@ jest.mock('@/lib/jd/create-run-repo', () => ({
   failStaleJobDescriptionCreateRuns: jest.fn(),
 }));
 
+jest.mock('@/lib/company-profile/repo', () => ({
+  getAutoMatchedCompanyInterviewProcessForUser: jest.fn(),
+  getCompanyInterviewProcessForUser: jest.fn(),
+}));
+
 const createAndStartMock = createAndStartJobDescriptionCreateRun as jest.MockedFunction<
   typeof createAndStartJobDescriptionCreateRun
 >;
@@ -49,6 +58,27 @@ const listRunsMock = listJobDescriptionCreateRuns as jest.MockedFunction<
 const failStaleMock = failStaleJobDescriptionCreateRuns as jest.MockedFunction<
   typeof failStaleJobDescriptionCreateRuns
 >;
+const autoMatchInterviewProcessMock =
+  getAutoMatchedCompanyInterviewProcessForUser as jest.MockedFunction<
+    typeof getAutoMatchedCompanyInterviewProcessForUser
+  >;
+const getInterviewProcessMock = getCompanyInterviewProcessForUser as jest.MockedFunction<
+  typeof getCompanyInterviewProcessForUser
+>;
+
+const technicalInterviewProcess = {
+  id: 'default-technical',
+  positionType: '技术研发类',
+  autoMatch: {
+    departments: ['技术部'],
+    positionKeywords: ['前端'],
+    isFallback: false,
+  },
+  stages: [
+    { id: 'technical', name: '技术面', purpose: '验证专业能力', sortOrder: 0 },
+    { id: 'manager', name: '主管面', purpose: '确认团队匹配', sortOrder: 1 },
+  ],
+};
 
 const run: JobDescriptionCreateRunDto = {
   id: 'jd-create-run-1',
@@ -75,7 +105,10 @@ describe('/api/jd/create-runs', () => {
     createAndStartMock.mockReset();
     listRunsMock.mockReset();
     failStaleMock.mockReset();
+    autoMatchInterviewProcessMock.mockReset();
+    getInterviewProcessMock.mockReset();
     failStaleMock.mockResolvedValue(0);
+    autoMatchInterviewProcessMock.mockResolvedValue(technicalInterviewProcess);
     requireAuthMock.mockResolvedValue({ user: { id: 'u1' } });
   });
 
@@ -105,7 +138,41 @@ describe('/api/jd/create-runs', () => {
         position: '高级前端工程师',
         tone: 'tech',
       }),
+      interviewProcess: technicalInterviewProcess,
     });
+    expect(autoMatchInterviewProcessMock).toHaveBeenCalledWith({
+      userId: 'u1',
+      department: '技术部',
+      position: '高级前端工程师',
+      positionDescription: '负责招聘工作台体验',
+    });
+  });
+
+  it('uses a manually selected interview process instead of automatic matching', async () => {
+    getInterviewProcessMock.mockResolvedValueOnce(technicalInterviewProcess);
+    createAndStartMock.mockResolvedValueOnce(run);
+    const response = await POST(
+      new Request('http://localhost/api/jd/create-runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          department: '技术部',
+          position: '高级前端工程师',
+          positionDescription: '负责招聘工作台体验',
+          salaryRange: '25-40K',
+          workLocations: ['上海'],
+          tone: 'tech',
+          interviewProcessId: 'default-technical',
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(getInterviewProcessMock).toHaveBeenCalledWith('u1', 'default-technical');
+    expect(autoMatchInterviewProcessMock).not.toHaveBeenCalled();
+    expect(createAndStartMock).toHaveBeenCalledWith(
+      expect.objectContaining({ interviewProcess: technicalInterviewProcess }),
+    );
   });
 
   it('lists recent JD create runs, optionally scoped to a generated JD', async () => {

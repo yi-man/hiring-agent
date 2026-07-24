@@ -1,17 +1,18 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   BrainCircuit,
   Building2,
   ChartColumn,
+  ChevronDown,
   ClipboardList,
   Eye,
   FileCode,
   FileText,
   GitBranch,
-  Globe2,
   LayoutDashboard,
   MessageCircle,
   Users,
@@ -117,15 +118,9 @@ const appMenuSections: AppMenuSection[] = [
       },
       {
         label: '公司设置',
-        description: '公司与地点',
+        description: '组织与招聘配置',
         href: '/settings/company',
         Icon: Building2,
-      },
-      {
-        label: '招聘平台',
-        description: '连接与凭据',
-        href: '/settings/recruitment-platforms',
-        Icon: Globe2,
       },
     ],
   },
@@ -141,23 +136,53 @@ function isActivePath(pathname: string, href: string) {
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const activeItem = appMenuSections
+    .flatMap((section) => section.items)
+    .find((item) => isActivePath(pathname, item.href));
 
   return (
-    <aside className="bg-background/95 border-border border-b backdrop-blur lg:sticky lg:top-20 lg:h-[calc(100vh-5rem)] lg:w-64 lg:shrink-0 lg:border-r lg:border-b-0">
-      <div className="mx-auto max-w-screen-2xl px-4 py-3 lg:mx-0 lg:max-w-none lg:px-4 lg:py-5">
-        <div className="text-muted-foreground mb-3 hidden px-3 text-xs font-semibold tracking-normal uppercase lg:block">
-          功能菜单
-        </div>
-        <nav aria-label="功能菜单" className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:pb-0">
+    <aside className="bg-background/95 border-border border-b backdrop-blur lg:sticky lg:top-20 lg:h-[calc(100vh-5rem)] lg:w-64 lg:shrink-0 lg:overflow-hidden lg:border-r lg:border-b-0">
+      <div className="mx-auto max-w-screen-2xl px-4 py-3 lg:mx-0 lg:flex lg:h-full lg:max-w-none lg:flex-col lg:px-4 lg:py-5">
+        <button
+          type="button"
+          aria-controls="app-main-navigation"
+          aria-expanded={isMobileMenuOpen}
+          aria-label={isMobileMenuOpen ? '收起主导航' : '展开主导航'}
+          onClick={() => setIsMobileMenuOpen((isOpen) => !isOpen)}
+          className="border-border bg-muted/45 flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left lg:hidden"
+        >
+          <span>
+            <span className="text-muted-foreground block text-[11px] font-medium tracking-wide uppercase">
+              当前页面
+            </span>
+            <span className="text-foreground mt-0.5 block text-sm font-semibold">
+              {activeItem?.label ?? '未选择'}
+            </span>
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className={`text-muted-foreground h-4 w-4 transition-transform ${
+              isMobileMenuOpen ? 'rotate-180' : ''
+            }`}
+          />
+        </button>
+        <nav
+          id="app-main-navigation"
+          aria-label="主导航"
+          className={`${
+            isMobileMenuOpen ? 'flex' : 'hidden'
+          } mt-3 flex-col gap-3 pb-1 lg:mt-0 lg:flex lg:min-h-0 lg:flex-1 lg:gap-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-1 lg:pb-4`}
+        >
           {appMenuSections.map((section, sectionIndex) => (
             <div
               key={section.label ?? `section-${sectionIndex}`}
-              className={`flex min-w-max gap-2 lg:min-w-0 lg:flex-col ${
+              className={`grid grid-cols-2 gap-2 sm:grid-cols-3 lg:flex lg:min-w-0 lg:flex-col ${
                 section.label ? 'lg:border-border lg:mt-2 lg:border-t lg:pt-3' : ''
               }`}
             >
               {section.label ? (
-                <div className="text-muted-foreground flex shrink-0 items-center px-2 text-xs font-semibold tracking-normal uppercase lg:px-3">
+                <div className="text-muted-foreground col-span-full flex shrink-0 items-center px-2 text-xs font-semibold tracking-normal uppercase lg:px-3">
                   {section.label}
                 </div>
               ) : null}
@@ -169,7 +194,8 @@ export function AppSidebar() {
                     key={item.href}
                     aria-current={isActive ? 'page' : undefined}
                     href={item.href}
-                    className={`group flex min-w-36 items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all lg:min-w-0 ${
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className={`group flex min-w-0 items-center gap-3 rounded-lg border px-3 py-3 text-left transition-all ${
                       isActive
                         ? 'border-primary/35 bg-primary/10 text-primary'
                         : 'text-foreground/78 hover:border-primary/25 hover:bg-primary/5 hover:text-primary border-transparent'

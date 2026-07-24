@@ -1,6 +1,8 @@
 import type { CandidateInterviewFeedbackDto } from './repo';
 import { CANDIDATE_INTERVIEW_STAGE_LABELS } from './constants';
 import type { CandidateInterviewFeedbackStage, CandidateInterviewStage } from './types';
+import { getFormalInterviewStages, PHONE_SCREEN_STAGE } from '@/lib/interviews/process';
+import type { InterviewProcessStage } from '@/lib/interviews/types';
 
 const baseTransitions: Record<CandidateInterviewStage, readonly CandidateInterviewStage[]> = {
   sourced: ['screened', 'withdrawn'],
@@ -19,15 +21,6 @@ const baseTransitions: Record<CandidateInterviewStage, readonly CandidateIntervi
   withdrawn: [],
 };
 
-const formalInterviewStages = ['first_interview', 'second_interview', 'final_interview'] as const;
-
-const feedbackStageLabels: Record<CandidateInterviewFeedbackStage, string> = {
-  phone_screen: '电话沟通',
-  first_interview: '一面',
-  second_interview: '二面',
-  final_interview: '终面',
-};
-
 function hasPassedFeedback(
   feedbacks: CandidateInterviewFeedbackDto[],
   stage: CandidateInterviewFeedbackDto['stage'],
@@ -39,12 +32,13 @@ function evidenceAllowsTransition(
   current: CandidateInterviewStage,
   next: CandidateInterviewStage,
   feedbacks: CandidateInterviewFeedbackDto[],
+  formalInterviewStages: readonly InterviewProcessStage[],
 ) {
   if (current === 'phone_screen' && next === 'interviewing') {
     return hasPassedFeedback(feedbacks, 'phone_screen');
   }
   if (current === 'interviewing' && next === 'interview_completed') {
-    return formalInterviewStages.every((stage) => hasPassedFeedback(feedbacks, stage));
+    return formalInterviewStages.every((stage) => hasPassedFeedback(feedbacks, stage.id));
   }
   return true;
 }
@@ -52,9 +46,10 @@ function evidenceAllowsTransition(
 export function getAllowedCandidateInterviewStageTransitions(
   current: CandidateInterviewStage,
   feedbacks: CandidateInterviewFeedbackDto[],
+  formalInterviewStages: readonly InterviewProcessStage[] = getFormalInterviewStages(null),
 ): CandidateInterviewStage[] {
   return baseTransitions[current].filter((next) =>
-    evidenceAllowsTransition(current, next, feedbacks),
+    evidenceAllowsTransition(current, next, feedbacks, formalInterviewStages),
   );
 }
 
@@ -62,6 +57,7 @@ export function validateCandidateInterviewStageTransition(
   current: CandidateInterviewStage,
   next: CandidateInterviewStage,
   feedbacks: CandidateInterviewFeedbackDto[],
+  formalInterviewStages: readonly InterviewProcessStage[] = getFormalInterviewStages(null),
 ): { ok: true } | { ok: false; error: string } {
   if (current === next) return { ok: true };
   if (!baseTransitions[current].includes(next)) {
@@ -76,8 +72,11 @@ export function validateCandidateInterviewStageTransition(
     }
   }
   if (current === 'interviewing' && next === 'interview_completed') {
-    if (!formalInterviewStages.every((stage) => hasPassedFeedback(feedbacks, stage))) {
-      return { ok: false, error: '一面、二面和终面均评价通过后才能完成面试' };
+    if (!formalInterviewStages.every((stage) => hasPassedFeedback(feedbacks, stage.id))) {
+      return {
+        ok: false,
+        error: `${formalInterviewStages.map((stage) => stage.name).join('、')}均评价通过后才能完成面试`,
+      };
     }
   }
   return { ok: true };
@@ -87,31 +86,29 @@ export function validateCandidateInterviewFeedbackStage(
   current: CandidateInterviewStage,
   stage: CandidateInterviewFeedbackStage,
   feedbacks: CandidateInterviewFeedbackDto[],
+  formalInterviewStages: readonly InterviewProcessStage[] = getFormalInterviewStages(null),
 ): { ok: true } | { ok: false; error: string } {
   if (feedbacks.some((feedback) => feedback.stage === stage)) return { ok: true };
 
   if (current === 'phone_screen') {
-    return stage === 'phone_screen'
+    return stage === PHONE_SCREEN_STAGE.id
       ? { ok: true }
       : { ok: false, error: '当前应先完成电话沟通评价' };
   }
 
   if (current === 'interviewing') {
     const completed = new Set(feedbacks.map((feedback) => feedback.stage));
-    const pendingStage = (['phone_screen', ...formalInterviewStages] as const).find(
-      (candidateStage) => !completed.has(candidateStage),
-    );
-    if (stage === pendingStage) return { ok: true };
+    const requiredStages = [PHONE_SCREEN_STAGE, ...formalInterviewStages];
+    const pendingStage = requiredStages.find((candidateStage) => !completed.has(candidateStage.id));
+    if (stage === pendingStage?.id) return { ok: true };
     return {
       ok: false,
-      error: pendingStage
-        ? `当前应先完成${feedbackStageLabels[pendingStage]}评价`
-        : '所有面试评价均已完成',
+      error: pendingStage ? `当前应先完成${pendingStage.name}评价` : '所有面试评价均已完成',
     };
   }
 
   return {
     ok: false,
-    error: `候选人当前处于“${CANDIDATE_INTERVIEW_STAGE_LABELS[current]}”，不能新增${feedbackStageLabels[stage]}评价`,
+    error: `候选人当前处于“${CANDIDATE_INTERVIEW_STAGE_LABELS[current]}”，不能新增${[PHONE_SCREEN_STAGE, ...formalInterviewStages].find((item) => item.id === stage)?.name ?? stage}评价`,
   };
 }

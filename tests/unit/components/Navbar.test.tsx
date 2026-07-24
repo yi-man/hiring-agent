@@ -12,7 +12,7 @@ jest.mock('next/navigation', () => ({
 }));
 
 jest.mock('lucide-react', () => ({
-  Menu: jest.fn(() => <div data-testid="menu-icon" />),
+  UserRound: jest.fn(() => <div data-testid="menu-icon" />),
   X: jest.fn(() => <div data-testid="x-icon" />),
   LogIn: jest.fn(() => <div data-testid="login-icon" />),
   LogOut: jest.fn(() => <div data-testid="logout-icon" />),

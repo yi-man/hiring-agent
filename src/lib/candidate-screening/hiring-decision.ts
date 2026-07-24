@@ -1,7 +1,8 @@
 import type { JobDescriptionDto, JD } from '@/types';
 import type { CandidateInterviewFeedbackDto, CandidateScreeningDetailDto } from './repo';
-import { CANDIDATE_INTERVIEW_FEEDBACK_STAGES } from './constants';
 import { CANDIDATE_EVALUATION_DIMENSIONS } from './evaluation-dimensions';
+import { getInterviewStageLabel, getRequiredInterviewStages } from '@/lib/interviews/process';
+import type { InterviewProcess } from '@/lib/interviews/types';
 import type {
   CandidateDecisionIntentLevel,
   CandidateDecisionRiskLevel,
@@ -263,13 +264,17 @@ function getRiskReasons(params: {
   coreCompetencyScore: number;
   risks: DecisionRiskFlags;
   feedbacks: CandidateInterviewFeedbackDto[];
+  interviewProcess: InterviewProcess | null | undefined;
 }): string[] {
   const reasons: string[] = [];
   if (params.coreCompetencyScore < 0.4) reasons.push('核心任务胜任力低于录用线');
   reasons.push(
     ...params.feedbacks
       .filter((feedback) => feedback.decision === 'reject')
-      .map((feedback) => `${feedbackStageLabels[feedback.stage]}结论为 reject`),
+      .map(
+        (feedback) =>
+          `${getInterviewStageLabel(feedback.stage, params.interviewProcess)}结论为 reject`,
+      ),
   );
   if (params.risks.salarySensitive) reasons.push('薪资敏感');
   if (params.risks.hasOtherOffers) reasons.push('存在其他 offer 风险');
@@ -289,11 +294,11 @@ function chooseHireDecision(params: {
   riskLevel: CandidateDecisionRiskLevel;
   feedbacks: CandidateInterviewFeedbackDto[];
   dimensions: CandidateDecisionDimensionDto[];
+  requiredStageIds: string[];
 }): CandidateHireDecision {
   if (params.hardRejected) return 'no';
-  const feedbackComplete =
-    new Set(params.feedbacks.map((feedback) => feedback.stage)).size ===
-    CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length;
+  const completedStages = new Set(params.feedbacks.map((feedback) => feedback.stage));
+  const feedbackComplete = params.requiredStageIds.every((stage) => completedStages.has(stage));
   const allCompetenciesAcceptable = params.dimensions
     .filter((dimension) => dimension.weight > 0)
     .every((dimension) => dimension.score >= 0.6);
@@ -311,11 +316,10 @@ function chooseHireDecision(params: {
 
 function calculateConfidence(params: {
   dimensions: CandidateDecisionDimensionDto[];
-  feedbacks: CandidateInterviewFeedbackDto[];
+  completedStageCount: number;
+  requiredStageCount: number;
 }): number {
-  const feedbackCoverage = clamp(
-    params.feedbacks.length / CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length,
-  );
+  const feedbackCoverage = clamp(params.completedStageCount / params.requiredStageCount);
   const weightedConfidence = params.dimensions
     .filter((dimension) => dimension.weight > 0)
     .reduce((total, dimension) => total + dimension.confidence * dimension.weight, 0);
@@ -338,13 +342,6 @@ function calculateOfferAcceptProbability(params: {
   if (params.risks.lowStability) probability -= 0.08;
   return roundTwo(clamp(probability, 0.05, 0.95));
 }
-
-const feedbackStageLabels: Record<CandidateInterviewFeedbackDto['stage'], string> = {
-  phone_screen: '电话沟通',
-  first_interview: '一面',
-  second_interview: '二面',
-  final_interview: '终面',
-};
 
 function dimensionStatus(score: number): CandidateDecisionDimensionDto['status'] {
   if (score >= 0.8) return 'strong';
@@ -392,6 +389,7 @@ const legacyDimensionEvidencePatterns: Record<CandidateEvaluationDimensionKey, R
 function collectInterviewDimensionEvidence(
   dimension: CandidateEvaluationDimensionKey,
   feedbacks: CandidateInterviewFeedbackDto[],
+  interviewProcess: InterviewProcess | null | undefined,
 ): DimensionEvidenceRating[] {
   return feedbacks.flatMap<DimensionEvidenceRating>((feedback) => {
     const explicitRating = feedback.dimensionRatings.find(
@@ -401,7 +399,7 @@ function collectInterviewDimensionEvidence(
       return [
         {
           score: clamp(explicitRating.score / 5),
-          evidence: `${feedbackStageLabels[feedback.stage]} ${explicitRating.score}/5 · ${explicitRating.evidence}`,
+          evidence: `${getInterviewStageLabel(feedback.stage, interviewProcess)} ${explicitRating.score}/5 · ${explicitRating.evidence}`,
           explicit: true,
         },
       ];
@@ -414,7 +412,7 @@ function collectInterviewDimensionEvidence(
     return [
       {
         score: clamp(feedback.rating / 5),
-        evidence: `${feedbackStageLabels[feedback.stage]} ${feedback.rating}/5 · 历史评价推断：${evidenceText}`,
+        evidence: `${getInterviewStageLabel(feedback.stage, interviewProcess)} ${feedback.rating}/5 · 历史评价推断：${evidenceText}`,
         explicit: false,
       },
     ];
@@ -460,6 +458,7 @@ function buildDimensionAssessments(params: {
   candidate: CandidateScreeningDetailDto;
   feedbacks: CandidateInterviewFeedbackDto[];
   skillMatchScore: number;
+  interviewProcess: InterviewProcess | null | undefined;
 }): CandidateDecisionDimensionDto[] {
   const abilityScore = clamp(params.candidate.scoreDetail.ability / 100);
   const collaborationBase = collaborationResumeEvidence(params.candidate);
@@ -501,7 +500,11 @@ function buildDimensionAssessments(params: {
 
   const candidateDimensions = CANDIDATE_EVALUATION_DIMENSIONS.map((definition) => {
     const base = baseByDimension[definition.key];
-    const interviewEvidence = collectInterviewDimensionEvidence(definition.key, params.feedbacks);
+    const interviewEvidence = collectInterviewDimensionEvidence(
+      definition.key,
+      params.feedbacks,
+      params.interviewProcess,
+    );
     const combined = combineDimensionEvidence({
       baseScore: base.score,
       baseConfidence: base.confidence,
@@ -559,6 +562,8 @@ function buildSuggestions(params: {
   feedbacks: CandidateInterviewFeedbackDto[];
   riskReasons: string[];
   risks: DecisionRiskFlags;
+  requiredStageNames: string[];
+  completedStageCount: number;
 }): CandidateDecisionResultDto['suggestions'] {
   const suggestions: CandidateDecisionResultDto['suggestions'] = [];
 
@@ -577,10 +582,10 @@ function buildSuggestions(params: {
     });
   }
 
-  if (params.feedbacks.length < CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length) {
+  if (params.completedStageCount < params.requiredStageNames.length) {
     suggestions.push({
       type: 'action',
-      content: '补齐电话沟通、一面、二面、终面的结构化反馈后再做最终决策。',
+      content: `补齐${params.requiredStageNames.join('、')}的结构化反馈后再做最终决策。`,
     });
   }
   if (params.risks.salarySensitive) {
@@ -607,6 +612,9 @@ export function evaluateCandidateHiringDecision(params: {
   candidate: CandidateScreeningDetailDto;
   interviewFeedbacks: CandidateInterviewFeedbackDto[];
 }): CandidateDecisionResultDto {
+  const requiredInterviewStages = getRequiredInterviewStages(
+    params.jobDescription.interviewProcess,
+  );
   const skillMatchScore = calculateSkillMatch(params.jobDescription, params.candidate);
   const experienceMatch = calculateExperienceMatch(params.jobDescription, params.candidate);
   const interviewScore = calculateInterviewScore(params.interviewFeedbacks);
@@ -616,13 +624,15 @@ export function evaluateCandidateHiringDecision(params: {
   const completedFeedbackStages = new Set(
     params.interviewFeedbacks.map((feedback) => feedback.stage),
   );
-  const missingFeedbackStages = CANDIDATE_INTERVIEW_FEEDBACK_STAGES.filter(
-    (stage) => !completedFeedbackStages.has(stage),
-  );
+  const missingFeedbackStages = requiredInterviewStages
+    .filter((stage) => !completedFeedbackStages.has(stage.id))
+    .map((stage) => stage.id);
+  const completedRequiredStageCount = requiredInterviewStages.length - missingFeedbackStages.length;
   const candidateDimensions = buildDimensionAssessments({
     candidate: params.candidate,
     feedbacks: params.interviewFeedbacks,
     skillMatchScore,
+    interviewProcess: params.jobDescription.interviewProcess,
   });
   const coreCompetencyScore =
     candidateDimensions.find((dimension) => dimension.key === 'core_competency')?.score ?? 0;
@@ -630,6 +640,7 @@ export function evaluateCandidateHiringDecision(params: {
     coreCompetencyScore,
     risks,
     feedbacks: params.interviewFeedbacks,
+    interviewProcess: params.jobDescription.interviewProcess,
   });
   const hardRejected =
     coreCompetencyScore < 0.4 ||
@@ -664,6 +675,7 @@ export function evaluateCandidateHiringDecision(params: {
     riskLevel,
     feedbacks: params.interviewFeedbacks,
     dimensions: dimensionAssessments,
+    requiredStageIds: requiredInterviewStages.map((stage) => stage.id),
   });
 
   return {
@@ -672,7 +684,8 @@ export function evaluateCandidateHiringDecision(params: {
     hireDecision,
     confidence: calculateConfidence({
       dimensions: dimensionAssessments,
-      feedbacks: params.interviewFeedbacks,
+      completedStageCount: completedRequiredStageCount,
+      requiredStageCount: requiredInterviewStages.length,
     }),
     offerAcceptProbability: calculateOfferAcceptProbability({
       weightedScore,
@@ -710,8 +723,8 @@ export function evaluateCandidateHiringDecision(params: {
         hardRejectCoreCompetency: 0.4,
       },
       feedbackCoverage: {
-        completed: params.interviewFeedbacks.length,
-        total: CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length,
+        completed: completedRequiredStageCount,
+        total: requiredInterviewStages.length,
       },
     },
     riskAnalysis: {
@@ -730,6 +743,8 @@ export function evaluateCandidateHiringDecision(params: {
       feedbacks: params.interviewFeedbacks,
       riskReasons,
       risks,
+      requiredStageNames: requiredInterviewStages.map((stage) => stage.name),
+      completedStageCount: completedRequiredStageCount,
     }),
   };
 }

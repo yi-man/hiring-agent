@@ -5,6 +5,7 @@ import type {
   CompanyWorkLocationInput,
 } from './types';
 import type { RecruitmentPlatformMetadataDto } from '@/lib/recruitment-platform-config';
+import type { InterviewProcess } from '@/lib/interviews/types';
 
 async function readJson<T>(response: Response): Promise<T & { error?: string }> {
   return (await response.json().catch(() => ({}))) as T & { error?: string };
@@ -37,6 +38,7 @@ export async function saveCompanyProfile(payload: {
   supportedPlatforms: RecruitmentPlatform[];
   platformConfigs?: CompanyRecruitmentPlatformInput[];
   locations: CompanyWorkLocationInput[];
+  interviewProcesses?: InterviewProcess[];
 }): Promise<CompanyProfileDto> {
   const response = await fetch('/api/company-profile', {
     method: 'PUT',

@@ -7,6 +7,10 @@ import {
 } from '@/lib/jd/job-description-repo';
 import { getDefaultJdScreeningSummary, listJdScreeningSummaries } from '@/lib/jd/screening-summary';
 import { isEditableJobDescriptionStatus, parseUpdateJobDescriptionPayload } from '@/lib/jd/api';
+import {
+  getAutoMatchedCompanyInterviewProcessForUser,
+  getCompanyInterviewProcessForUser,
+} from '@/lib/company-profile/repo';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -105,10 +109,31 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return badRequest('hiringTarget is required before ready_to_publish');
     }
 
+    const { interviewProcessId, ...update } = value;
+    const interviewProcess =
+      interviewProcessId === undefined
+        ? undefined
+        : interviewProcessId === null
+          ? await getAutoMatchedCompanyInterviewProcessForUser({
+              userId: auth.user.id,
+              department: update.department ?? current.department,
+              position: update.position ?? current.position,
+              positionDescription: update.positionDescription ?? current.positionDescription,
+            })
+          : await getCompanyInterviewProcessForUser(auth.user.id, interviewProcessId);
+    if (interviewProcessId !== undefined && !interviewProcess) {
+      return badRequest(
+        interviewProcessId
+          ? 'interview process is invalid'
+          : 'no interview process matched this job',
+      );
+    }
+
     const jobDescription = await updateMutableJobDescription({
       userId: auth.user.id,
       id,
-      ...value,
+      ...update,
+      ...(interviewProcess === undefined ? {} : { interviewProcess }),
     });
     if (!jobDescription) {
       return mutableUpdateMissResponse(auth.user.id, id);

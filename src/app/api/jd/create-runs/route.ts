@@ -6,6 +6,10 @@ import {
   listJobDescriptionCreateRuns,
 } from '@/lib/jd/create-run-repo';
 import { parseCreateJobDescriptionPayload } from '@/lib/jd/api';
+import {
+  getAutoMatchedCompanyInterviewProcessForUser,
+  getCompanyInterviewProcessForUser,
+} from '@/lib/company-profile/repo';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -53,9 +57,25 @@ export async function POST(request: Request) {
     if (!parsed.ok) {
       return badRequest(parsed.error);
     }
+    const interviewProcess = parsed.value.interviewProcessId
+      ? await getCompanyInterviewProcessForUser(auth.user.id, parsed.value.interviewProcessId)
+      : await getAutoMatchedCompanyInterviewProcessForUser({
+          userId: auth.user.id,
+          department: parsed.value.department,
+          position: parsed.value.position,
+          positionDescription: parsed.value.positionDescription,
+        });
+    if (!interviewProcess) {
+      return badRequest(
+        parsed.value.interviewProcessId
+          ? 'interview process is invalid'
+          : 'no interview process matched this job',
+      );
+    }
     const run = await createAndStartJobDescriptionCreateRun({
       userId: auth.user.id,
       request: parsed.value,
+      interviewProcess,
     });
 
     return NextResponse.json({ run }, { status: 202 });

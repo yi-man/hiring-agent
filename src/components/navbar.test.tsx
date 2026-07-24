@@ -76,7 +76,7 @@ jest.mock('@/components/ui', () => ({
 }));
 
 jest.mock('lucide-react', () => ({
-  Menu: () => <div data-testid="menu-icon" />,
+  UserRound: () => <div data-testid="user-round-icon" />,
   X: () => <div data-testid="x-icon" />,
   LogIn: () => <div data-testid="login-icon" />,
   LogOut: () => <div data-testid="logout-icon" />,
@@ -117,10 +117,15 @@ describe('Navbar auth states', () => {
 
     render(<Navbar />);
 
-    fireEvent.click(screen.getByRole('button', { name: /菜单/i }));
+    const accountMenuToggle = screen.getByRole('button', { name: '打开账户菜单' });
+    fireEvent.click(accountMenuToggle);
 
     expect(screen.queryByRole('link', { name: '首页' })).not.toBeInTheDocument();
     expect(await screen.findAllByRole('link', { name: /log in/i })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: '关闭账户菜单' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
   });
 
   it('shows user menu and logout when authenticated', async () => {

@@ -21,7 +21,6 @@ import {
 } from '@/lib/candidate-screening/client';
 import { fetchJobDescription } from '@/lib/jd/client';
 import {
-  CANDIDATE_INTERVIEW_FEEDBACK_STAGES,
   isFinalHiringOutcomeStage,
   isTerminalCandidateInterviewStage,
 } from '@/lib/candidate-screening/constants';
@@ -40,10 +39,17 @@ import type {
 import { getReturnTarget } from '@/lib/navigation/return-url';
 import {
   feedbackDecisionLabels,
-  feedbackStageLabels,
   interviewStageLabels,
   needsInterviewFeedback,
 } from '@/components/candidate-screening/interview-display';
+import {
+  getFormalInterviewStages,
+  getInterviewStageLabel,
+  getInterviewStagePurpose,
+  getRequiredInterviewStages,
+} from '@/lib/interviews/process';
+import type { InterviewProcessStage } from '@/lib/interviews/types';
+import type { JobDescriptionDto } from '@/types';
 
 type InterviewFeedbackForm = {
   interviewer: string;
@@ -94,10 +100,15 @@ function feedbackToForm(feedback: CandidateInterviewFeedbackDto): InterviewFeedb
 
 function createFeedbackForms(
   feedbacks: CandidateInterviewFeedbackDto[],
+  stages: readonly InterviewProcessStage[],
+  assignments: NonNullable<CandidateScreeningDetailDto['interviewAssignments']>,
 ): Record<CandidateInterviewFeedbackStage, InterviewFeedbackForm> {
   const forms = Object.fromEntries(
-    CANDIDATE_INTERVIEW_FEEDBACK_STAGES.map((stage) => [stage, emptyFeedbackForm()]),
+    stages.map((stage) => [stage.id, emptyFeedbackForm()]),
   ) as Record<CandidateInterviewFeedbackStage, InterviewFeedbackForm>;
+  for (const assignment of assignments) {
+    if (forms[assignment.stage]) forms[assignment.stage].interviewer = assignment.interviewer;
+  }
   for (const feedback of feedbacks) forms[feedback.stage] = feedbackToForm(feedback);
   return forms;
 }
@@ -105,13 +116,14 @@ function createFeedbackForms(
 function nextFeedbackStage(
   interviewStage: CandidateInterviewStage,
   feedbacks: CandidateInterviewFeedbackDto[],
+  requiredStages: readonly InterviewProcessStage[],
 ) {
   const completed = new Set(feedbacks.map((feedback) => feedback.stage));
   if (interviewStage === 'phone_screen') {
     return completed.has('phone_screen') ? null : 'phone_screen';
   }
   if (interviewStage !== 'interviewing') return null;
-  return CANDIDATE_INTERVIEW_FEEDBACK_STAGES.find((stage) => !completed.has(stage)) ?? null;
+  return requiredStages.find((stage) => !completed.has(stage.id))?.id ?? null;
 }
 
 function splitFeedbackText(value: string): string[] {
@@ -138,10 +150,13 @@ export function CandidateInterviewDetail({
     label: '返回候选人详情',
   });
   const [candidate, setCandidate] = useState<CandidateScreeningDetailDto | null>(null);
+  const [jobDescription, setJobDescription] = useState<JobDescriptionDto | null>(null);
   const [feedbacks, setFeedbacks] = useState<CandidateInterviewFeedbackDto[]>([]);
   const [feedbackForms, setFeedbackForms] = useState<
     Record<CandidateInterviewFeedbackStage, InterviewFeedbackForm>
-  >(() => createFeedbackForms([]));
+  >(() => createFeedbackForms([], getRequiredInterviewStages(null), []));
+  const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
+  const [savingAssignmentStage, setSavingAssignmentStage] = useState<string | null>(null);
   const [editingStage, setEditingStage] = useState<CandidateInterviewFeedbackStage | null>(null);
   const [interviewStage, setInterviewStage] = useState<CandidateInterviewStage>('sourced');
   const [notes, setNotes] = useState('');
@@ -151,6 +166,8 @@ export function CandidateInterviewDetail({
     useState<CandidateInterviewFeedbackStage | null>(null);
   const [error, setError] = useState('');
   const [progressNotice, setProgressNotice] = useState('');
+  const formalInterviewStages = getFormalInterviewStages(jobDescription?.interviewProcess);
+  const requiredInterviewStages = getRequiredInterviewStages(jobDescription?.interviewProcess);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,19 +175,28 @@ export function CandidateInterviewDetail({
       setIsLoading(true);
       setError('');
       try {
-        const [nextCandidate, nextFeedbacks] = await Promise.all([
+        const [nextCandidate, nextFeedbacks, nextJobDescription] = await Promise.all([
           fetchJdCandidateDetail(jobDescriptionId, candidateId),
           fetchCandidateInterviewFeedbacks(jobDescriptionId, candidateId),
+          fetchJobDescription(jobDescriptionId),
         ]);
         if (cancelled) return;
+        const requiredStages = getRequiredInterviewStages(nextJobDescription.interviewProcess);
+        const interviewAssignments = nextCandidate.interviewAssignments ?? [];
         setCandidate(nextCandidate);
+        setJobDescription(nextJobDescription);
         setFeedbacks(nextFeedbacks);
-        setFeedbackForms(createFeedbackForms(nextFeedbacks));
+        setFeedbackForms(createFeedbackForms(nextFeedbacks, requiredStages, interviewAssignments));
+        setAssignmentDrafts(
+          Object.fromEntries(
+            interviewAssignments.map((assignment) => [assignment.stage, assignment.interviewer]),
+          ),
+        );
         setInterviewStage(nextCandidate.interviewStage);
         setNotes(nextCandidate.notes ?? '');
         setEditingStage(
           needsInterviewFeedback(nextCandidate.interviewStage)
-            ? nextFeedbackStage(nextCandidate.interviewStage, nextFeedbacks)
+            ? nextFeedbackStage(nextCandidate.interviewStage, nextFeedbacks, requiredStages)
             : null,
         );
       } catch (loadError) {
@@ -200,7 +226,9 @@ export function CandidateInterviewDetail({
       setInterviewStage(updated.interviewStage);
       setNotes(updated.notes ?? '');
       if (needsInterviewFeedback(updated.interviewStage) && editingStage === null) {
-        setEditingStage(nextFeedbackStage(updated.interviewStage, feedbacks));
+        setEditingStage(
+          nextFeedbackStage(updated.interviewStage, feedbacks, requiredInterviewStages),
+        );
       } else if (!needsInterviewFeedback(updated.interviewStage)) {
         setEditingStage(null);
       }
@@ -217,6 +245,38 @@ export function CandidateInterviewDetail({
       setError(saveError instanceof Error ? saveError.message : '保存面试进度失败');
     } finally {
       setIsSavingProgress(false);
+    }
+  }
+
+  async function handleSaveAssignment(stage: string) {
+    if (!candidate) return;
+    const interviewer = assignmentDrafts[stage]?.trim();
+    if (!interviewer) {
+      setError('请填写下一轮面试官');
+      return;
+    }
+    const interviewAssignments = [
+      ...(candidate.interviewAssignments ?? []).filter((assignment) => assignment.stage !== stage),
+      { stage, interviewer },
+    ];
+    setSavingAssignmentStage(stage);
+    setError('');
+    try {
+      const updated = await updateJdCandidateProgress(jobDescriptionId, candidateId, {
+        interviewAssignments,
+      });
+      setCandidate({ ...candidate, ...updated });
+      setFeedbackForms((current) => ({
+        ...current,
+        [stage]: { ...(current[stage] ?? emptyFeedbackForm()), interviewer },
+      }));
+      setProgressNotice(
+        `已保存${getInterviewStageLabel(stage, jobDescription?.interviewProcess)}面试官`,
+      );
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '保存面试安排失败');
+    } finally {
+      setSavingAssignmentStage(null);
     }
   }
 
@@ -275,14 +335,14 @@ export function CandidateInterviewDetail({
         feedback,
       ].sort(
         (left, right) =>
-          CANDIDATE_INTERVIEW_FEEDBACK_STAGES.indexOf(left.stage) -
-          CANDIDATE_INTERVIEW_FEEDBACK_STAGES.indexOf(right.stage),
+          requiredInterviewStages.findIndex((stage) => stage.id === left.stage) -
+          requiredInterviewStages.findIndex((stage) => stage.id === right.stage),
       );
       setFeedbacks(nextFeedbacks);
       setFeedbackForms((current) => ({ ...current, [stage]: feedbackToForm(feedback) }));
       setEditingStage(
         candidate && needsInterviewFeedback(candidate.interviewStage)
-          ? nextFeedbackStage(candidate.interviewStage, nextFeedbacks)
+          ? nextFeedbackStage(candidate.interviewStage, nextFeedbacks, requiredInterviewStages)
           : null,
       );
     } catch (saveError) {
@@ -310,19 +370,33 @@ export function CandidateInterviewDetail({
     );
   }
 
-  const pendingStage = nextFeedbackStage(candidate.interviewStage, feedbacks);
+  const pendingStage = nextFeedbackStage(
+    candidate.interviewStage,
+    feedbacks,
+    requiredInterviewStages,
+  );
+  const pendingStageDefinition = pendingStage
+    ? requiredInterviewStages.find((stage) => stage.id === pendingStage)
+    : null;
   const canContinue = needsInterviewFeedback(candidate.interviewStage) && pendingStage !== null;
   const editingFeedback = editingStage
     ? feedbacks.find((feedback) => feedback.stage === editingStage)
     : null;
   const availableInterviewStages = [
     candidate.interviewStage,
-    ...getAllowedCandidateInterviewStageTransitions(candidate.interviewStage, feedbacks),
+    ...getAllowedCandidateInterviewStageTransitions(
+      candidate.interviewStage,
+      feedbacks,
+      formalInterviewStages,
+    ),
   ];
   const hasUnsyncedReply = candidate.candidate.replied && candidate.interviewStage === 'contacted';
   const hasInterviewEvidence = feedbacks.length > 0;
-  const hasCompleteInterviewEvidence =
-    feedbacks.length === CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length;
+  const completedFeedbackStages = new Set(feedbacks.map((feedback) => feedback.stage));
+  const completedFeedbackCount = requiredInterviewStages.filter((stage) =>
+    completedFeedbackStages.has(stage.id),
+  ).length;
+  const hasCompleteInterviewEvidence = completedFeedbackCount === requiredInterviewStages.length;
   const hasFinalHiringOutcome = isFinalHiringOutcomeStage(candidate.interviewStage);
   const hasTerminalWorkflow = isTerminalCandidateInterviewStage(candidate.interviewStage);
   const terminalWorkflowMessage = hasFinalHiringOutcome
@@ -359,7 +433,7 @@ export function CandidateInterviewDetail({
         </div>
         <div className="text-left lg:text-right">
           <div className="font-mono text-2xl font-semibold">
-            {feedbacks.length}/{CANDIDATE_INTERVIEW_FEEDBACK_STAGES.length}
+            {completedFeedbackCount}/{requiredInterviewStages.length}
           </div>
           <div className="text-muted-foreground text-xs">已完成评价</div>
         </div>
@@ -431,7 +505,10 @@ export function CandidateInterviewDetail({
                           <div className="flex items-center gap-2">
                             <CheckCircle2 className="text-success h-4 w-4" aria-hidden />
                             <h2 className="text-foreground text-sm font-semibold">
-                              {feedbackStageLabels[feedback.stage]}
+                              {getInterviewStageLabel(
+                                feedback.stage,
+                                jobDescription?.interviewProcess,
+                              )}
                             </h2>
                             <Chip size="sm" variant="flat">
                               {feedbackDecisionLabels[feedback.decision]}
@@ -499,12 +576,52 @@ export function CandidateInterviewDetail({
             </CardBody>
           </Card>
 
+          {canContinue && pendingStage && pendingStageDefinition ? (
+            <Card className="border-primary/30 bg-primary/5 rounded-lg border shadow-none">
+              <CardBody className="space-y-3 p-4">
+                <div>
+                  <p className="text-foreground text-sm font-medium">
+                    下一轮安排 · {pendingStageDefinition.name}
+                  </p>
+                  <p className="text-muted-foreground mt-1 text-xs leading-5">
+                    {pendingStageDefinition.purpose}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    aria-label="下一轮面试官"
+                    className="border-input bg-background text-foreground h-10 min-w-0 flex-1 rounded-md border px-3 text-sm"
+                    placeholder="填写负责本轮的面试官"
+                    value={assignmentDrafts[pendingStage] ?? ''}
+                    onChange={(event) => {
+                      const interviewer = event.target.value;
+                      setAssignmentDrafts((current) => ({
+                        ...current,
+                        [pendingStage]: interviewer,
+                      }));
+                      updateFeedbackForm(pendingStage, { interviewer });
+                    }}
+                  />
+                  <Button
+                    isDisabled={savingAssignmentStage === pendingStage}
+                    type="button"
+                    variant="bordered"
+                    onClick={() => void handleSaveAssignment(pendingStage)}
+                  >
+                    {savingAssignmentStage === pendingStage ? '保存中' : '保存面试安排'}
+                  </Button>
+                </div>
+              </CardBody>
+            </Card>
+          ) : null}
+
           {editingStage ? (
             <FeedbackEditor
               form={feedbackForms[editingStage]}
               isSaving={savingFeedbackStage === editingStage}
-              stage={editingStage}
-              title={`${editingFeedback ? '编辑评价' : '继续评价'} · ${feedbackStageLabels[editingStage]}`}
+              label={getInterviewStageLabel(editingStage, jobDescription?.interviewProcess)}
+              purpose={getInterviewStagePurpose(editingStage, jobDescription?.interviewProcess)}
+              title={`${editingFeedback ? '编辑评价' : '继续评价'} · ${getInterviewStageLabel(editingStage, jobDescription?.interviewProcess)}`}
               onCancel={() => setEditingStage(null)}
               onChange={(update) => updateFeedbackForm(editingStage, update)}
               onSave={() => void handleSaveFeedback(editingStage)}
@@ -514,7 +631,8 @@ export function CandidateInterviewDetail({
               <CardBody className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-foreground text-sm font-medium">
-                    下一步：评价{feedbackStageLabels[pendingStage]}
+                    下一步：评价
+                    {getInterviewStageLabel(pendingStage, jobDescription?.interviewProcess)}
                   </p>
                   <p className="text-muted-foreground mt-1 text-xs">当前面试仍在进行中。</p>
                 </div>
@@ -629,7 +747,8 @@ export function CandidateInterviewDetail({
 }
 
 function FeedbackEditor({
-  stage,
+  label,
+  purpose,
   title,
   form,
   isSaving,
@@ -637,7 +756,8 @@ function FeedbackEditor({
   onSave,
   onCancel,
 }: {
-  stage: CandidateInterviewFeedbackStage;
+  label: string;
+  purpose: string;
   title: string;
   form: InterviewFeedbackForm;
   isSaving: boolean;
@@ -645,7 +765,6 @@ function FeedbackEditor({
   onSave: () => void;
   onCancel: () => void;
 }) {
-  const label = feedbackStageLabels[stage];
   return (
     <Card className="border-primary/30 rounded-lg border shadow-none">
       <CardBody className="space-y-4 p-4">
@@ -655,6 +774,12 @@ function FeedbackEditor({
             收起
           </Button>
         </div>
+        {purpose ? (
+          <div className="border-border bg-muted/20 rounded-md border px-3 py-2">
+            <div className="text-muted-foreground text-xs">本轮事项</div>
+            <p className="text-foreground mt-1 text-sm">{purpose}</p>
+          </div>
+        ) : null}
         <div className="grid gap-3">
           <label className="block space-y-2">
             <span className="text-muted-foreground text-xs">{label}面试官</span>

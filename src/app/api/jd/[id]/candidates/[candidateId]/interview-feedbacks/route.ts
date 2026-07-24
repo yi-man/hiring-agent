@@ -7,6 +7,8 @@ import {
   listCandidateInterviewFeedbacks,
   upsertCandidateInterviewFeedback,
 } from '@/lib/candidate-screening/repo';
+import { getJobDescriptionById } from '@/lib/jd/job-description-repo';
+import { getFormalInterviewStages } from '@/lib/interviews/process';
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -105,15 +107,22 @@ export async function POST(
       return NextResponse.json({ error: 'candidate screening result not found' }, { status: 404 });
     }
 
-    const feedbacks = await listCandidateInterviewFeedbacks({
-      userId: auth.user.id,
-      jobDescriptionId: id,
-      candidateId,
-    });
+    const [feedbacks, jobDescription] = await Promise.all([
+      listCandidateInterviewFeedbacks({
+        userId: auth.user.id,
+        jobDescriptionId: id,
+        candidateId,
+      }),
+      getJobDescriptionById(auth.user.id, id),
+    ]);
+    if (!jobDescription) {
+      return NextResponse.json({ error: 'job description not found' }, { status: 404 });
+    }
     const feedbackStageValidation = validateCandidateInterviewFeedbackStage(
       candidate.interviewStage,
       parsed.value.stage,
       feedbacks,
+      getFormalInterviewStages(jobDescription.interviewProcess),
     );
     if (!feedbackStageValidation.ok) return conflict(feedbackStageValidation.error);
 

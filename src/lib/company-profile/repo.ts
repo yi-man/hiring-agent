@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { normalizeCompanyWorkLocations } from './api';
 import type {
@@ -9,12 +10,20 @@ import { normalizeRecruitmentPlatforms } from '@/lib/recruitment-platforms';
 import type { RecruitmentPlatform } from '@/lib/recruitment-platforms';
 import { encryptPlatformPassword } from '@/lib/platform-credentials';
 import { listRecruitmentPlatformMetadata, toJsonRecord } from '@/lib/recruitment-platform-config';
+import {
+  getEffectiveInterviewProcesses,
+  matchInterviewProcess,
+  normalizeInterviewProcesses,
+} from '@/lib/interviews/process';
+import type { InterviewProcess } from '@/lib/interviews/types';
+import { backfillMissingJobDescriptionInterviewProcesses } from '@/lib/jd/interview-process-backfill';
 
 type CompanyProfileRow = {
   id: string;
   userId: string;
   name: string;
   supportedPlatforms?: string[];
+  interviewProcesses?: unknown;
   createdAt: Date;
   updatedAt: Date;
   locations: Array<{
@@ -68,6 +77,7 @@ function mapProfile(row: CompanyProfileRow | null): CompanyProfileDto | null {
       address: location.address,
       sortOrder: location.sortOrder,
     })),
+    interviewProcesses: normalizeInterviewProcesses(row.interviewProcesses),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -116,12 +126,16 @@ export async function upsertCompanyProfileForUser(
       update: {
         name: params.name,
         supportedPlatforms: params.supportedPlatforms,
+        ...(params.interviewProcesses === undefined
+          ? {}
+          : { interviewProcesses: params.interviewProcesses as Prisma.InputJsonValue }),
         locations: { deleteMany: {}, create: locationCreateData },
       },
       create: {
         userId: params.userId,
         name: params.name,
         supportedPlatforms: params.supportedPlatforms,
+        interviewProcesses: (params.interviewProcesses ?? []) as Prisma.InputJsonValue,
         locations: { create: locationCreateData },
       },
     });
@@ -162,6 +176,14 @@ export async function upsertCompanyProfileForUser(
       });
     }
 
+    if (params.interviewProcesses !== undefined) {
+      await backfillMissingJobDescriptionInterviewProcesses({
+        client: tx,
+        userId: params.userId,
+        interviewProcesses: getEffectiveInterviewProcesses(params.interviewProcesses),
+      });
+    }
+
     return tx.companyProfile.findUniqueOrThrow({
       where: { id: profile.id },
       include: {
@@ -172,6 +194,34 @@ export async function upsertCompanyProfileForUser(
   });
 
   return mapProfile(row as CompanyProfileRow) as CompanyProfileDto;
+}
+
+export async function getCompanyInterviewProcessForUser(
+  userId: string,
+  processId: string,
+): Promise<InterviewProcess | null> {
+  const processes = await getCompanyInterviewProcessesForUser(userId);
+  return processes.find((process) => process.id === processId) ?? null;
+}
+
+export async function getCompanyInterviewProcessesForUser(
+  userId: string,
+): Promise<InterviewProcess[]> {
+  const row = await prisma.companyProfile.findUnique({
+    where: { userId },
+    select: { interviewProcesses: true },
+  });
+  return getEffectiveInterviewProcesses(normalizeInterviewProcesses(row?.interviewProcesses));
+}
+
+export async function getAutoMatchedCompanyInterviewProcessForUser(params: {
+  userId: string;
+  department: string;
+  position: string;
+  positionDescription?: string;
+}): Promise<InterviewProcess | null> {
+  const processes = await getCompanyInterviewProcessesForUser(params.userId);
+  return matchInterviewProcess(processes, params)?.process ?? null;
 }
 
 export async function updateCompanyRecruitmentPlatformsForUser(

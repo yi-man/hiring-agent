@@ -40,6 +40,12 @@ import { fetchCompanyProfile, fetchCompanySettings } from '@/lib/company-profile
 import type { RecruitmentPlatformMetadataDto } from '@/lib/recruitment-platform-config';
 import type { CompanyProfileDto } from '@/lib/company-profile/types';
 import {
+  getEffectiveInterviewProcesses,
+  matchInterviewProcess,
+  type InterviewProcessMatch,
+} from '@/lib/interviews/process';
+import type { InterviewProcess } from '@/lib/interviews/types';
+import {
   fetchJobDescriptionCreateRuns,
   fetchJobDescription,
   fetchJobDescriptionPublishHistory,
@@ -98,6 +104,14 @@ const DEPARTMENT_OPTIONS = [
   {
     name: '市场销售部',
     positions: ['市场经理', '客户成功经理', '销售经理'],
+  },
+  {
+    name: '人力行政部',
+    positions: ['招聘专员', 'HRBP', '行政专员', '人力资源经理'],
+  },
+  {
+    name: '财务法务部',
+    positions: ['财务专员', '会计', '法务专员', '采购专员'],
   },
 ] as const;
 
@@ -385,6 +399,82 @@ function parseKeywordInput(value: string): string[] {
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <span className="text-foreground text-sm font-medium">{children}</span>;
+}
+
+const AUTO_INTERVIEW_PROCESS_VALUE = 'auto';
+
+function interviewProcessMatchText(match: InterviewProcessMatch | null) {
+  if (!match) return '没有可用流程，请先到公司设置中配置。';
+  if (match.reason === 'department') return `按部门“${match.matchedValue}”匹配`;
+  if (match.reason === 'position_keyword') return `按职位关键词“${match.matchedValue}”匹配`;
+  if (match.reason === 'description_keyword') return `按职位说明关键词“${match.matchedValue}”匹配`;
+  if (match.reason === 'fallback') return '未命中规则，使用默认兜底流程';
+  return '未配置兜底规则，使用首个流程';
+}
+
+function InterviewProcessPicker({
+  ariaLabel,
+  autoMatch,
+  currentProcess,
+  disabled = false,
+  processes,
+  value,
+  onChange,
+}: {
+  ariaLabel: string;
+  autoMatch: InterviewProcessMatch | null;
+  currentProcess?: InterviewProcess | null;
+  disabled?: boolean;
+  processes: InterviewProcess[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const currentProcessMissing = Boolean(
+    currentProcess && !processes.some((process) => process.id === currentProcess.id),
+  );
+  const selectedProcess =
+    value === AUTO_INTERVIEW_PROCESS_VALUE
+      ? autoMatch?.process
+      : (processes.find((process) => process.id === value) ?? currentProcess);
+
+  return (
+    <label className="block space-y-2">
+      <FieldLabel>面试流程</FieldLabel>
+      <select
+        aria-label={ariaLabel}
+        className="border-input bg-background text-foreground h-10 w-full rounded-md border px-3 text-sm"
+        disabled={disabled}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value={AUTO_INTERVIEW_PROCESS_VALUE}>
+          自动匹配{autoMatch ? ` · ${autoMatch.process.positionType}` : ''}
+        </option>
+        {currentProcessMissing && currentProcess ? (
+          <option value={currentProcess.id}>
+            当前 JD 快照 · {currentProcess.positionType} · {currentProcess.stages.length} 轮
+          </option>
+        ) : null}
+        {processes.map((process) => (
+          <option key={process.id} value={process.id}>
+            手动指定 · {process.positionType} · {process.stages.length} 轮
+          </option>
+        ))}
+      </select>
+      <div className="border-border bg-muted/25 rounded-md border px-3 py-2 text-xs">
+        <div className="text-foreground font-medium">
+          {value === AUTO_INTERVIEW_PROCESS_VALUE
+            ? interviewProcessMatchText(autoMatch)
+            : '使用手动指定流程'}
+        </div>
+        <div className="text-muted-foreground mt-1">
+          {selectedProcess
+            ? `${selectedProcess.positionType}：${selectedProcess.stages.map((stage) => stage.name).join(' → ')}`
+            : '保存前需要选择一个有效流程。'}
+        </div>
+      </div>
+    </label>
+  );
 }
 
 function PlatformActionModal({
@@ -946,6 +1036,7 @@ export function JDCreateView() {
   const [selectedWorkLocations, setSelectedWorkLocations] = useState<string[]>([]);
   const [tone, setTone] = useState<JDTone>('tech');
   const [companyProfile, setCompanyProfile] = useState<CompanyProfileDto | null>(null);
+  const [interviewProcessId, setInterviewProcessId] = useState(AUTO_INTERVIEW_PROCESS_VALUE);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -983,6 +1074,24 @@ export function JDCreateView() {
     };
   }, []);
 
+  const interviewProcesses = useMemo(
+    () => getEffectiveInterviewProcesses(companyProfile?.interviewProcesses),
+    [companyProfile?.interviewProcesses],
+  );
+  const autoMatchedInterviewProcess = useMemo(
+    () =>
+      matchInterviewProcess(interviewProcesses, {
+        department,
+        position,
+        positionDescription,
+      }),
+    [department, interviewProcesses, position, positionDescription],
+  );
+  const hasSelectedInterviewProcess =
+    interviewProcessId === AUTO_INTERVIEW_PROCESS_VALUE
+      ? autoMatchedInterviewProcess !== null
+      : interviewProcesses.some((process) => process.id === interviewProcessId);
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSubmitting(true);
@@ -995,6 +1104,7 @@ export function JDCreateView() {
         salaryRange,
         workLocations: selectedWorkLocations,
         tone,
+        ...(interviewProcessId === AUTO_INTERVIEW_PROCESS_VALUE ? {} : { interviewProcessId }),
       });
       router.push(
         withReturnTarget(`/jd-generator/create-runs/${run.id}`, {
@@ -1107,6 +1217,13 @@ export function JDCreateView() {
               value={companyProfile?.name ?? '未设置公司信息'}
             />
           </label>
+          <InterviewProcessPicker
+            ariaLabel="面试流程"
+            autoMatch={autoMatchedInterviewProcess}
+            processes={interviewProcesses}
+            value={interviewProcessId}
+            onChange={setInterviewProcessId}
+          />
           <label className="block space-y-2">
             <FieldLabel>薪资范围</FieldLabel>
             <select
@@ -1173,6 +1290,7 @@ export function JDCreateView() {
             isDisabled={
               isSubmitting ||
               !canCreateWithCompanyProfile ||
+              !hasSelectedInterviewProcess ||
               !positionDescription.trim() ||
               !salaryRange ||
               selectedWorkLocations.length === 0
@@ -1225,6 +1343,9 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
   const [hiringTargetInput, setHiringTargetInput] = useState('');
   const [selectedPublishLocations, setSelectedPublishLocations] = useState<string[]>([]);
   const [publishKeywords, setPublishKeywords] = useState('TypeScript, React');
+  const [publishInterviewProcessId, setPublishInterviewProcessId] = useState(
+    AUTO_INTERVIEW_PROCESS_VALUE,
+  );
   const [publishTasks, setPublishTasks] = useState<PublishTaskDto[]>([]);
   const [publishTrace, setPublishTrace] = useState<PublishTaskResult['trace'] | null>(null);
   const [createRuns, setCreateRuns] = useState<JobDescriptionCreateRunDto[]>([]);
@@ -1271,6 +1392,7 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
           : defaultPlatforms,
       );
       setPublishCompany(profile?.name ?? '');
+      setPublishInterviewProcessId(data.interviewProcess?.id ?? AUTO_INTERVIEW_PROCESS_VALUE);
       setPublishSalary(data.salaryRange ?? '');
       setHiringTargetInput(hiringTargetInputValue(data));
       const availableLocationLabels = profile?.locations.map((location) => location.label) ?? [];
@@ -1341,6 +1463,10 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
       setError('请至少选择一个本次发布平台。');
       return;
     }
+    if (!hasSelectedPublishInterviewProcess) {
+      setError('发布前请选择一个有效的面试流程。');
+      return;
+    }
     setIsPublishing(true);
     setError('');
     try {
@@ -1350,10 +1476,15 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
         salaryRange: publishSalary,
         workLocations: selectedPublishLocations,
         content: formToJd(form),
+        interviewProcessId:
+          publishInterviewProcessId === AUTO_INTERVIEW_PROCESS_VALUE
+            ? null
+            : publishInterviewProcessId,
       });
       setJobDescription(saved);
       setForm(jdToForm(saved.content));
       setStatus(saved.status);
+      setPublishInterviewProcessId(saved.interviewProcess?.id ?? AUTO_INTERVIEW_PROCESS_VALUE);
 
       const publishSettings = {
         company: trimmedCompany,
@@ -1487,6 +1618,26 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
     : defaultScreeningSummary;
   const screeningActionLabel = getScreeningActionLabel(screeningSummary);
   const latestCreateRun = createRuns[0] ?? null;
+  const publishInterviewProcesses = useMemo(
+    () => getEffectiveInterviewProcesses(companyProfile?.interviewProcesses),
+    [companyProfile?.interviewProcesses],
+  );
+  const autoMatchedPublishInterviewProcess = useMemo(
+    () =>
+      jobDescription
+        ? matchInterviewProcess(publishInterviewProcesses, {
+            department: jobDescription.department,
+            position: jobDescription.position,
+            positionDescription: jobDescription.positionDescription,
+          })
+        : null,
+    [jobDescription, publishInterviewProcesses],
+  );
+  const hasSelectedPublishInterviewProcess =
+    publishInterviewProcessId === AUTO_INTERVIEW_PROCESS_VALUE
+      ? autoMatchedPublishInterviewProcess !== null
+      : publishInterviewProcesses.some((process) => process.id === publishInterviewProcessId) ||
+        jobDescription?.interviewProcess?.id === publishInterviewProcessId;
   const canPublishWithCompanyProfile = Boolean(
     companyProfile?.name.trim() && companyProfile.locations.length > 0,
   );
@@ -1564,7 +1715,9 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 className="gap-2"
                 color="primary"
                 disableRipple
-                isDisabled={isPublishing || !isPublishHiringTargetValid}
+                isDisabled={
+                  isPublishing || !isPublishHiringTargetValid || !hasSelectedPublishInterviewProcess
+                }
                 type="button"
                 onClick={() => void handlePublish()}
               >
@@ -1845,6 +1998,15 @@ export function JDDetailView({ jobDescriptionId }: { jobDescriptionId: string })
                 <Rocket className="text-muted-foreground h-4 w-4" aria-hidden />
                 <div className="text-foreground text-sm font-medium">发布设置</div>
               </div>
+              <InterviewProcessPicker
+                ariaLabel="发布面试流程"
+                autoMatch={autoMatchedPublishInterviewProcess}
+                currentProcess={jobDescription.interviewProcess}
+                disabled={!isEditable}
+                processes={publishInterviewProcesses}
+                value={publishInterviewProcessId}
+                onChange={setPublishInterviewProcessId}
+              />
               <RecruitmentPlatformSelector
                 disabled={!isEditable}
                 label="本次发布平台"
